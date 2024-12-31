@@ -4,7 +4,9 @@ use std::thread;
 use clap::ArgMatches;
 use dotenv::dotenv;
 use log::warn;
-use crate::argparse::initialize_cli_args;
+use argparse::initialize_cli_args;
+
+pub mod argparse;
 
 const DEFAULT_DB_HOST: &str = "10.10.10.10";
 const DEFAULT_DB_PORT: u16 = 5432;
