@@ -22,6 +22,14 @@ pub(crate) fn initialize_cli_args() -> Command {
                 .help("Database port"),
         )
         .arg(
+            Arg::new("db_schema")
+                .short('S')
+                .long("schema")
+                .value_name("db_schema")
+                .action(ArgAction::Set)
+                .help("Database schema"),
+        )
+        .arg(
             Arg::new("db_username")
                 .short('u')
                 .long("username")
@@ -52,5 +60,13 @@ pub(crate) fn initialize_cli_args() -> Command {
                 .value_name("machine_ip")
                 .action(ArgAction::Set)
                 .help("Machine ip on chose interface"),
+        )
+        .arg(
+            Arg::new("allowed_workers")
+                .short('w')
+                .long("workers")
+                .value_name("allowed_workers")
+                .action(ArgAction::Set)
+                .help("How many threads will be in threadpool"),
         )
 }
