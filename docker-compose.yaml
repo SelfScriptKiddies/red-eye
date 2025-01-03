@@ -1,0 +1,85 @@
+services:
+  db:
+    build:
+      context: ./db
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - 2181:2181
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - 29092:29092
+    hostname: kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+
+  # backend:
+  #   build:
+  #     context: ./backend
+  #   restart: always
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     - db
+  #     - kafka
+
+  # traffic-sniffer:
+  #   build:
+  #     context: ./traffic-sniffer
+  #   restart: always
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "8081:8081"
+  #   depends_on:
+  #     - kafka
+  #     - db
+
+  # traffic-analyzer1:
+  #   build:
+  #     context: ./traffic-analyzer
+  #   restart: always
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "8082:8080"
+  #   depends_on:
+  #     - kafka
+  #     - db
+
+  # traffic-analyzer2:
+  #   build:
+  #     context: ./traffic-analyzer
+  #   restart: always
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - "8083:8080"
+  #   depends_on:
+  #     - kafka
+      # - db
+
+volumes:
+  db_data:
