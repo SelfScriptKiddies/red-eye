@@ -1,6 +1,3 @@
-use std::num::NonZero;
-use std::string::ToString;
-use std::thread;
 use clap::ArgMatches;
 use dotenv::dotenv;
 use log::warn;
@@ -8,44 +5,32 @@ use argparse::initialize_cli_args;
 
 pub mod argparse;
 
-const DEFAULT_DB_HOST: &str = "10.10.10.10";
-const DEFAULT_DB_PORT: u16 = 5432;
-const DEFAULT_DB_SCHEMA: &str = "red-eye";
-const DEFAULT_DB_USERNAME: &str = "user";
-const DEFAULT_DB_PASSWORD: &str = "user";
-
 const DEFAULT_INTERFACE: &str = "eth0";
 const DEFAULT_MACHINE_IP: &str = "10.10.10.10";
 
-const DEFAULT_THREADS: usize = 4;
-
+const DEFAULT_KAFKA_BROKER_HOST: &str = "kafka:29092";
+const DEFAULT_KAFKA_TOPIC: &str = "raw_packets";
 
 pub struct Configuration {
-    /// Database parameters
-    pub db_host: String,
-    pub db_port: u16,
-    pub db_schema: String,
-    pub db_username: String,
-    pub db_password: String,
-
     /// Client parameters
     pub interface: String,
     pub machine_ip: String,
     pub ports: Vec<u16>,
 
-    /// Workers parameters
-    pub available_threads: NonZero<u32>
+    /// Kafka parameters
+    pub kafka_broker_host: String,
+    pub kafka_topic: String
 }
 
 impl std::fmt::Display for Configuration {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{{\"db_host\": \"{}\", \"db_port\": \"{}\", \"db_schema\": \"{}\", \"db_username\": \"{}\", \"db_password\": \"{}\", \"interface\": \"{}\", \"machine_ip\": \"{}\", \"ports\": \"{:?}\", \"available_threads\": {}}}", self.db_host, self.db_port, self.db_schema, self.db_username, self.db_password, self.interface, self.machine_ip, self.ports, self.available_threads)
+        write!(f, "{{\"interface\": \"{}\", \"machine_ip\": \"{}\", \"ports\": \"{:?}\", \"kafka_broker_host\": \"{}\", \"kafka_topic\": \"{}\"}}", self.interface, self.machine_ip, self.ports, self.kafka_broker_host, self.kafka_topic)
     }
 }
 
 impl std::fmt::Debug for Configuration {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Configuration(db_host={}, db_port={}, db_schema={}, db_username={}, db_password={}, interface={}, machine_ip={}, ports={:?}, available_threads={})", self.db_host, self.db_port, self.db_schema, self.db_username, self.db_password, self.interface, self.machine_ip, self.ports, self.available_threads)
+        write!(f, "Configuration(interface: {}, machine_ip: {}, ports: {:?}, kafka_broker_host: {}, kafka_topic: {})", self.interface, self.machine_ip, self.ports, self.kafka_broker_host, self.kafka_topic)
     }
 }
 
@@ -69,23 +54,13 @@ where
 pub fn init_config() -> Configuration {
     dotenv().ok();
     let matches: ArgMatches = initialize_cli_args().get_matches();
-    let allowed_workers = thread::available_parallelism()
-        .unwrap_or_else(|e| {
-            warn!("Can't get amount of available threads: {e}, defaulting to {DEFAULT_THREADS}");
-            NonZero::try_from(DEFAULT_THREADS).unwrap()
-        });
 
     Configuration {
-        db_host: initialize_value(&matches, "db_host", "DB_HOST", String::from(DEFAULT_DB_HOST)),
-        db_port: initialize_value(&matches, "db_port", "DB_PORT", DEFAULT_DB_PORT),
-        db_schema: initialize_value(&matches, "db_schema", "DB_SCHEMA", String::from(DEFAULT_DB_SCHEMA)),
-        db_username: initialize_value(&matches, "db_username", "DB_USERNAME", String::from(DEFAULT_DB_USERNAME)),
-        db_password: initialize_value(&matches, "db_password", "DB_PASSWORD", String::from(DEFAULT_DB_PASSWORD)),
-
         interface: initialize_value(&matches, "interface", "INTERFACE", String::from(DEFAULT_INTERFACE)),
         machine_ip: initialize_value(&matches, "machine_ip", "MACHINE_IP", String::from(DEFAULT_MACHINE_IP)),
         ports: vec![],
 
-        available_threads: initialize_value(&matches, "allowed_workers", "ALLOWED_WORKERS", NonZero::try_from(allowed_workers).unwrap()),
+        kafka_broker_host: initialize_value(&matches, "kafka_broker_host", "BROKER_HOST", String::from(DEFAULT_KAFKA_BROKER_HOST)),
+        kafka_topic: initialize_value(&matches, "kafka_topic", "KAFKA_TOPIC", String::from(DEFAULT_KAFKA_TOPIC)),
     }
 }

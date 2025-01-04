@@ -1,4 +1,4 @@
-use log::{debug, error, trace};
+use log::{debug, error};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use crate::configuration::Configuration;
 
@@ -7,7 +7,6 @@ const KAFKA_TIMEOUT: &str = "5000";
 #[derive(Clone)]
 pub struct KafkaManager {
     kafka_producer: FutureProducer,
-    broker: String,
     topic: String
 }
 
@@ -21,7 +20,6 @@ impl KafkaManager {
 
         KafkaManager {
             kafka_producer,
-            broker: config.kafka_broker_host.clone(),
             topic: config.kafka_topic.clone()
         }
     }
