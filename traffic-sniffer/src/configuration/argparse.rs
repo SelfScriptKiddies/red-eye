@@ -6,46 +6,6 @@ pub(crate) fn initialize_cli_args() -> Command {
         .author("TonySD")
         .about("Client for traffic analyzer red-eye")
         .arg(
-            Arg::new("db_host")
-                .short('H')
-                .long("host")
-                .action(ArgAction::Set)
-                .value_name("db_host")
-                .help("Database hostname or ip"),
-        )
-        .arg(
-            Arg::new("db_port")
-                .short('P')
-                .long("port")
-                .value_name("db_port")
-                .action(ArgAction::Set)
-                .help("Database port"),
-        )
-        .arg(
-            Arg::new("db_schema")
-                .short('S')
-                .long("schema")
-                .value_name("db_schema")
-                .action(ArgAction::Set)
-                .help("Database schema"),
-        )
-        .arg(
-            Arg::new("db_username")
-                .short('u')
-                .long("username")
-                .value_name("db_username")
-                .action(ArgAction::Set)
-                .help("Database username"),
-        )
-        .arg(
-            Arg::new("db_password")
-                .short('p')
-                .long("password")
-                .value_name("db_password")
-                .action(ArgAction::Set)
-                .help("Database password"),
-        )
-        .arg(
             Arg::new("interface")
                 .short('i')
                 .long("interface")
@@ -62,11 +22,19 @@ pub(crate) fn initialize_cli_args() -> Command {
                 .help("Machine ip on chose interface"),
         )
         .arg(
-            Arg::new("allowed_workers")
-                .short('w')
-                .long("workers")
-                .value_name("allowed_workers")
+            Arg::new("kafka_broker_host")
+                .short('b')
+                .long("broker-host")
+                .value_name("kafka_broker_host")
                 .action(ArgAction::Set)
-                .help("How many threads will be in threadpool"),
+                .help("Kafka broker host with ip. Example: localhost:29092"),
+        )
+        .arg(
+            Arg::new("kafka_topic")
+                .short('t')
+                .long("broker-topic")
+                .value_name("kafka_topic")
+                .action(ArgAction::Set)
+                .help("Topic name, where will be sent raw packets"),
         )
 }
