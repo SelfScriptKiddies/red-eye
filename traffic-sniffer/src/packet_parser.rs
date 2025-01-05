@@ -1,8 +1,8 @@
-use std::{thread, sync};
+use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use log::{debug, info, trace, warn};
-use pcap::{Active, Capture, Error};
+use pcap::{Capture, Error};
 use crate::configuration::Configuration;
 use crate::kafka::KafkaManager;
 
