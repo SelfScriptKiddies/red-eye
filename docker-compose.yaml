@@ -1,7 +1,7 @@
 services:
   db:
     build:
-      context: ./db
+      context: ./database
     restart: always
     env_file:
       - .env
@@ -31,6 +31,11 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Replication reduce
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
 
 
   # backend:
