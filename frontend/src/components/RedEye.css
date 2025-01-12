@@ -1,0 +1,91 @@
+.eye {
+    width: 80px;
+    height: 80px;
+    border-radius: 75% 15%;
+    border: 5px solid #0077bb;
+    position: relative;
+    transition: 0.3s;
+    transform: translate(calc(25%*cos(45deg)), 0) rotate(45deg);
+}
+.eye__apple {
+    position: absolute;
+    border-radius: 50%;
+    width: 25px;
+    height: 25px;
+    border: 4px solid #0089ce;
+    background-color: #0079b6;
+    transform: translate(-50%, -50%);
+    transition: 0.3s;
+    top: 50%;
+}
+.eye__apple__apple {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: 75%;
+    height: 75%;
+    border-radius: 50%;
+    border: 2px solid inherit;
+    background-color: rgb(0, 0, 0);
+    border:  2px solid black;
+    transform: translate(-50%, -50%);
+    transition: 0.3s;
+}
+.eye__apple__center {
+    left: 50%;
+}
+.eye__apple__left {
+    top: 75%;
+    left: 25%;
+}
+.eye__apple__right {
+    top: 25%;
+    left: 75%;
+}
+.eye__apple__right .eye__apple__apple {
+    top: 25%;
+    left: 75%;
+}
+.eye__apple__left .eye__apple__apple {
+    top: 75%;
+    left: 25%;
+}
+.eye__apple__focus .eye__apple__apple {
+    border-width: 6px;
+    background-color: rgb(255, 0, 0);
+}
+.eye__apple__focus {
+    left: 50%;
+    width: 35px;
+    height: 35px;
+    border-color:  rgb(165, 25, 0);
+    background-color: rgb(204, 32, 0);
+}
+.eye:has(> .eye__apple__focus) { 
+    border-width: 10px;
+    border-color:  rgb(165, 25, 0);
+    background-color: rgb(255, 30, 30);
+}
+
+.bloodrop {
+    transition: 0.3s;
+    position: absolute;
+    display: flex;
+    right: 60%;
+    bottom: 60%;
+    transform: rotate(-45deg);
+    opacity: 0;
+}
+.bloodrop svg path {
+    fill:  #a51900;
+}
+.bloodrop svg {
+    width: 30px;
+    height: 42px;
+}
+
+.eye:has(> .eye__apple__focus) .bloodrop{ 
+    opacity: 1;
+    right: -45%;
+    bottom: 20%;
+}
