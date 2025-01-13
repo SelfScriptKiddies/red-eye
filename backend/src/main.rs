@@ -1,24 +1,14 @@
-use clap::Parser;
+use config_manager::ConfigInit;
+use crate::configuration::ApplicationConfig;
 
-mod pcap;
 mod api;
+mod configuration;
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    #[arg(short, long)]
-    interface: String,
 
-    #[arg(short, long)]
-    ip: String,
 
-    #[arg(short, long)]
-    port: u16,
-
-    #[arg(short, long, default_value_t = 100)]
-    max_packets: usize,
-}
-
-fn main() {
-    println!("Hello, world!");
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    dbg!(ApplicationConfig::parse().unwrap());
+    env_logger::init();
+    Ok(())
 }
