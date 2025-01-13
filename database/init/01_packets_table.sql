@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS packets (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    sequence BIGINT NOT NULL,
+    direction VARCHAR(4) NOT NULL,
     stream_id INTEGER NOT NULL,
     packet_data BYTEA NOT NULL,
     CONSTRAINT fk_stream
