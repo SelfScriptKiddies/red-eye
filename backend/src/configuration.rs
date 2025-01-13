@@ -1,0 +1,90 @@
+use config_manager::{config};
+
+#[derive(Debug)]
+#[config(
+    clap(version, author),
+    file(
+        format = "toml",
+        clap(long = "config", short = 'c', help = "path to configuration file"),
+        env = "demo_config",
+        optional=true
+    )
+)]
+pub struct ApplicationConfig {
+    /// Web-application config
+    #[source(
+        clap(long, help="Backend web ip"),
+        env = "WEB_IP",
+        config = "web.ip",
+        default = "\"0.0.0.0\".to_string()"
+    )]
+    web_host: String,
+    #[source(
+        clap(long, help="Backend web port"),
+        env = "WEB_PORT",
+        config = "web.port",
+        default = 8080
+    )]
+    web_port: u16,
+    #[source(
+        clap(long, help="Backend web password for login"),
+        env = "WEB_PASSWORD",
+        config = "web.password",
+        default = "\"fbfd83ebcabfd05ace9c03cd8a2ea2f4\".to_string()"
+    )]
+    web_password: String,
+
+
+    /// Database config
+    #[source(
+        clap(long, short='H', help="Database domain"),
+        env = "DB_HOST",
+        config = "database.host",
+        default = "\"db\".to_string()")
+    ]
+    db_host: String,
+    #[source(
+        clap(long, short='P', help="Database port"),
+        env = "DB_PORT",
+        config = "database.port",
+        default = 5432)
+    ]
+    db_port: u16,
+    #[source(
+        clap(long, short='u', help="Database username"),
+        env = "DB_USERNAME",
+        config = "database.username",
+        default = "\"user\".to_string()")
+    ]
+    db_username: String,
+    #[source(
+        clap(long, short='p', help="Database password"),
+        env = "DB_PASSWORD",
+        config = "database.password",
+        default = "\"user\".to_string()")
+    ]
+    db_password: String,
+    #[source(
+        clap(long, short='s', help="Database schema"),
+        env = "DB_PASSWORD",
+        config = "database.password",
+        default = "\"red-eye\".to_string()")
+    ]
+    db_schema: String,
+
+    /// Kafka config
+    #[source(
+            clap(long, short='b', help="Kafka broker host"),
+            env = "KAFKA_HOST",
+            config = "kafka.host",
+            default = "\"kafka\".to_string()")
+        ]
+    kafka_broker: String,
+    #[source(
+        clap(long, short='t', help="Kafka broker topic"),
+        env = "KAFKA_TOPIC",
+        config = "kafka.topic",
+        default = "\"raw_packets\".to_string()")
+    ]
+    kafka_topic: String
+}

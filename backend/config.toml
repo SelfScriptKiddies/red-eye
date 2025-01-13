@@ -1,0 +1,11 @@
+[web]
+host = "0.0.0.0"
+port = 8000
+password = "password"
+
+[database]
+host = "db"
+port = 5432
+
+[kafka]
+host = "127.0.0.1"
