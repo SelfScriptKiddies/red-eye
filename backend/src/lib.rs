@@ -1,3 +1,4 @@
+use actix_identity::IdentityMiddleware;
 use actix_session::config::CookieContentSecurity;
 use crate::configuration::ApplicationConfig;
 use actix_session::storage::CookieSessionStore;
@@ -38,18 +39,20 @@ fn init() -> ApplicationConfig {
 
 pub async fn run() -> std::io::Result<()> {
     let config = init();
+    let web_data = web::Data::new(config.clone());
     debug!("{:?}", config);
 
     HttpServer::new(move || {
         App::new()
+            .app_data(web_data.clone())
+            .wrap(IdentityMiddleware::default())
             .wrap(SessionMiddleware::builder(
                 CookieSessionStore::default(),
-                Key::from(config.web_password.as_ref()),
-            ).cookie_content_security(CookieContentSecurity::Private).build()
-            )
-            .default_service(web::to(|| HttpResponse::Ok()))
+                Key::from(config.cookie_key.clone().as_bytes()),
+            ).cookie_content_security(CookieContentSecurity::Private).build())
+            .service(auth::login)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind((config.web_host, config.web_port))?
     .run()
     .await
 }

@@ -59,6 +59,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "actix-identity"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b8ddc6f6a8b19c4016aaa13519968da9969bc3bc1c1c883cdb0f25dd6c8cf7"
+dependencies = [
+ "actix-service",
+ "actix-session",
+ "actix-utils",
+ "actix-web",
+ "derive_more 1.0.0",
+ "futures-core",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "actix-macros"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,6 +398,7 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 name = "backend"
 version = "0.1.0"
 dependencies = [
+ "actix-identity",
  "actix-session",
  "actix-web",
  "clap",

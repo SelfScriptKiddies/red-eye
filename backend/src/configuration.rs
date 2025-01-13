@@ -33,7 +33,13 @@ pub struct ApplicationConfig {
         default = "\"fbfd83ebcabfd05ace9c03cd8a2ea2f4\".to_string()"
     )]
     pub web_password: String,
-
+    #[source(
+        clap(long, help="Backend web cookie key"),
+        env = "COOKIE_KEY",
+        config = "web.cookie_key",
+        default = "\"024e7bbdd3dcf8fcb6e82f7b3edae798661704d8b2e167e1ca680cb9fd4b1ac7\".to_string()"
+    )]
+    pub cookie_key: String,
 
     /// Database config
     #[source(
