@@ -9,6 +9,7 @@ use config_manager::ConfigInit;
 use log::{debug, error};
 
 mod auth;
+mod db;
 mod configuration;
 
 fn init() -> ApplicationConfig {
@@ -50,9 +51,11 @@ pub async fn run() -> std::io::Result<()> {
                 CookieSessionStore::default(),
                 Key::from(config.cookie_key.clone().as_bytes()),
             ).cookie_content_security(CookieContentSecurity::Private).build())
-            .service(auth::login)
+            .configure(auth::auth_config)
     })
     .bind((config.web_host, config.web_port))?
     .run()
     .await
 }
+
+

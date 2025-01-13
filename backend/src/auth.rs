@@ -1,3 +1,4 @@
+use std::convert::identity;
 use actix_identity::Identity;
 use actix_session::Session;
 use actix_web::{Error, get, HttpMessage, HttpRequest, HttpResponse, post, Responder, web};
@@ -12,7 +13,7 @@ pub struct LoginData {
 }
 
 #[post("/login")]
-pub async fn login(
+async fn login(
     request: HttpRequest,
     data: web::Form<LoginData>,
     config: web::Data<ApplicationConfig>
@@ -25,5 +26,16 @@ pub async fn login(
     }
 }
 
+#[post("/logout")]
+async fn logout(
+    identity: Identity
+) -> impl Responder {
+    identity.logout();
+    HttpResponse::Ok().body("Successfully log out")
+}
 
-
+pub fn auth_config(cfg: &mut web::ServiceConfig) {
+    cfg
+        .service(login)
+        .service(logout);
+}
