@@ -4,8 +4,11 @@ port = 31337
 password = "password"
 
 [database]
-host = "db"
+host = "172.18.136.173"
 port = 5432
+username = "user"
+password = "password"
+schema = "red-eye"
 
 [kafka]
 host = "127.0.0.1"

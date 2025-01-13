@@ -72,8 +72,8 @@ pub struct ApplicationConfig {
     pub db_password: String,
     #[source(
         clap(long, short='s', help="Database schema"),
-        env = "DB_PASSWORD",
-        config = "database.password",
+        env = "DB_SCHEMA",
+        config = "database.schema",
         default = "\"red-eye\".to_string()")
     ]
     pub db_schema: String,

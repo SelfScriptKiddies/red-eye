@@ -19,7 +19,7 @@ async fn login(
     config: web::Data<ApplicationConfig>
 ) -> impl Responder {
     if config.web_password == data.password {
-        Identity::login(&request.extensions(), "player".into());
+        let _ = Identity::login(&request.extensions(), "player".into());
         HttpResponse::Ok().json(json!({"status": "Logged in"}))
     } else {
         HttpResponse::Unauthorized().json(json!({"status": "Invalid password"}))
