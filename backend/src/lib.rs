@@ -1,21 +1,19 @@
-use std::error::Error;
+use crate::configuration::ApplicationConfig;
+use crate::db::establish_connection;
 use actix_identity::IdentityMiddleware;
 use actix_session::config::CookieContentSecurity;
-use crate::configuration::ApplicationConfig;
 use actix_session::storage::CookieSessionStore;
 use actix_session::SessionMiddleware;
 use actix_web::cookie::Key;
-use actix_web::{App, get, HttpResponse, HttpServer, web, Responder};
 use actix_web::middleware::Logger;
+use actix_web::{web, App, HttpServer};
 use config_manager::ConfigInit;
 use log::{debug, error};
-use crate::db::establish_connection;
 
-mod db;
 mod api;
 mod auth;
 mod configuration;
-
+mod db;
 
 fn init() -> ApplicationConfig {
     let config: ApplicationConfig = match ApplicationConfig::parse() {
@@ -55,17 +53,18 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(pool.clone())
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())
-            .wrap(SessionMiddleware::builder(
-                CookieSessionStore::default(),
-                Key::from(config.cookie_key.clone().as_bytes()),
-            ).cookie_content_security(CookieContentSecurity::Private).build())
+            .wrap(
+                SessionMiddleware::builder(
+                    CookieSessionStore::default(),
+                    Key::from(config.cookie_key.clone().as_bytes()),
+                )
+                .cookie_content_security(CookieContentSecurity::Private)
+                .build(),
+            )
             .configure(auth::auth_config)
             .configure(api::api_config)
     })
     .bind((config.web_host, config.web_port))?
     .run()
     .await
-
 }
-
-

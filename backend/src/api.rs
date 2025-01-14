@@ -1,5 +1,6 @@
 mod packet;
 mod stream;
+mod packet_dto;
 
 use actix_identity::Identity;
 use actix_web::{get, HttpRequest, HttpResponse, HttpMessage, Responder, web};
