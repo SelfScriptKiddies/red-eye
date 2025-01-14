@@ -6,14 +6,14 @@ use actix_session::storage::CookieSessionStore;
 use actix_session::SessionMiddleware;
 use actix_web::cookie::Key;
 use actix_web::middleware::{ErrorHandlers, Logger};
-use actix_web::{web, App, HttpServer};
+use actix_web::{App, HttpServer, web};
 use actix_web::http::StatusCode;
 use config_manager::ConfigInit;
 use log::debug;
+use api::auth;
 use crate::api::packet::packet_service::PacketService;
 
 mod api;
-mod auth;
 mod configuration;
 mod db;
 

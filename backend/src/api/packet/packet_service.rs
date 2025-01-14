@@ -29,7 +29,7 @@ impl PacketService {
         self.packet_repository.get_packet_by_stream_id(stream_id).await
     }
 
-    pub async fn get_packets_by_stream(&self, stream: Stream) -> Result<Vec<Packet>, Error> {
+    pub async fn get_packets_by_stream(&self, stream: &Stream) -> Result<Vec<Packet>, Error> {
         self.packet_repository.get_packet_by_stream_id(stream.id).await
     }
 }

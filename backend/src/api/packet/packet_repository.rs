@@ -7,7 +7,7 @@ pub(super) struct PacketRepository {
 }
 
 impl PacketRepository {
-    pub(crate) fn new(pgpool: PgPool) -> Self {
+    pub(super) fn new(pgpool: PgPool) -> Self {
         PacketRepository {
             pgpool
         }
