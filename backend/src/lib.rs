@@ -5,10 +5,11 @@ use actix_session::config::CookieContentSecurity;
 use actix_session::storage::CookieSessionStore;
 use actix_session::SessionMiddleware;
 use actix_web::cookie::Key;
-use actix_web::middleware::Logger;
+use actix_web::middleware::{ErrorHandlers, Logger};
 use actix_web::{web, App, HttpServer};
+use actix_web::http::StatusCode;
 use config_manager::ConfigInit;
-use log::{debug, error};
+use log::debug;
 
 mod api;
 mod auth;
@@ -51,6 +52,7 @@ pub async fn run() -> std::io::Result<()> {
         App::new()
             .app_data(web_data.clone())
             .app_data(pool.clone())
+            .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())
             .wrap(

@@ -1,15 +1,14 @@
 use actix_identity::Identity;
 use actix_web::{HttpResponse, get, Responder, web};
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use base64::encode;
+use base64::prelude::*;
 use crate::api::packet_dto::{Packet, PacketResponse};
 use log::error;
 use serde_json::json;
 
-#[get("/{id}")]
+#[get("/packet/{id}")]
 async fn get_packet_by_id(
-    identity: Identity,
+    _identity: Identity,
     path: web::Path<(i32,)>,
     pool: web::Data<PgPool>
 ) -> Result<impl Responder, actix_web::error::Error> {
@@ -31,7 +30,7 @@ async fn get_packet_by_id(
 
     match packet {
         Some(pkt) => {
-            let packet_data_base64 = encode(&pkt.packet_data);
+            let packet_data_base64 = BASE64_STANDARD.encode(&pkt.packet_data);
 
             let response = PacketResponse {
                 id: pkt.id,
@@ -47,22 +46,18 @@ async fn get_packet_by_id(
     }
 }
 
-// #[get("/")]
-// async fn get_packet_by_id(
-//     identity: Identity,
-//     path: web::Path<(u32,)>,
-//     pool: web::Data<PgPool>
-// ) -> impl Responder {
-//     let packet_id: u32 = path.into_inner().0;
-//     HttpResponse::Ok().body(format!("User detail: {packet_id}"))
-// }
+#[get("/packet")]
+async fn get_packet(
+    _identity: Identity,
+    path: web::Path<(u32,)>,
+    pool: web::Data<PgPool>
+) -> impl Responder {
+    let packet_id: u32 = path.into_inner().0;
+    HttpResponse::Ok().body(format!("User detail: {packet_id}"))
+}
 
 pub fn packet_config(cfg: &mut web::ServiceConfig) {
     cfg
-        .service(
-            web::scope("/packet")
-                .service(get_packet_by_id)
-        )
-
-    ;
+        .service(get_packet_by_id)
+        .service(get_packet);
 }

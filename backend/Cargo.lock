@@ -564,7 +564,7 @@ dependencies = [
  "actix-identity",
  "actix-session",
  "actix-web",
- "base64 0.13.1",
+ "base64 0.22.1",
  "clap",
  "colog",
  "config 0.15.5",

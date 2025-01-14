@@ -23,4 +23,4 @@ config-manager = "0.2.0"
 config = "0.15.5"
 log = "0.4.22"
 sqlx = { version = "0.8.3", features = ["postgres", "macros", "runtime-async-std-native-tls"] }
-base64 = "0.13.1"
+base64 = "0.22.1"

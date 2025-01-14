@@ -1,18 +1,18 @@
-use std::convert::identity;
 use actix_identity::Identity;
-use actix_session::Session;
-use actix_web::{Error, get, HttpMessage, HttpRequest, HttpResponse, post, Responder, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, post, Responder, web};
+use actix_web::dev::ServiceResponse;
+use actix_web::middleware::ErrorHandlerResponse;
 use serde::Deserialize;
 use serde_json::json;
 use crate::configuration::ApplicationConfig;
-use log::debug;
+use log::warn;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginData {
     password: String,
 }
 
-#[post("/login")]
+#[post("/api/login")]
 async fn login(
     request: HttpRequest,
     data: web::Form<LoginData>,
@@ -26,7 +26,7 @@ async fn login(
     }
 }
 
-#[post("/logout")]
+#[post("/api/logout")]
 async fn logout(
     identity: Identity
 ) -> impl Responder {
@@ -34,8 +34,36 @@ async fn logout(
     HttpResponse::Ok().body("Successfully log out")
 }
 
+#[post("/api/authorized")]
+async fn check_authorized(
+    identity: Option<Identity>
+) -> impl Responder {
+    match identity {
+        Some(_) => HttpResponse::Ok().json(json!({"status": "authorized"})),
+        None => HttpResponse::Unauthorized().json(json!({"status": "anonymous"}))
+    }
+}
+
+pub fn add_error_body<B>(res: ServiceResponse<B>) -> actix_web::Result<ErrorHandlerResponse<B>> {
+    // split service response into request and response components
+    let (req, res) = res.into_parts();
+
+    warn!("Unauthorized try to attempt {}", req.path());
+
+    // set body of response to modified body
+    let res = res.set_body(json!({"error": "non authorized"}).to_string());
+
+    // modified bodies need to be boxed and placed in the "right" slot
+    let res = ServiceResponse::new(req, res)
+        .map_into_boxed_body()
+        .map_into_right_body();
+
+    Ok(ErrorHandlerResponse::Response(res))
+}
+
 pub fn auth_config(cfg: &mut web::ServiceConfig) {
     cfg
         .service(login)
+        .service(check_authorized)
         .service(logout);
 }
