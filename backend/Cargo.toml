@@ -24,3 +24,5 @@ config = "0.15.5"
 log = "0.4.22"
 sqlx = { version = "0.8.3", features = ["postgres", "macros", "runtime-async-std-native-tls"] }
 base64 = "0.22.1"
+strum = "0.24.1"
+strum_macros = "0.24.3"

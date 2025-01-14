@@ -1,3 +1,4 @@
+use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -16,4 +17,18 @@ pub struct PacketResponse {
     pub direction: String,
     pub stream_id: i32,
     pub packet_data: String, // base64 string
+}
+
+impl Packet {
+    pub fn to_response(&self) -> PacketResponse {
+        let packet_data_base64 = BASE64_STANDARD.encode(&self.packet_data);
+
+        PacketResponse {
+            id: self.id,
+            timestamp: self.timestamp,
+            direction: self.direction.clone(),
+            stream_id: self.stream_id,
+            packet_data: packet_data_base64,
+        }
+    }
 }

@@ -10,6 +10,7 @@ use actix_web::{web, App, HttpServer};
 use actix_web::http::StatusCode;
 use config_manager::ConfigInit;
 use log::debug;
+use crate::api::packet::packet_service::PacketService;
 
 mod api;
 mod auth;
@@ -44,14 +45,15 @@ fn init() -> ApplicationConfig {
 
 pub async fn run() -> std::io::Result<()> {
     let config = init();
-    let web_data = web::Data::new(config.clone());
-    let pool = web::Data::new(establish_connection(&config).await);
+    let configuration_data = web::Data::new(config.clone());
+    let pool = establish_connection(&config).await;
+    let packet_repository = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
     debug!("{:?}", &config);
 
     HttpServer::new(move || {
         App::new()
-            .app_data(web_data.clone())
-            .app_data(pool.clone())
+            .app_data(configuration_data.clone())
+            .app_data(packet_repository.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

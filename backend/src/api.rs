@@ -1,6 +1,5 @@
-mod packet;
+pub(crate) mod packet;
 mod stream;
-mod packet_dto;
 
 use actix_web::web;
 
