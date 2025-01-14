@@ -1,8 +1,8 @@
 -- Create 'packets' table
 CREATE TABLE IF NOT EXISTS packets (
     id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    direction VARCHAR(4) NOT NULL,
+    timestamp BIGINT NOT NULL,
+    direction VARCHAR(4) NOT NULL, -- from dest/orig
     stream_id INTEGER NOT NULL,
     packet_data BYTEA NOT NULL,
     CONSTRAINT fk_stream
