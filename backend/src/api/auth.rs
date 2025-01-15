@@ -1,5 +1,5 @@
 use actix_identity::Identity;
-use actix_web::{HttpMessage, HttpRequest, HttpResponse, post, Responder, web};
+use actix_web::{HttpMessage, HttpRequest, HttpResponse, post, Responder, web, Either};
 use actix_web::dev::ServiceResponse;
 use actix_web::middleware::ErrorHandlerResponse;
 use serde::Deserialize;
@@ -15,10 +15,15 @@ pub struct LoginData {
 #[post("/api/login")]
 async fn login(
     request: HttpRequest,
-    data: web::Form<LoginData>,
+    data: Either<web::Json<LoginData>, web::Form<LoginData>>,
     config: web::Data<ApplicationConfig>
 ) -> impl Responder {
-    if config.web_password == data.password {
+    let input_password = match data {
+        Either::Left(json) => json.password.to_owned(),
+        Either::Right(form) => form.password.to_owned()
+    };
+
+    if config.web_password == input_password {
         let _ = Identity::login(&request.extensions(), "player".into());
         HttpResponse::Ok().json(json!({"status": "Logged in"}))
     } else {

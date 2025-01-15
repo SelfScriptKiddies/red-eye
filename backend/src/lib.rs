@@ -4,7 +4,7 @@ use actix_identity::IdentityMiddleware;
 use actix_session::config::CookieContentSecurity;
 use actix_session::storage::CookieSessionStore;
 use actix_session::SessionMiddleware;
-use actix_web::cookie::Key;
+use actix_web::cookie::{Key, SameSite};
 use actix_web::middleware::{ErrorHandlers, Logger};
 use actix_web::{App, HttpServer, web};
 use actix_web::http::StatusCode;
@@ -62,8 +62,11 @@ pub async fn run() -> std::io::Result<()> {
                     CookieSessionStore::default(),
                     Key::from(config.cookie_key.clone().as_bytes()),
                 )
+                .cookie_secure(false)
+                .cookie_http_only(true)
+                .cookie_same_site(SameSite::Lax)
                 .cookie_content_security(CookieContentSecurity::Private)
-                .build(),
+                .build()
             )
             .configure(auth::auth_config)
             .configure(api::api_config)
