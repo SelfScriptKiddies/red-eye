@@ -1,5 +1,3 @@
-mod errors;
-
 use actix_identity::Identity;
 use actix_web::{HttpMessage, HttpRequest, HttpResponse, post, Responder, web, Either, get};
 use actix_web::body::{BodySize, MessageBody};
@@ -32,7 +30,7 @@ async fn login(
         let _ = Identity::login(&request.extensions(), "player".into());
         HttpResponse::Ok().json(json!({"status": "Logged in"}))
     } else {
-        HttpResponse::Unauthorized().json(json!({"status": "Invalid password"}))
+        HttpResponse::Unauthorized().json(json!({"error": "Invalid password"}))
     }
 }
 
