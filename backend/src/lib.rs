@@ -63,7 +63,7 @@ pub async fn run() -> std::io::Result<()> {
                     Key::from(config.cookie_key.clone().as_bytes()),
                 )
                 .cookie_secure(false)
-                .cookie_http_only(true)
+                .cookie_http_only(false)
                 .cookie_same_site(SameSite::Lax)
                 .cookie_content_security(CookieContentSecurity::Private)
                 .build()
