@@ -1,0 +1,24 @@
+input{
+    border: none;
+    width: 100%;
+    height: 32px;
+    transition: 0.3s;
+    outline: none;
+}
+label {
+    font-size: 26px;
+}
+form {
+    text-align: center;
+}
+form > div {
+    margin: 15px;
+}
+.eye:has(> .eye__apple__focus) ~ form input:focus{ 
+    border: none;
+    border-bottom: 2px solid #cc2000;
+}
+.eye ~ form input:focus{ 
+    border-bottom: 2px solid #0079b6;
+    transition: 0.1s;
+}

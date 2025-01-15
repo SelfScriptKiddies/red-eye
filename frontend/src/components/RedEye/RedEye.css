@@ -5,7 +5,7 @@
     border: 5px solid #0077bb;
     position: relative;
     transition: 0.3s;
-    transform: translate(calc(25%*cos(45deg)), 0) rotate(45deg);
+    transform: rotate(45deg);
 }
 .eye__apple {
     position: absolute;
@@ -52,19 +52,19 @@
 }
 .eye__apple__focus .eye__apple__apple {
     border-width: 6px;
-    background-color: rgb(255, 0, 0);
+    background-color: #ff0000;
 }
 .eye__apple__focus {
     left: 50%;
     width: 35px;
     height: 35px;
-    border-color:  rgb(165, 25, 0);
-    background-color: rgb(204, 32, 0);
+    border-color:  #a51900;
+    background-color: #cc2000;
 }
 .eye:has(> .eye__apple__focus) { 
     border-width: 10px;
-    border-color:  rgb(165, 25, 0);
-    background-color: rgb(255, 30, 30);
+    border-color:  #a51900;
+    background-color: #ff1e1e;
 }
 
 .bloodrop {

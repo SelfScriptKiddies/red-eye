@@ -1,0 +1,17 @@
+h2 {
+    font-size: 36px;
+    margin: 10px 0 0;
+}
+.loginPage {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+.eye:has(> .eye__apple__focus) + h2 > span.RedEyeSpan{ 
+    color: #cc2000;
+}
+.eye + h2 > span.RedEyeSpan{ 
+    color: #0079b6;
+    transition: 0.3s;
+}
