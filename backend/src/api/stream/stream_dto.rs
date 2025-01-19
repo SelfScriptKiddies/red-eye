@@ -1,8 +1,11 @@
 use std::net::IpAddr;
 use serde::{Deserialize, Serialize};
-use strum_macros::IntoStaticStr;
+use strum_macros::Display;
+use crate::api::packet::packet_dto::{Packet, PacketResponse};
+use crate::api::packet::packet_service::PacketService;
 
-#[derive(Debug, Serialize, Deserialize, IntoStaticStr)]
+#[derive(Debug, Serialize, Deserialize, Display, sqlx::Type)]
+#[sqlx(type_name = "VARCHAR")]
 pub enum Protocol {
     TCP,
     UDP
@@ -17,4 +20,37 @@ pub struct Stream {
     pub protocol: Protocol,
     pub active: bool,
     pub packet_count: i32
+}
+
+#[derive(Debug, Serialize)]
+pub struct StreamResponse {
+    pub id: i32,
+    pub src_ip: String,
+    pub src_port: i32,
+    pub dst_ip: String,
+    pub dst_port: i32,
+    pub protocol: String,
+    pub active: bool,
+    pub packet_count: i32,
+    pub packets: Vec<PacketResponse>
+}
+
+impl Stream {
+    pub(crate) async fn to_response(&self, service: &PacketService) -> StreamResponse {
+        StreamResponse {
+            id: self.id,
+            src_ip: self.src_ip.to_string(),
+            src_port: self.src_port,
+            dst_ip: self.dst_ip.to_string(),
+            dst_port: self.dst_port,
+            protocol: self.protocol.to_string(),
+            active: self.active,
+            packet_count: self.packet_count,
+            packets: service.get_packets_by_stream_id(self.id).await
+                            .unwrap_or(vec![])
+                            .iter()
+                            .map(|packet| packet.to_response())
+                            .collect()
+        }
+    }
 }

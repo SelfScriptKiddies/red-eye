@@ -8,7 +8,7 @@ use crate::api::packet::packet_dto::PacketResponse;
 use crate::api::packet::packet_repository::PacketRepository;
 use crate::api::packet::packet_service::PacketService;
 
-mod packet_dto;
+pub(crate) mod packet_dto;
 pub(crate) mod packet_repository;
 pub(crate) mod packet_service;
 

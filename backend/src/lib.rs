@@ -12,6 +12,7 @@ use config_manager::ConfigInit;
 use log::debug;
 use api::auth;
 use crate::api::packet::packet_service::PacketService;
+use crate::api::stream::stream_service::StreamService;
 
 mod api;
 mod configuration;
@@ -47,13 +48,15 @@ pub async fn run() -> std::io::Result<()> {
     let config = init();
     let configuration_data = web::Data::new(config.clone());
     let pool = establish_connection(&config).await;
-    let packet_repository = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
+    let packet_service = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
+    let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));;
     debug!("{:?}", &config);
 
     HttpServer::new(move || {
         App::new()
             .app_data(configuration_data.clone())
-            .app_data(packet_repository.clone())
+            .app_data(packet_service.clone())
+            .app_data(stream_service.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

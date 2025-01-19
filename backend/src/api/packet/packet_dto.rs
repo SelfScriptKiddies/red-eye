@@ -2,7 +2,7 @@ use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Packet {
+pub(crate) struct Packet {
     pub id: i32,
     pub timestamp: i64,
     pub direction: String,
@@ -11,7 +11,7 @@ pub struct Packet {
 }
 
 #[derive(Debug, Serialize)]
-pub struct PacketResponse {
+pub(crate) struct PacketResponse {
     pub id: i32,
     pub timestamp: i64,
     pub direction: String,
