@@ -6,17 +6,17 @@ import { Transit, PagesProvider, RenderPage } from "./PagesProvider";
 
 export function App() {
   return (
-    <PagesProvider>
-      {window.location.pathname !== '/login' ? (
-        <div className='header'>
-        <RedEye></RedEye>
-        <nav className='navMenu'>
-          <Transit to={"/"}>Главная</Transit>
-          <Transit to={"/packets"}>Пакеты</Transit>
-        </nav>
-      </div>
-      ) : ''}      
+    <PagesProvider>  
       <div className='section'>
+        {window.location.pathname !== '/login' ? (
+          <div className='header'>
+          <RedEye></RedEye>
+          <nav className='navMenu'>
+            <Transit to={"/newService"}>Новый сервис</Transit>
+            <Transit to={"/packets"}>Пакеты</Transit>
+          </nav>
+        </div>
+        ) : ''}    
         <main className='content'>
           <RenderPage />
         </main>

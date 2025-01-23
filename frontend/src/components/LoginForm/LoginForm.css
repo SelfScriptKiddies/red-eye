@@ -20,5 +20,7 @@ form > div {
 }
 .eye ~ form input:focus{ 
     border-bottom: 2px solid #0079b6;
-    transition: 0.1s;
+}
+.errorMessage {
+    color: #cc2000;
 }

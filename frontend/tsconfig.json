@@ -7,5 +7,6 @@
     ],
     "exclude": [
         "src/main.tsx",
+        "src/setupProxy.js"
     ]
   }

@@ -1,0 +1,8 @@
+.packetsTape {
+    width: 30%;
+    border-right: 4px solid #646cff;
+}
+
+.packetsPage > div{
+    height: 100%;
+}
