@@ -37,4 +37,26 @@ impl PacketRepository {
             .fetch_all(&self.pgpool)
             .await
     }
+
+    pub async fn get_packets(&self, limit: u32, last_id: Option<u32>) -> Result<Vec<Packet>, sqlx::Error> {
+        let mut query_builder = sqlx::QueryBuilder::new(
+            "SELECT p.* FROM packets p "
+        );
+
+        if let Some(id) = last_id {
+            query_builder
+                .push("WHERE p.timestamp < (SELECT timestamp FROM packets WHERE id = ")
+                .push_bind(id as i32)
+                .push(") ");
+        }
+
+        query_builder
+            .push("ORDER BY p.timestamp DESC LIMIT ")
+            .push_bind(limit as i32);
+
+        query_builder
+            .build_query_as::<Packet>()
+            .fetch_all(&self.pgpool)
+            .await
+    }
 }

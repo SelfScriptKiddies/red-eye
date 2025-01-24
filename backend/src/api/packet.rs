@@ -1,8 +1,10 @@
 use actix_identity::Identity;
 use actix_web::{get, HttpResponse, Responder, web};
-use sqlx::PgPool;
+use packet_dto::Packet;
+use sqlx::{PgPool, query};
 use base64::prelude::*;
 use log::error;
+use serde::Deserialize;
 use serde_json::json;
 use crate::api::packet::packet_dto::PacketResponse;
 use crate::api::packet::packet_repository::PacketRepository;
@@ -48,14 +50,33 @@ async fn get_packets_by_stream_id(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct GetPacketsQuery {
+    limit: Option<u32>,
+    last_id: Option<u32>,
+}
+
 #[get("/packet")]
 async fn get_packet(
     _identity: Identity,
-    path: web::Path<(u32,)>,
-    pool: web::Data<PgPool>
+    query: web::Query<GetPacketsQuery>,
+    packet_service: web::Data<PacketService>
 ) -> impl Responder {
-    let packet_id: u32 = path.into_inner().0;
-    HttpResponse::Ok().body(format!("User detail: {packet_id}"))
+    let limit = query.limit.unwrap_or(100).min(1000);
+    let last_id = query.last_id;
+    
+    match packet_service.get_packets(limit, last_id).await {
+        Ok(packets) => {
+            let response_packets: Vec<PacketResponse> = packets
+                .iter()
+                .map(|packet| packet.to_response())
+                .collect();
+            HttpResponse::Ok().json(json!(response_packets))
+        },
+        Err(e) => HttpResponse::InternalServerError().json(json!({
+            "error": format!("Error occurred: {:?}", e)
+        }))
+    }
 }
 
 pub fn packet_config(cfg: &mut web::ServiceConfig) {

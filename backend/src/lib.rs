@@ -49,11 +49,13 @@ pub async fn run() -> std::io::Result<()> {
     let configuration_data = web::Data::new(config.clone());
     let pool = establish_connection(&config).await;
     let packet_service = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
-    let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));;
+    let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
+    let pg_pool = web::Data::new(pool.clone());
     debug!("{:?}", &config);
 
     HttpServer::new(move || {
         App::new()
+            .app_data(pg_pool.clone())
             .app_data(configuration_data.clone())
             .app_data(packet_service.clone())
             .app_data(stream_service.clone())

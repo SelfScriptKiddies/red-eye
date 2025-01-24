@@ -1,6 +1,7 @@
 pub(crate) mod packet;
 pub(crate) mod stream;
 pub mod auth;
+mod tag;
 
 use actix_web::web;
 
