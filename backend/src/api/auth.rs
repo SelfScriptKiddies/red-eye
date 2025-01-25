@@ -3,12 +3,10 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, post, Responder, web, Ei
 use actix_web::body::{BodySize, MessageBody};
 use actix_web::dev::ServiceResponse;
 use actix_web::middleware::ErrorHandlerResponse;
-use actix_web::web::JsonBody::Body;
 use serde::Deserialize;
 use serde_json::json;
 use crate::configuration::ApplicationConfig;
 use log::{info, warn};
-use strum_macros::Display;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginData {
