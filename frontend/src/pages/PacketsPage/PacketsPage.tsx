@@ -1,10 +1,37 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
 export function PacketsPage() {
+    fetch("/api/packet/stream_id/1",{
+        method: 'GET'
+    })
+    .catch((reason) => {
+        document.querySelector(".errorMessage").innerText = `Fuck you, lol. Reason: ${reason}`;
+    })
+    .then((response) => {
+        if (parseInt(response.status / 100) == 5)
+        {
+            document.querySelector(".errorMessage").innerText = "Что-то с сервером";
+            return;
+        }
+        else
+            return response.json();
+    })
+    // .catch((reason) => {
+    //     document.querySelector(".errorMessage").innerText = `Fuck you, lolx2. Reason: ${reason}`;
+    // })
+    // .then((resp_json) => {
+    //     if(!resp_json)
+    //         return;
+    //     ...
+    // })
+    // .catch((reason) => {
+    //     document.querySelector(".errorMessage").innerText = `Fuck you, lolx3. Reason: ${reason}`;
+    // });
     return (
         <div className="packetsPage">
-            <div className="packetsTape"></div>
-            <div className="packetData"></div>
+            <div className="streamsTape"></div>
+            <div className="streams"></div>
+            <div className="streamsTags"></div>
         </div>
     );
 }

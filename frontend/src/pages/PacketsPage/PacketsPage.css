@@ -2,7 +2,38 @@
     width: 30%;
     border-right: 4px solid #646cff;
 }
-
+.packetsPage {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    margin-top: 130px;
+}
 .packetsPage > div{
     height: 100%;
+}
+.streamsTape {
+    overflow-y: scroll;
+    width: 30%;
+    border-right: dashed 2px #646cff;
+}
+.streams {
+    overflow-y: scroll;
+    width: 39%;
+}
+.streamsTags {
+    overflow-y: scroll;
+    width: calc(31% - 4px);
+    border-left: dashed 2px #646cff;
+}
+#root:has( div.packetsPage) {
+    height: 100vh; /*???????????*/
+}
+#root > div.section:has( div.packetsPage) {
+    height: calc(100%);
+}
+#root > div.section > main.content:has( > div.packetsPage) {
+    height: 100%;
+}
+#root:has( div.packetsPage) .header {
+    border-bottom: solid 3px #646cff;
 }
