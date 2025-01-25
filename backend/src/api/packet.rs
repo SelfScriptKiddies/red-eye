@@ -1,13 +1,8 @@
 use actix_identity::Identity;
 use actix_web::{get, HttpResponse, Responder, web};
-use packet_dto::Packet;
-use sqlx::{PgPool, query};
-use base64::prelude::*;
-use log::error;
 use serde::Deserialize;
 use serde_json::json;
 use crate::api::packet::packet_dto::PacketResponse;
-use crate::api::packet::packet_repository::PacketRepository;
 use crate::api::packet::packet_service::PacketService;
 
 pub(crate) mod packet_dto;

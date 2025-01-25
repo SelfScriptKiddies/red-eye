@@ -1,4 +1,4 @@
-use config_manager::{config};
+use config_manager::config;
 
 #[derive(Debug, Clone)]
 #[config(

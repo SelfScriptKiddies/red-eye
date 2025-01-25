@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
-use crate::api::packet::packet_dto::{Packet, PacketResponse};
+use crate::api::packet::packet_dto::PacketResponse;
 use crate::api::packet::packet_service::PacketService;
 
 #[derive(Debug, Serialize, Deserialize, Display, sqlx::Type)]
