@@ -35,6 +35,15 @@ pub struct StreamResponse {
     pub packets: Vec<PacketResponse>
 }
 
+#[derive(Debug, Serialize)]
+pub struct StreamListResponse {
+    pub id: i32,
+    pub service_id: String,
+    pub tags: Vec<String>,
+    pub first_packet_time: i64,
+    pub last_packet_time: i64
+}
+
 impl Stream {
     pub(crate) async fn to_response(&self, service: &PacketService) -> StreamResponse {
         StreamResponse {
