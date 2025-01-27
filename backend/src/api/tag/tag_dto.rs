@@ -7,10 +7,12 @@ pub struct TagName {
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize)]
-struct Tag {
+pub struct Tag {
     pub id: i32,
+    pub name: String,
     pub packet_id: i32,
     pub tag_id: i32,
     pub start_index: i32,
     pub end_index: i32
 }
+

@@ -1,7 +1,7 @@
 pub(crate) mod packet;
 pub(crate) mod stream;
 pub mod auth;
-mod tag;
+pub mod tag;
 
 use actix_web::web;
 
@@ -11,5 +11,6 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             web::scope("/api")
                 .configure(packet::packet_config)
                 .configure(stream::stream_config)
+                .configure(tag::tag_config)
     );
 }

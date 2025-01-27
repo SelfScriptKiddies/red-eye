@@ -11,8 +11,12 @@ use actix_web::http::StatusCode;
 use config_manager::ConfigInit;
 use log::debug;
 use api::auth;
-use crate::api::packet::packet_service::PacketService;
-use crate::api::stream::stream_service::StreamService;
+use crate::api::{
+    packet::packet_service::PacketService, 
+    stream::stream_service::StreamService, 
+    tag::tag_service::TagService
+};
+
 
 mod api;
 mod configuration;
@@ -50,6 +54,7 @@ pub async fn run() -> std::io::Result<()> {
     let pool = establish_connection(&config).await;
     let packet_service = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
+    let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
     debug!("{:?}", &config);
 
@@ -59,6 +64,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(configuration_data.clone())
             .app_data(packet_service.clone())
             .app_data(stream_service.clone())
+            .app_data(tag_service.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())
