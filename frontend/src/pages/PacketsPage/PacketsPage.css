@@ -4,29 +4,32 @@
 }
 .packetsPage {
     width: 100%;
-    height: 100%;
+    height: calc(100% - 130px - 3px);
     display: flex;
     margin-top: 130px;
+    padding-top: 3px;
 }
 .packetsPage > div{
+    transition: 0.3s;
+    overflow-y: scroll;
+    scrollbar-color: #646cff #353535;
+    scrollbar-gutter: stable;
+    scrollbar-width: bold;
     height: 100%;
 }
 .streamsTape {
-    overflow-y: scroll;
     width: 30%;
-    border-right: dashed 2px #646cff;
+    /* border-right: dashed 2px #646cff; */
 }
 .streams {
-    overflow-y: scroll;
     width: 39%;
 }
 .streamsTags {
-    overflow-y: scroll;
     width: calc(31% - 4px);
-    border-left: dashed 2px #646cff;
+    /* border-left: dashed 2px #646cff; */
 }
 #root:has( div.packetsPage) {
-    height: 100vh; /*???????????*/
+    height: 100vh;
 }
 #root > div.section:has( div.packetsPage) {
     height: calc(100%);
@@ -35,5 +38,43 @@
     height: 100%;
 }
 #root:has( div.packetsPage) .header {
+    transition: 0.3s;
     border-bottom: solid 3px #646cff;
+}
+#root:has( div.eye__apple__focus) .header{
+    border-bottom: solid 3px #a51900;
+}
+.side-btn {
+    width: 50%;
+    position: absolute;
+    border-radius: 100% 100% 0 0;
+    background-color: #353535;
+    font-size: 16px;
+}
+.bottom-side-btn {
+    bottom: 0;
+    left: calc(50% - 25%);
+}
+.right-side-btn {
+    right: calc(4%);
+    top: calc(50%);
+    transform: translate(50%, 0px) rotate(-90deg);
+}
+.left-side-btn {
+    left: calc(4%);
+    top: calc(50%);
+    transform: translate(-50%, 0px) rotate(90deg);
+}
+.packetsPage > div:has( .side-btn) {
+    position: relative;
+}
+
+#root:has( div.eye__apple__focus) .packetsPage > div{
+    scrollbar-color: #a51900 #353535;
+}
+.packetsPage button:hover {
+    border: solid 3px #646cff;
+}
+#root:has( div.eye__apple__focus) .packetsPage button:hover {
+    border: solid 3px #a51900;
 }

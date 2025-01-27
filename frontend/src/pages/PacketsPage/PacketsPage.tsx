@@ -18,7 +18,24 @@ export function PacketsPage() {
         else
             return response.json();
     })
-    // let 
+    let streams = [ // example
+        {id: 1, incoming: false, tags: ["Flag", "LFI"]},
+        {id: 2, incoming: false, tags: ["XSS"]},
+        {id: 3, incoming: true, tags: ["SQLInj"]},
+        {id: 4, incoming: true, tags: ["Flag", "RCE"]},
+        {id: 1, incoming: false, tags: ["Flag", "LFI"]},
+        {id: 2, incoming: false, tags: ["XSS"]},
+        {id: 3, incoming: true, tags: ["SQLInj"]},
+        {id: 4, incoming: true, tags: ["Flag", "RCE"]},
+        {id: 1, incoming: false, tags: ["Flag", "LFI"]},
+        {id: 2, incoming: false, tags: ["XSS"]},
+        {id: 3, incoming: true, tags: ["SQLInj"]},
+        {id: 4, incoming: true, tags: ["Flag", "RCE"]},
+        {id: 1, incoming: false, tags: ["Flag", "LFI"]},
+        {id: 2, incoming: false, tags: ["XSS"]},
+        {id: 3, incoming: true, tags: ["SQLInj"]},
+        {id: 4, incoming: true, tags: ["Flag", "RCE"]},
+    ];
     // .catch((reason) => {
     //     document.querySelector(".errorMessage").innerText = `Fuck you, lolx2. Reason: ${reason}`;
     // })
@@ -32,14 +49,18 @@ export function PacketsPage() {
     // });
     return (
         <div className="packetsPage">
-            <div className="streamsTape"></div>
-            <div className="streams">
-                < StreamCard incoming={false} tags={["Flag", "LFI"]} />
-                < StreamCard incoming={false} tags={["XSS"]} />
-                < StreamCard incoming={true} tags={["SQLInj"]} />
-                < StreamCard incoming={true} tags={["Flag", "RCE"]} />
+            <div className="streamsTape">
+                <button id="toTagsPageBtn" className="side-btn left-side-btn"><i className="fa-solid fa-arrow-down"></i></button>
             </div>
-            <div className="streamsTags"></div>
+            <div className="streams"> 
+            {streams.map((stream, index) => {
+                return < StreamCard streamObj={stream} />
+            })}
+            {/* <button id="toTagsPageBtn" className="side-btn bottom-side-btn"><i className="fa-solid fa-arrow-down"></i></button> */}
+            </div>
+            <div className="streamsTags">
+                <button id="toTagsPageBtn" className="side-btn right-side-btn"><i className="fa-solid fa-arrow-down"></i></button>
+            </div>
         </div>
     );
 }

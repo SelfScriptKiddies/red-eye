@@ -1,12 +1,17 @@
 .stream-card {
     border-radius: 20px;
-    background-color: rgb(53, 53, 53);
+    background-color: #353535;
     height: 50px;
     margin: 10px;
     display: flex;
     align-items: center;
     padding: 10px;
     width: calc(100% - 10px * 2 - 10px * 2);
+    transition: 0.3s;
+}
+.stream-card:hover {
+    border-radius: 10px;
+    background-color: #424242;
 }
 
 .tag {
@@ -32,3 +37,12 @@
 .RCE {
     filter: hue-rotate(150deg); /*Change it on different tags*/
 }
+.noselect {
+    -webkit-touch-callout: none; /* iOS Safari */
+      -webkit-user-select: none; /* Safari */
+       -khtml-user-select: none; /* Konqueror HTML */
+         -moz-user-select: none; /* Old versions of Firefox */
+          -ms-user-select: none; /* Internet Explorer/Edge */
+              user-select: none; /* Non-prefixed version, currently
+                                    supported by Chrome, Edge, Opera and Firefox */
+  }
