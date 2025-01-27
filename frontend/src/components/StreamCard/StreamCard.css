@@ -1,0 +1,34 @@
+.stream-card {
+    border-radius: 20px;
+    background-color: rgb(53, 53, 53);
+    height: 50px;
+    margin: 10px;
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    width: calc(100% - 10px * 2 - 10px * 2);
+}
+
+.tag {
+    color: white;
+    filter: hue-rotate(0deg); /*Change it on different tags*/
+    text-shadow: 0 0 7px #f09, 0 0 14px #f09, 0 0 21px #f09, 0 0 42px #f09, 0 0 64px #f09;
+    display: inline;
+    margin: 0 7px;
+    font-size: 1.3rem;
+}
+.SQLInj {
+    filter: hue-rotate(0deg); /*Change it on different tags*/
+}
+.Flag {
+    filter: hue-rotate(30deg); /*Change it on different tags*/
+}
+.XSS {
+    filter: hue-rotate(60deg); /*Change it on different tags*/
+}
+.LFI {
+    filter: hue-rotate(90deg); /*Change it on different tags*/
+}
+.RCE {
+    filter: hue-rotate(150deg); /*Change it on different tags*/
+}
