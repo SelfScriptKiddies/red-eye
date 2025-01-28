@@ -23,14 +23,14 @@ impl StreamService {
         self.stream_repository.get_packet_by_id(stream_id).await
     }
 
-    pub async fn get_all_streams_with_details(&self, offset: Option<i32>, limit: Option<i32>) -> Result<Vec<StreamListResponse>, sqlx::Error> {
+    pub async fn get_all_streams_with_details(&self, limit: Option<i32>, offset: Option<i32>) -> Result<Vec<StreamListResponse>, sqlx::Error> {
         let offset = offset.unwrap_or(0);
         let limit = limit.unwrap_or(10);
         
         let streams = self.stream_repository.get_streams_with_tags(limit, offset).await?;
-        Ok(streams.into_iter().map(|(id, first_time, last_time, tags)| StreamListResponse {
+        Ok(streams.into_iter().map(|(id, first_time, last_time, tags, service_name)| StreamListResponse {
             id,
-            service_id: "Not implemented".to_string(),
+            service_id: service_name.unwrap_or("Not implemented".to_string()),
             first_packet_time: first_time.unwrap_or(0),
             last_packet_time: last_time.unwrap_or(0),
             tags

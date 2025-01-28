@@ -3,6 +3,7 @@ use actix_web::{get, HttpResponse, Responder, web};
 use serde_json::json;
 use stream_service::StreamService;
 use crate::api::packet::packet_service::PacketService;
+use serde::Deserialize;
 
 pub mod stream_dto;
 mod stream_repository;
@@ -24,12 +25,19 @@ async fn get_stream_by_id(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct StreamQuery {
+    pub limit: Option<i32>,
+    pub offset: Option<i32>
+}
+
 #[get("/stream")]
 async fn get_all_streams(
     _identity: Identity,
-    stream_service: web::Data<StreamService>
+    stream_service: web::Data<StreamService>,
+    query: web::Query<StreamQuery>
 ) -> Result<impl Responder, actix_web::error::Error> {
-    match stream_service.get_all_streams_with_details(None, None).await {
+    match stream_service.get_all_streams_with_details(query.limit, query.offset).await {
         Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }

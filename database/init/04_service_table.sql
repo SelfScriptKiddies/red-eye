@@ -1,5 +1,5 @@
 -- Create 'services' table
-CREATE TABLE IF NOT EXISTS services (
+CREATE TABLE IF NOT EXISTS service (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL, -- Имя сервиса
     port INTEGER NOT NULL, -- Порт сервиса

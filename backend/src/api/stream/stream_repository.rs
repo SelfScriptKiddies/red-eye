@@ -46,19 +46,22 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32) -> Result<Vec<(i32, Option<i64>, Option<i64>, Vec<String>)>, sqlx::Error> {
-        sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, Vec<String>)>(
+    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32) -> Result<Vec<(i32, Option<i64>, Option<i64>, Vec<String>, Option<String>)>, sqlx::Error> {
+        sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, Vec<String>, Option<String>)>(
             r#"
             SELECT 
                 p.stream_id,
                 MIN(p.timestamp) as first_time,
                 MAX(p.timestamp) as last_time,
-                COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags
+                COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
+                s.name as service_name
             FROM packets p
             LEFT JOIN tag t ON t.packet_id = p.id
             LEFT JOIN tag_name tn ON tn.id = t.tag_id
-            GROUP BY p.stream_id
-            ORDER BY last_time
+            LEFT JOIN stream str ON str.id = p.stream_id
+            LEFT JOIN service s ON s.port = str.dst_port
+            GROUP BY p.stream_id, s.name
+            ORDER BY last_time DESC
             LIMIT $1
             OFFSET $2
             "#,
