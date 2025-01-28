@@ -24,7 +24,19 @@ async fn get_stream_by_id(
     }
 }
 
+#[get("/stream")]
+async fn get_all_streams(
+    _identity: Identity,
+    stream_service: web::Data<StreamService>
+) -> Result<impl Responder, actix_web::error::Error> {
+    match stream_service.get_all_streams_with_details(None, None).await {
+        Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+    }
+}
+
 pub fn stream_config(cfg: &mut web::ServiceConfig) {
     cfg
+        .service(get_all_streams)
         .service(get_stream_by_id);
 }

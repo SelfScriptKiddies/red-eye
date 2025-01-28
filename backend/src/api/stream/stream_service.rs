@@ -27,37 +27,13 @@ impl StreamService {
         let offset = offset.unwrap_or(0);
         let limit = limit.unwrap_or(10);
         
-        let streams = self.stream_repository.get_all_streams().await?;
-        let mut result = Vec::new();
-        
-        for stream in streams {
-            let (first_time, last_time) = self.stream_repository
-                .get_stream_packet_timestamps(stream.id)
-                .await?;
-                
-            let service_id = format!("{}:{} -> {}:{}", 
-                stream.src_ip, 
-                stream.src_port, 
-                stream.dst_ip, 
-                stream.dst_port
-            );
-            
-            let tags = self.tag_service
-                .get_tags_by_stream_id(stream.id)
-                .await?
-                .into_iter()
-                .map(|tag| tag.name)
-                .collect::<Vec<String>>();
-                
-            result.push(StreamListResponse {
-                id: stream.id,
-                service_id,
-                tags,
-                first_packet_time: first_time,
-                last_packet_time: last_time
-            });
-        }
-        
-        Ok(result)
+        let streams = self.stream_repository.get_streams_with_tags(limit, offset).await?;
+        Ok(streams.into_iter().map(|(id, first_time, last_time, tags)| StreamListResponse {
+            id,
+            service_id: "Not implemented".to_string(),
+            first_packet_time: first_time.unwrap_or(0),
+            last_packet_time: last_time.unwrap_or(0),
+            tags
+        }).collect())
     }
 }

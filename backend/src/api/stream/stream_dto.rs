@@ -35,7 +35,7 @@ pub struct StreamResponse {
     pub packets: Vec<PacketResponse>
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct StreamListResponse {
     pub id: i32,
     pub service_id: String,
