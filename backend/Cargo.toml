@@ -26,3 +26,5 @@ sqlx = { version = "0.8.3", features = ["postgres", "macros", "runtime-tokio-rus
 base64 = "0.22.1"
 strum = "0.26.3"
 strum_macros = "0.26.4"
+utoipa = { version = "5", features = ["actix_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["actix-web"] }

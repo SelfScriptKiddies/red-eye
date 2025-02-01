@@ -16,11 +16,28 @@ use crate::api::{
     stream::stream_service::StreamService, 
     tag::tag_service::TagService
 };
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 
 mod api;
 mod configuration;
 mod db;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        auth::login,
+        auth::logout
+    ),
+    components(
+        schemas(auth::LoginData)
+    ),
+    tags(
+        (name = "auth", description = "Authentication endpoints")
+    )
+)]
+struct ApiDoc;
 
 fn init() -> ApplicationConfig {
     let config: ApplicationConfig = match ApplicationConfig::parse() {
@@ -81,6 +98,11 @@ pub async fn run() -> std::io::Result<()> {
             )
             .configure(auth::auth_config)
             .configure(api::api_config)
+
+            .service(
+                SwaggerUi::new("/api-doc/{_:.*}")
+                .url("/api-doc/openapi.json", ApiDoc::openapi()),
+            )
     })
     .bind((config.web_host, config.web_port))?
     .run()

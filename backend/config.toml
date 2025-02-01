@@ -4,7 +4,7 @@ port = 31337
 password = "password"
 
 [database]
-host = "172.18.136.173"
+host = "highres.team"
 port = 5432
 username = "user"
 password = "password"

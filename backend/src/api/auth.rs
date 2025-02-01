@@ -8,11 +8,20 @@ use serde_json::json;
 use crate::configuration::ApplicationConfig;
 use log::{info, warn};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct LoginData {
     password: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/login",
+    request_body = LoginData,
+    responses(
+        (status = 200, description = "Login successful", body = String),
+        (status = 401, description = "Invalid password", body = String)
+    )
+)]
 #[post("/api/login")]
 async fn login(
     request: HttpRequest,
@@ -32,6 +41,13 @@ async fn login(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/logout",
+    responses(
+        (status = 200, description = "Logout successful", body = String)
+    )
+)]
 #[get("/api/logout")]
 async fn logout(
     identity: Identity
