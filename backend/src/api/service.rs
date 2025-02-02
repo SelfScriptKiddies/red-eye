@@ -57,7 +57,7 @@ async fn get_all_services(service: web::Data<ServiceService>) -> impl Responder 
 
 #[utoipa::path(
     get,
-    path = "/service/{id}",
+    path = "/api/service/{id}",
     responses(
         (status = 200, body = Service, description = "Service retrieved successfully", example = json!({
             "id": 1,
