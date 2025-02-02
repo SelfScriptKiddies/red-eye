@@ -14,6 +14,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
                 .configure(packet::packet_config)
                 .configure(stream::stream_config)
                 .configure(tag::tag_config)
+                .configure(service::config)
     );
 }
 
@@ -36,7 +37,13 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         stream::get_all_streams,
         stream::get_stream_by_id,
 
-        tag::get_tags_by_stream_id
+        tag::get_tags_by_stream_id,
+
+        service::get_all_services,
+        service::get_service_by_id,
+        service::create_service,
+        service::update_service,
+        service::delete_service
     ),
     components(
         schemas(auth::LoginData, packet::GetPacketsQuery)
@@ -45,7 +52,8 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         (name = "auth", description = "Authentication endpoints"),
         (name = "packet", description = "Packet endpoints"),
         (name = "stream", description = "Stream endpoints"),
-        (name = "tag", description = "Tag endpoints")
+        (name = "tag", description = "Tag endpoints"),
+        (name = "service", description = "Service endpoints")
     )
 
 )]
