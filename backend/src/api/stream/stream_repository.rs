@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use crate::api::stream::stream_dto::{Stream, StreamListResponse};
+use crate::api::stream::stream_dto::Stream;
 
 pub struct StreamRepository {
     pgpool: PgPool

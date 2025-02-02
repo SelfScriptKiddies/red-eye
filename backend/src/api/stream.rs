@@ -4,11 +4,42 @@ use serde_json::json;
 use stream_service::StreamService;
 use crate::api::packet::packet_service::PacketService;
 use serde::Deserialize;
+use stream_dto::StreamResponse;
+use utoipa::IntoParams;
 
 pub mod stream_dto;
 mod stream_repository;
 pub(crate) mod stream_service;
 
+#[utoipa::path(
+    get,
+    path = "/api/stream/{id}",
+    responses(
+        (status = 200, description = "Stream found", body = StreamResponse, example = json!({
+            "id": 1,
+            "src_ip": "157.204.59.65",
+            "src_port": 15498,
+            "dst_ip": "1.159.249.192",
+            "dst_port": 23779,
+            "protocol": "TCP",
+            "active": false,
+            "packet_count": 1,
+            "packets": [
+                {
+                    "id": 1,
+                    "timestamp": 1738095449035_i64,
+                    "direction": "dest",
+                    "stream_id": 1,
+                    "packet_data": "cGF5bG9hZA=="
+                }
+            ]
+        })),
+    (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+    (status = 404, description = "Stream not found", body = serde_json::Value, example = json!({"error": "Stream not found"})),
+    (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"})),
+    ),
+    tag = "stream"
+)]
 #[get("/stream/{id}")]
 async fn get_stream_by_id(
     _identity: Identity,
@@ -20,17 +51,30 @@ async fn get_stream_by_id(
 
     match stream_service.get_stream_by_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream.to_response(&packet_service).await)),
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Packet not found"}))),
+        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"}))),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 struct StreamQuery {
     pub limit: Option<i32>,
     pub offset: Option<i32>
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/stream",
+    params(
+        StreamQuery
+    ),
+    responses(
+        (status = 200, description = "Streams found", body = Vec<StreamResponse>, example = json!([{"id": 18, "service_id": "attention", "tags": [], "first_packet_time": 1738222782348_i64, "last_packet_time": 1738222782392_i64}, {"id": 17, "service_id": "number", "tags": [], "first_packet_time": 1738222782295_i64, "last_packet_time": 1738222782343_i64}])),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
+    ),
+    tag = "stream"
+)]
 #[get("/stream")]
 async fn get_all_streams(
     _identity: Identity,

@@ -8,6 +8,8 @@ use actix_web::cookie::{Key, SameSite};
 use actix_web::middleware::{ErrorHandlers, Logger};
 use actix_web::{App, HttpServer, web};
 use actix_web::http::StatusCode;
+use utoipa_swagger_ui::SwaggerUi;
+use utoipa::OpenApi;
 use config_manager::ConfigInit;
 use log::debug;
 use api::auth;
@@ -16,28 +18,13 @@ use crate::api::{
     stream::stream_service::StreamService, 
     tag::tag_service::TagService
 };
-use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
 
 
 mod api;
 mod configuration;
 mod db;
 
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        auth::login,
-        auth::logout
-    ),
-    components(
-        schemas(auth::LoginData)
-    ),
-    tags(
-        (name = "auth", description = "Authentication endpoints")
-    )
-)]
-struct ApiDoc;
+
 
 fn init() -> ApplicationConfig {
     let config: ApplicationConfig = match ApplicationConfig::parse() {
@@ -100,8 +87,9 @@ pub async fn run() -> std::io::Result<()> {
             .configure(api::api_config)
 
             .service(
-                SwaggerUi::new("/api-doc/{_:.*}")
-                .url("/api-doc/openapi.json", ApiDoc::openapi()),
+                SwaggerUi::new("/api-docs/{_:.*}")
+                .url("/api-docs/openapi.json", api::ApiDoc::openapi())
+                .oauth(oauth::OAuth2::new(config.oauth_client_id, config.oauth_client_secret)),
             )
     })
     .bind((config.web_host, config.web_port))?

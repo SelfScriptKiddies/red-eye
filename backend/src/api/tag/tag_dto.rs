@@ -6,7 +6,7 @@ pub struct TagName {
     pub name: String
 }
 
-#[derive(sqlx::FromRow, Deserialize, Serialize)]
+#[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct Tag {
     pub id: i32,
     pub name: String,

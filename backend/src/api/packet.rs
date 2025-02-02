@@ -4,11 +4,23 @@ use serde::Deserialize;
 use serde_json::json;
 use crate::api::packet::packet_dto::PacketResponse;
 use crate::api::packet::packet_service::PacketService;
+use utoipa::IntoParams;
 
 pub(crate) mod packet_dto;
 pub(crate) mod packet_repository;
 pub(crate) mod packet_service;
 
+#[utoipa::path(
+    get,
+    path = "/api/packet/{id}",
+    responses(
+        (status = 200, description = "Packet found", body = PacketResponse, example = json!({"id": 1, "direction": "dest", "stream_id": 1, "timestamp": 1738095449035_i64, "data": "cGF5bG9hZA=="})),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+        (status = 404, description = "Packet not found", body = serde_json::Value, example = json!({"error": "Packet not found"})),
+        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
+    ),
+    tag = "packet"
+)]
 #[get("/packet/{id}")]
 async fn get_packet_by_id(
     _identity: Identity,
@@ -24,6 +36,17 @@ async fn get_packet_by_id(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/packet/stream_id/{id}",
+    responses(
+        (status = 200, description = "Packets found", body = Vec<PacketResponse>, example = json!([{"id": 1, "direction": "dest", "stream_id": 1, "timestamp": 1738095449035_i64, "data": "cGF5bG9hZA=="}, {"id": 2, "direction": "src", "stream_id": 1, "timestamp": 1738095449036_i64, "data": "cGF5bG9hZA=="}])),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+        (status = 404, description = "Packets for stream not found", body = serde_json::Value, example = json!({"error": "Packets for stream not found"})),
+        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
+    ),
+    tag = "packet"
+)]
 #[get("/packet/stream_id/{id}")]
 async fn get_packets_by_stream_id(
     _identity: Identity,
@@ -45,12 +68,25 @@ async fn get_packets_by_stream_id(
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct GetPacketsQuery {
+#[derive(Debug, Deserialize, utoipa::ToSchema, IntoParams)]
+pub struct GetPacketsQuery {
     limit: Option<u32>,
     last_id: Option<u32>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/packet",
+    params(
+        GetPacketsQuery
+    ),
+    responses(
+        (status = 200, description = "Packets found", body = Vec<PacketResponse>, example = json!([{"id": 1, "direction": "dest", "stream_id": 1, "timestamp": 1738095449035_i64, "data": "cGF5bG9hZA=="}, {"id": 2, "direction": "src", "stream_id": 1, "timestamp": 1738095449036_i64, "data": "cGF5bG9hZA=="}])),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
+    ),
+    tag = "packet"
+)]
 #[get("/packet")]
 async fn get_packet(
     _identity: Identity,

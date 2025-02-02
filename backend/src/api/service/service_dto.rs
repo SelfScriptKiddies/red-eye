@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub(crate) struct Packet {
+pub(crate) struct Service {
     pub id: i32,
     pub name: String,
     pub port: i32,

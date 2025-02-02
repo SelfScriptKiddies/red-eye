@@ -18,8 +18,8 @@ pub struct LoginData {
     path = "/api/login",
     request_body = LoginData,
     responses(
-        (status = 200, description = "Login successful", body = String),
-        (status = 401, description = "Invalid password", body = String)
+        (status = 200, description = "Login successful", body = serde_json::Value, example = json!({"status": "Logged in"})),
+        (status = 401, description = "Invalid password", body = serde_json::Value, example = json!({"error": "Invalid password"}))
     )
 )]
 #[post("/api/login")]
@@ -45,7 +45,7 @@ async fn login(
     get,
     path = "/api/logout",
     responses(
-        (status = 200, description = "Logout successful", body = String)
+        (status = 200, description = "Logout successful", body = String, example = "Successfully log out")
     )
 )]
 #[get("/api/logout")]
@@ -56,6 +56,15 @@ async fn logout(
     HttpResponse::Ok().body("Successfully log out")
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/authorized",
+    responses(
+        (status = 200, description = "Authorized successful", body = serde_json::Value, example = json!({"status": "authorized"})),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"status": "anonymous"}))
+    ),
+    tag = ("auth")
+)]
 #[get("/api/authorized")]
 async fn check_authorized(
     identity: Option<Identity>

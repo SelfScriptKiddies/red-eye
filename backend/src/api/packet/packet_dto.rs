@@ -10,7 +10,7 @@ pub(crate) struct Packet {
     pub packet_data: Vec<u8>, // BYTEA PostgreSQL
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct PacketResponse {
     pub id: i32,
     pub timestamp: i64,

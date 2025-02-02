@@ -22,7 +22,7 @@ pub struct Stream {
     pub packet_count: i32
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct StreamResponse {
     pub id: i32,
     pub src_ip: String,
