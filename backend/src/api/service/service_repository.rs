@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use crate::api::service::service_dto::Packet;
+use crate::api::service::service_dto::Service;
 
 pub struct ServiceRepository {
     pgpool: PgPool
@@ -12,8 +12,8 @@ impl ServiceRepository {
         }
     }
 
-    pub async fn get_service_by_id(&self, id: i32) -> Result<Packet, sqlx::Error> {
-        sqlx::query_as::<_, Packet>(
+    pub async fn get_service_by_id(&self, id: i32) -> Result<Service, sqlx::Error> {
+        sqlx::query_as::<_, Service>(
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode, 
                    merge_adjacent_packets, inflate_websockets, decrypt_tls
@@ -25,8 +25,8 @@ impl ServiceRepository {
             .await
     }
 
-    pub async fn get_all_services(&self) -> Result<Vec<Packet>, sqlx::Error> {
-        sqlx::query_as::<_, Packet>(
+    pub async fn get_all_services(&self) -> Result<Vec<Service>, sqlx::Error> {
+        sqlx::query_as::<_, Service>(
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
                    merge_adjacent_packets, inflate_websockets, decrypt_tls
@@ -36,8 +36,8 @@ impl ServiceRepository {
             .await
     }
 
-    pub async fn create_service(&self, service: &Packet) -> Result<Packet, sqlx::Error> {
-        sqlx::query_as::<_, Packet>(
+    pub async fn create_service(&self, service: &Service) -> Result<Service, sqlx::Error> {
+        sqlx::query_as::<_, Service>(
             r#"
             INSERT INTO service (name, port, chunked_transfer_encoding, urldecode,
                                merge_adjacent_packets, inflate_websockets, decrypt_tls)
@@ -56,8 +56,8 @@ impl ServiceRepository {
             .await
     }
 
-    pub async fn update_service(&self, service: &Packet) -> Result<Packet, sqlx::Error> {
-        sqlx::query_as::<_, Packet>(
+    pub async fn update_service(&self, service: &Service) -> Result<Service, sqlx::Error> {
+        sqlx::query_as::<_, Service>(
             r#"
             UPDATE service 
             SET name = $2, port = $3, chunked_transfer_encoding = $4, urldecode = $5,

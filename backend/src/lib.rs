@@ -89,7 +89,6 @@ pub async fn run() -> std::io::Result<()> {
             .service(
                 SwaggerUi::new("/api-docs/{_:.*}")
                 .url("/api-docs/openapi.json", api::ApiDoc::openapi())
-                .oauth(oauth::OAuth2::new(config.oauth_client_id, config.oauth_client_secret)),
             )
     })
     .bind((config.web_host, config.web_port))?
