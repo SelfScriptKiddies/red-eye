@@ -1,33 +1,33 @@
-.packetsTape {
-    width: 30%;
-    border-right: 4px solid #646cff;
-}
+
 .packetsPage {
     width: 100%;
-    height: calc(100% - 130px - 3px);
+    height: calc(100% - 130px);
     display: flex;
     margin-top: 130px;
-    padding-top: 3px;
 }
 .packetsPage > div{
+    overflow-x: hidden;
     transition: 0.3s;
-    overflow-y: scroll;
     scrollbar-color: #646cff #353535;
-    scrollbar-gutter: stable;
     scrollbar-width: bold;
     height: 100%;
 }
-.streamsTape {
-    width: 30%;
-    /* border-right: dashed 2px #646cff; */
+.filterTape {
+    width: 20%;
+    padding: 0;
 }
 .streams {
-    width: 39%;
+    width: 30%;
 }
-.streamsTags {
-    width: calc(31% - 4px);
-    /* border-left: dashed 2px #646cff; */
+.tag-filter {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    height: 50%;
 }
+/* .packetData {
+    overflow-y: scroll;
+} */
 #root:has( div.packetsPage) {
     height: 100vh;
 }
@@ -37,13 +37,39 @@
 #root > div.section > main.content:has( > div.packetsPage) {
     height: 100%;
 }
+
 #root:has( div.packetsPage) .header {
     transition: 0.3s;
     border-bottom: solid 3px #646cff;
 }
-#root:has( div.eye__apple__focus) .header{
+#root:has( div.packetsPage):has( .eye__apple__focus) .header{
     border-bottom: solid 3px #a51900;
 }
+
+#root:has( div.packetsPage) .tag-filter {
+    transition: 0.3s;
+    border-bottom: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .tag-filter{
+    border-bottom: solid 3px #a51900;
+}
+
+#root:has( div.packetsPage) .filterTape {
+    transition: 0.3s;
+    border-right: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .filterTape{
+    border-right: solid 3px #a51900;
+}
+
+/* #root:has( div.packetsPage) .streams {
+    transition: 0.3s;
+    border-left: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .streams{
+    border-left: solid 3px #a51900;
+} */
+
 .side-btn {
     width: 50%;
     position: absolute;
@@ -77,4 +103,7 @@
 }
 #root:has( div.eye__apple__focus) .packetsPage button:hover {
     border: solid 3px #a51900;
+}
+.service-filter {
+    text-align: center;
 }

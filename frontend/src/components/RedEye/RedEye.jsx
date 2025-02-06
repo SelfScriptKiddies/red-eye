@@ -16,10 +16,6 @@ export const RedEye = () => {
                 else if(!enabled) {
                     setEyeState((state) => (state + 1) % 4);
                 }
-                // else
-                // {
-                //     setEyeState(4);
-                // }
             }, 1500);
 
             return () => clearInterval(interval);

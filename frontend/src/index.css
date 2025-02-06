@@ -77,6 +77,14 @@ button:focus-visible {
   padding: 0 5%;
   height: 130px; /*Этак константа используется в других стилях*/
 }
+.header:has( .eye__apple__focus) a{
+  color: #f00;
+}
+.header a{
+  font-size: 18px;
+  margin: 10px;
+  color: #07b;
+}
 main.content {
   width: 100vw;
   display: flex;

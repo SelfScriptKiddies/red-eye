@@ -12,7 +12,7 @@ export function App() {
           <div className='header'>
           <RedEye></RedEye>
           <nav className='navMenu'>
-            {/* <Transit to={"/newService"}>Новый сервис</Transit> */}
+            <Transit to={"/settings"}>Настройки</Transit>
             <Transit to={"/packets"}>Пакеты</Transit>
           </nav>
         </div>

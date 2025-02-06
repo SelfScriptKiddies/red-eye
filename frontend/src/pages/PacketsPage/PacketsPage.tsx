@@ -2,64 +2,53 @@ import { ReactElement } from "react";
 import './PacketsPage.css'
 import { useState, useEffect } from 'react';
 import { StreamCard } from '../../components/StreamCard'
+import { ServiceCard } from '../../components/ServiceCard'
 
 export function PacketsPage() {
     const [streamsArray, setStreams] = useState([]);
-    const getStreams = async () => {
-        const data = await fetch("/api/stream", {
-            method: 'GET'
-        })
-            .catch((reason) => {
-                document.querySelector(".errorMessage").innerText = `Fuck you, lol. Reason: ${reason}`;
+    const [servicesArray, setServices] = useState([]);
+    const getUrl = async (url) => {
+            const data = await fetch(url, {
+                method: 'GET'
             })
-            .then((response) => {
-                if (parseInt(response.status / 100) == 5) {
-                    document.querySelector(".errorMessage").innerText = "Что-то с сервером";
-                    return;
-                }
-                else
-                    return response.json();
-            });
-        console.log(data);
-        setStreams(Object.values(data));
-    };
-    if(!streamsArray.length)
+                .catch((reason) => {
+                    document.querySelector(".errorMessage").innerText = `Fuck you, lol. Reason: ${reason}`;
+                })
+                .then((response) => {
+                    if (parseInt(response.status / 100) == 5) {
+                        document.querySelector(".errorMessage").innerText = "Что-то с сервером";
+                        return;
+                    }
+                    else
+                        return response.json();
+                });
+            return data;
+        };
+    const getStreams = async () =>
+        {
+            let data = await getUrl("/api/stream?limit=20");
+            // console.log(data);
+            await setStreams(Object.values(data));
+        };
+    const getServices = async () =>
+        {
+            let data = await getUrl("/api/service");
+            console.log(data);
+            await setServices(Object.values(data));
+        };
+    if (!streamsArray.length)
         getStreams();
-
-
-    // let streams = [ // example
-    //     {id: 1, incoming: false, tags: ["Flag", "LFI"]},
-    //     {id: 2, incoming: false, tags: ["XSS"]},
-    //     {id: 3, incoming: true, tags: ["SQLInj"]},
-    //     {id: 4, incoming: true, tags: ["Flag", "RCE"]},
-    //     {id: 1, incoming: false, tags: ["Flag", "LFI"]},
-    //     {id: 2, incoming: false, tags: ["XSS"]},
-    //     {id: 3, incoming: true, tags: ["SQLInj"]},
-    //     {id: 4, incoming: true, tags: ["Flag", "RCE"]},
-    //     {id: 1, incoming: false, tags: ["Flag", "LFI"]},
-    //     {id: 2, incoming: false, tags: ["XSS"]},
-    //     {id: 3, incoming: true, tags: ["SQLInj"]},
-    //     {id: 4, incoming: true, tags: ["Flag", "RCE"]},
-    //     {id: 1, incoming: false, tags: ["Flag", "LFI"]},
-    //     {id: 2, incoming: false, tags: ["XSS"]},
-    //     {id: 3, incoming: true, tags: ["SQLInj"]},
-    //     {id: 4, incoming: true, tags: ["Flag", "RCE"]},
-    // ];
-    // .catch((reason) => {
-    //     document.querySelector(".errorMessage").innerText = `Fuck you, lolx2. Reason: ${reason}`;
-    // })
-    // .then((resp_json) => {
-    //     if(!resp_json)
-    //         return;
-    //     ...
-    // })
-    // .catch((reason) => {
-    //     document.querySelector(".errorMessage").innerText = `Fuck you, lolx3. Reason: ${reason}`;
-    // });
+    if (!servicesArray.length)
+        getServices();
     return (
         <div className="packetsPage">
-            <div className="streamsTape">
-                <button id="toTagsPageBtn" className="side-btn left-side-btn"><i className="fa-solid fa-arrow-down"></i></button>
+            <div className="filterTape">
+                <div className="tag-filter"></div>
+                <div className="service-filter d-inline-block">
+                    {servicesArray.map((service, index) => {
+                        return < ServiceCard service={service} />
+                    })}
+                </div>
             </div>
             <div id="streams" className="streams">
                 {streamsArray.map((stream, index) => {
@@ -67,8 +56,7 @@ export function PacketsPage() {
                 })}
                 {/* <button id="toTagsPageBtn" className="side-btn bottom-side-btn"><i className="fa-solid fa-arrow-down"></i></button> */}
             </div>
-            <div className="streamsTags">
-                <button id="toTagsPageBtn" className="side-btn right-side-btn"><i className="fa-solid fa-arrow-down"></i></button>
+            <div className="packetData">
             </div>
         </div>
     );
