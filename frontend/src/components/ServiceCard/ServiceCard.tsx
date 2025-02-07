@@ -1,7 +1,7 @@
 import { useState } from "react";
 import "./ServiceCard.css"
 
-export const ServiceCard = ({service}) => {
+export const ServiceCard = ({service, onClick}) => {
     const [isActive, setActive] = useState(true);
 
     const getUrl = async (url) => {
@@ -34,7 +34,7 @@ export const ServiceCard = ({service}) => {
     };
     console.log(service)
     return (
-        <div className="service-card d-inline-block" onClick={clickHandler}>
+        <div className="service-card d-inline-block" onClick={clickHandler} data-service={service.name}>
             {service.name}
         </div>
     );

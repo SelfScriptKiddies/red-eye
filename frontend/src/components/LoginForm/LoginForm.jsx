@@ -17,6 +17,11 @@ const LoginBtn = () => {
                 document.querySelector(".errorMessage").innerText = "Что-то с сервером";
                 return;
             }
+            else if(response.status == 403)
+            {
+                document.querySelector(".errorMessage").innerText = "Запрос блокирован";
+                return;
+            }
             else
                 return response.json();
         })
