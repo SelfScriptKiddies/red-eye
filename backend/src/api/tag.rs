@@ -49,7 +49,36 @@ async fn get_tags_by_stream_id(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/tag/names",
+    responses(
+        (status = 200, description = "Tag names found", body = Vec<TagName>, example = json!([
+            {
+              "id": 1,
+              "name": "authentication"
+            },
+            {
+              "id": 2,
+              "name": "error"
+            }])),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
+    )
+)]
+#[get("/tag/names")]
+async fn get_all_tag_names(
+    _identity: Identity,
+    tag_service: web::Data<TagService>
+) -> Result<impl Responder, actix_web::error::Error> {
+    match tag_service.get_all_tag_names().await {
+        Ok(tag_names) => Ok(HttpResponse::Ok().json(tag_names)),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+    }
+}
+
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
     cfg
-        .service(get_tags_by_stream_id);
+        .service(get_tags_by_stream_id)
+        .service(get_all_tag_names);
 }

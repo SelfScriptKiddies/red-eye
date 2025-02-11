@@ -18,6 +18,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(delete_service);
 }
 
+
 #[utoipa::path(
     get,
     path = "/api/service",
@@ -45,7 +46,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
         (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
     ),
-    tag = "service" 
+    tag = "service"
 )]
 #[get("/service")]
 async fn get_all_services(service: web::Data<ServiceService>) -> impl Responder {

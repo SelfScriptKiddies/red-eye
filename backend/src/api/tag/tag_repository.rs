@@ -71,4 +71,12 @@ impl TagRepository {
         .fetch_all(&self.pool)
         .await
     }
+
+    pub async fn get_all_tag_names(&self) -> Result<Vec<TagName>, sqlx::Error> {
+        sqlx::query_as::<_, TagName>(
+            "SELECT id, name FROM tag_name ORDER BY name"
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
 }

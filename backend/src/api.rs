@@ -38,6 +38,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         stream::get_stream_by_id,
 
         tag::get_tags_by_stream_id,
+        tag::get_all_tag_names,
 
         service::get_all_services,
         service::get_service_by_id,

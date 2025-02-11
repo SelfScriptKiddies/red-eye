@@ -42,4 +42,8 @@ impl TagService {
     pub async fn delete_tag_name(&self, id: i32) -> Result<(), sqlx::Error> {
         self.repository.delete_tag_name(id).await
     }
+
+    pub async fn get_all_tag_names(&self) -> Result<Vec<TagName>, sqlx::Error> {
+        self.repository.get_all_tag_names().await
+    }
 }
