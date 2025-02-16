@@ -16,6 +16,7 @@ pub(crate) mod tag_service;
             {
               "id": 1,
               "name": "property",
+              "color": 180,
               "packet_id": 5,
               "tag_id": 3,
               "start_index": 61,
@@ -24,6 +25,7 @@ pub(crate) mod tag_service;
             {
               "id": 2,
               "name": "think",
+              "color": 123,
               "packet_id": 8,
               "tag_id": 9,
               "start_index": 51,
@@ -56,11 +58,13 @@ async fn get_tags_by_stream_id(
         (status = 200, description = "Tag names found", body = Vec<TagName>, example = json!([
             {
               "id": 1,
-              "name": "authentication"
+              "name": "authentication",
+              "color": 180
             },
             {
               "id": 2,
-              "name": "error"
+              "name": "error",
+              "color": 123
             }])),
         (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
         (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))

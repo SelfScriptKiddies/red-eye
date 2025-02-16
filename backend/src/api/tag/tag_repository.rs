@@ -61,7 +61,7 @@ impl TagRepository {
 
     pub async fn get_tags_by_stream_id(&self, stream_id: i32) -> Result<Vec<Tag>, sqlx::Error> {
         sqlx::query_as::<_, Tag>(
-            "SELECT t.id, tn.name,t.packet_id, t.tag_id, t.start_index, t.end_index 
+            "SELECT t.id, tn.name, tn.color, t.packet_id, t.tag_id, t.start_index, t.end_index 
              FROM tag t
              JOIN packets p ON t.packet_id = p.id
              JOIN tag_name tn ON t.tag_id = tn.id

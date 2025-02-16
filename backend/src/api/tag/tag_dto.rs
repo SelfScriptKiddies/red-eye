@@ -11,6 +11,7 @@ pub struct TagName {
 pub struct Tag {
     pub id: i32,
     pub name: String,
+    pub color: i16,
     pub packet_id: i32,
     pub tag_id: i32,
     pub start_index: i32,
