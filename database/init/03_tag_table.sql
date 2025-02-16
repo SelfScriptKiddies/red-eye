@@ -1,7 +1,7 @@
 CREATE TABLE tag (
     id SERIAL PRIMARY KEY,
-    packet_id SERIAL,
-    tag_id SERIAL,
+    packet_id INTEGER,
+    tag_id INTEGER,
     start_index INTEGER NOT NULL,
     end_index INTEGER NOT NULL,
 
