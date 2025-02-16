@@ -3,7 +3,7 @@ use actix_web::{get, web, Responder, HttpResponse};
 use serde_json::json;
 use crate::api::tag::tag_service::TagService;
 use crate::api::tag::tag_dto::Tag;
-
+use crate::api::tag::tag_dto::TagName;
 pub(crate) mod tag_dto;
 pub(crate) mod tag_repository;
 pub(crate) mod tag_service;
@@ -76,6 +76,8 @@ async fn get_all_tag_names(
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }
 }
+
+
 
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
     cfg
