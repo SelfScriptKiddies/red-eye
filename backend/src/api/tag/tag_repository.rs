@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use crate::api::tag::tag_dto::{Tag, TagName};
+use crate::api::tag::tag_dto::{Tag, TagName, TagNameCreate};
 
 pub struct TagRepository {
     pool: PgPool,
@@ -10,11 +10,12 @@ impl TagRepository {
         Self { pool }
     }
 
-    pub async fn create_tag_name(&self, name: &str) -> Result<TagName, sqlx::Error> {
+    pub async fn create_tag_name(&self, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
-            "INSERT INTO tag_name (name) VALUES ($1) RETURNING id, name"
+            "INSERT INTO tag_name (name, color) VALUES ($1, $2) RETURNING id, name, color"
         )
-        .bind(name)
+        .bind(tag_name.name)
+        .bind(tag_name.color)
         .fetch_one(&self.pool)
         .await
     }
@@ -32,12 +33,23 @@ impl TagRepository {
 
     pub async fn get_tag_name_by_id(&self, id: i32) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
-            "SELECT id, name FROM tag_name WHERE id = $1"
+            "SELECT id, name, color FROM tag_name WHERE id = $1"
         )
         .bind(id)
         .fetch_one(&self.pool)
         .await
     }
+
+    pub async fn update_tag_name(&self, id: i32, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
+        sqlx::query_as::<_, TagName>(
+            "UPDATE tag_name SET name = $1, color = $2 WHERE id = $3 RETURNING id, name, color"
+        )
+        .bind(tag_name.name)
+        .bind(tag_name.color)
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+    }   
 
     pub async fn delete_tag(&self, id: i32) -> Result<(), sqlx::Error> {
         sqlx::query(

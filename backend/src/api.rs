@@ -39,6 +39,10 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
 
         tag::get_tags_by_stream_id,
         tag::get_all_tag_names,
+        tag::get_tag_name_by_id,
+        tag::create_tag_name,
+        tag::update_tag_name,
+        tag::delete_tag_name,
 
         service::get_all_services,
         service::get_service_by_id,
