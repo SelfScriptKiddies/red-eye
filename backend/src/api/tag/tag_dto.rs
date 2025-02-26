@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 pub struct TagName {
     pub id: i32,
     pub name: String,
-    pub color: i16
+    pub color: i16,
+    pub template_type: String,
+    pub template: String,
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct TagNameCreate {
     pub name: String,
-    pub color: i16
+    pub color: i16,
+    pub template_type: String,
+    pub template: String,
 }
 
 
