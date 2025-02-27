@@ -61,12 +61,16 @@ async fn get_tags_by_stream_id(
             {
               "id": 1,
               "name": "authentication",
-              "color": 180
+              "color": 180,
+              "template_type": "regex",
+              "template": "\\d{3}\\.\\d{3}\\.\\d{3}\\.\\d{3}"
             },
             {
               "id": 2,
               "name": "error",
-              "color": 123
+              "color": 123,
+              "template_type": "substring",
+              "template": "payload"
             }])),
         (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
         (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
@@ -90,7 +94,9 @@ async fn get_all_tag_names(
         (status = 200, description = "Tag name found", body = TagName, example = json!({
             "id": 1,
             "name": "authentication", 
-            "color": 180
+            "color": 180,
+            "template_type": "regex",
+            "template": "\\d{3}\\.\\d{3}\\.\\d{3}\\.\\d{3}"
         })),
         (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
         (status = 404, description = "Tag name not found", body = serde_json::Value, example = json!({"error": "Tag name not found"})),
