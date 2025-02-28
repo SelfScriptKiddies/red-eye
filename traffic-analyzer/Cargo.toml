@@ -14,3 +14,4 @@ pcap = "2.2.0"
 pnet = "0.35.0"
 tokio = { version = "1.41.1", features = ["full"] }
 uuid = { version = "1.6", features = ["v4"] }
+rdkafka = "0.37.0"
