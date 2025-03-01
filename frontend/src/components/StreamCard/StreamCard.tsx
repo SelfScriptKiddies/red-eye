@@ -1,11 +1,15 @@
 import "./StreamCard.css"
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export const StreamCard = ({streamObj}) => {
+export function StreamCard({ streamObj, onStreamClick }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const clickHandler = (event) => {
-        if (event.detail >= 2)
-            console.log(`CHANGE PAGE ON /streams/${event.target.dataset.streamid}`);
+        let e = event.target;
+        while(!e.dataset.streamid)
+        {
+            e = e.parentElement;
+        }
+        onStreamClick(e.dataset.streamid);
     }
     return (
         <div className="stream-card d-flex jc-sb" onClick={clickHandler} data-streamid={streamObj.id}>
@@ -23,4 +27,4 @@ export const StreamCard = ({streamObj}) => {
             </div>
         </div>
     );
-};
+}

@@ -26,15 +26,15 @@ export const RedEye = () => {
         {
             if(!enabled)
             {
-                console.log("Enable");
                 setEyeState(4);
                 setEnabled(true);
+                localStorage.setItem('redEyeActive', 'true');
             }
             else
             {
-                console.log("Disable");
                 setEyeState(0);
                 setEnabled(false);
+                localStorage.setItem('redEyeActive', 'false');
             }
         }
     }

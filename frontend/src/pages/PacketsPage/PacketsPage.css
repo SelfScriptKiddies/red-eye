@@ -1,4 +1,3 @@
-
 .packetsPage {
     width: 100%;
     height: calc(100% - 130px);
@@ -23,11 +22,16 @@
     width: 100%;
     margin: 0;
     padding: 0;
-    min-height: 50%;
+    height: 50%;
 }
-/* .packetData {
-    overflow-y: scroll;
-} */
+.packetData {
+    overflow-y: auto;
+    background-color: #212121;
+    width: 50%;
+}
+.packetData > pre {
+    width: 100%;
+}
 #root:has( div.packetsPage) {
     height: 100vh;
 }
@@ -62,13 +66,13 @@
     border-right: solid 3px #a51900;
 }
 
-/* #root:has( div.packetsPage) .streams {
+#root:has( div.packetsPage) .packetData {
     transition: 0.3s;
     border-left: solid 3px #646cff;
 }
-#root:has( div.packetsPage):has( .eye__apple__focus) .streams{
+#root:has( div.packetsPage):has( .eye__apple__focus) .packetData{
     border-left: solid 3px #a51900;
-} */
+}
 
 .side-btn {
     width: 50%;
@@ -104,6 +108,7 @@
 #root:has( div.eye__apple__focus) .packetsPage button:hover {
     border: solid 3px #a51900;
 }
-.service-filter {
+.filterTape > div {
     text-align: center;
+    overflow-y: auto;
 }
