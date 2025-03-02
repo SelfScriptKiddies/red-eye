@@ -37,6 +37,29 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
 
+  kafka-init:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - kafka
+    restart: "no"
+    profiles: ["init"]
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+    labels:
+      - "com.docker.compose.rm=true"
+    entrypoint: [ "bash", "-c" ]
+    command: >
+      "
+        echo 'Waiting for Kafka to be ready...' &&
+        cub kafka-ready -b kafka:9092 1 30 && 
+        echo 'Creating Kafka topics...' &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic raw_packets &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic settings_update &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic new_packets &&
+        echo 'Kafka topics created.'
+      "
 
   # backend:
   #   build:
