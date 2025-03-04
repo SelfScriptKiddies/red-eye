@@ -1,68 +1,118 @@
-use clap::ArgMatches;
-use dotenv::dotenv;
-use log::warn;
-use argparse::initialize_cli_args;
+use config_manager::{config, ConfigInit};
 
-mod argparse;
 
-const DEFAULT_DB_HOST: &str = "db";
-const DEFAULT_DB_PORT: u16 = 5432;
-const DEFAULT_DB_USERNAME: &str = "user";
-const DEFAULT_DB_PASSWORD: &str = "user";
-const DEFAULT_DB_SCHEMA: &str = "red_eye";
-
-const DEFAULT_KAFKA_BROKER_HOST: &str = "kafka:29092";
-const DEFAULT_KAFKA_TOPIC: &str = "raw_packets";
-
-#[derive(Debug)]
-pub struct Configuration {
-    /// Client parameters
+#[derive(Debug, Clone)]
+#[config(
+    clap(version, author),
+    file(
+        format = "toml",
+        clap(long = "config", short = 'c', help = "path to configuration file"),
+        env = "CONFIG_FILE",
+        optional=true
+    )
+)]
+pub struct ApplicationConfig {
+    /// Database config
+    #[source(
+        clap(long, short='H', help="Database domain"),
+        env = "DB_HOST",
+        config = "database.host",
+        default = "\"db\".to_string()")
+    ]
     pub db_host: String,
+    #[source(
+        clap(long, short='P', help="Database port"),
+        env = "DB_PORT",
+        config = "database.port",
+        default = 5432)
+    ]
     pub db_port: u16,
+    #[source(
+        clap(long, short='u', help="Database username"),
+        env = "DB_USERNAME",
+        config = "database.username",
+        default = "\"user\".to_string()")
+    ]
     pub db_username: String,
+    #[source(
+        clap(long, short='p', help="Database password"),
+        env = "DB_PASSWORD",
+        config = "database.password",
+        default = "\"user\".to_string()")
+    ]
     pub db_password: String,
+    #[source(
+        clap(long, short='s', help="Database schema"),
+        env = "DB_SCHEMA",
+        config = "database.schema",
+        default = "\"red-eye\".to_string()")
+    ]
     pub db_schema: String,
 
-    // /// Filters
-    // pub filters: Arc<Mutex<Vec<dyn Fn(&[u8]) -> Option<String>>>>,
+    /// Kafka config
+    #[source(
+            clap(long, short='b', help="Kafka broker host"),
+            env = "KAFKA_HOST",
+            config = "kafka.host",
+            default = "\"kafka\".to_string()")
+        ]
+    pub kafka_broker: String,
+    #[source(
+        clap(long, short='t', help="Kafka broker topic"),
+        env = "KAFKA_TOPIC",
+        config = "kafka.raw_packets_topic",
+        default = "\"raw_packets\".to_string()")
+    ]
+    pub kafka_raw_packets_topic: String,
+    #[source(
+        clap(long, short='w', help="Kafka broker topic"),
+        env = "KAFKA_TOPIC",
+        config = "kafka.websocket_packets_topic",
+        default = "\"websocket_packets\".to_string()")
+    ]
+    pub kafka_websocket_packets_topic: String,
 
-    /// Kafka parameters
-    pub kafka_broker_host: String,
-    pub kafka_topic: String
+    /// Service UUID
+    #[source(
+        clap(long, help="Service UUID"),
+        env = "SERVICE_UUID",
+        config = "service.uuid",
+        default = "uuid::Uuid::new_v4().to_string()"
+    )]
+    pub service_uuid: String,
+
+    /// Logging configuration
+    #[source(
+        clap(short, long, help="Logging level (trace|debug|info|warn|error)"),
+        env = "LOGGING_LEVEL",
+        config = "logging.level",
+        default = "\"trace\".to_string()"
+    )]
+    pub logging_level: String,
 }
 
-fn initialize_value<T>(cli_matches: &ArgMatches, cli_name: &str, env_name: &str, default: T) -> T
-where
-    T: std::str::FromStr + std::fmt::Display + Clone
-{
-    cli_matches
-        .get_one(cli_name).cloned() // CLI Arg check
-        .or_else(|| std::env::var(env_name).ok())
-        .and_then(|val| val.parse().ok())
-        .unwrap_or_else(
-            || {
-                warn!("Parameter {cli_name} was not set in config, using default value: {default}");
-                default
-            }
-        )
-}
+pub fn init() -> ApplicationConfig {
+    let config: ApplicationConfig = match ApplicationConfig::parse() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Got error while parsing configuration: {e:?}");
+            std::process::exit(1);
+        }
+    };
 
-/// Current hierarchy of arguments -> CLI-Args > .env > config.toml > default
-pub fn init_config() -> Configuration {
-    dotenv().ok();
-    let matches: ArgMatches = initialize_cli_args().get_matches();
+    // Possible values: trace|debug|info|warn|error
+    let logging_level = match config.logging_level.to_lowercase().as_str() {
+        "trace" => log::LevelFilter::Trace,
+        "debug" => log::LevelFilter::Debug,
+        "info" => log::LevelFilter::Info,
+        "warn" => log::LevelFilter::Warn,
+        "error" => log::LevelFilter::Error,
+        _ => log::LevelFilter::Trace,
+    };
 
-    Configuration {
-        db_host: initialize_value(&matches, "db_host", "DB_HOST", DEFAULT_DB_HOST.to_string()),
-        db_port: initialize_value(&matches, "db_port", "DB_PORT", DEFAULT_DB_PORT),
-        db_username: initialize_value(&matches, "db_username", "DB_USERNAME", DEFAULT_DB_USERNAME.to_string()),
-        db_password: initialize_value(&matches, "db_password", "DB_PASSWORD", DEFAULT_DB_PASSWORD.to_string()),
-        db_schema: initialize_value(&matches, "db_schema", "DB_SCHEMA", DEFAULT_DB_SCHEMA.to_string()),
+    let mut clog = colog::default_builder();
+    clog.filter(None, logging_level);
+    clog.init();
 
-        // filters: Arc::new(Mutex::new(vec![])),
-
-        kafka_broker_host: initialize_value(&matches, "kafka_host", "BROKER_HOST", DEFAULT_KAFKA_BROKER_HOST.to_string()),
-        kafka_topic: initialize_value(&matches, "kafka_topic", "KAFKA_TOPIC", DEFAULT_KAFKA_TOPIC.to_string())
-
-    }
+    config
 }
