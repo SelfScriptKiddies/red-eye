@@ -1,3 +1,8 @@
+pub mod regex;
+pub mod bsubstr;
+pub mod substr;
+pub mod filterDTO;
+
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
@@ -11,7 +16,7 @@ use crate::configuration::ApplicationConfig;
 
 pub struct PacketFilter {
     pub pattern_name: String,
-    pub filter_function: Box<dyn Fn(&[u8]) -> bool + Send + Sync>,
+    pub filter_function: Box<dyn Fn(&[u8]) -> Vec<filterDTO::FilterTrigger> + Send + Sync>,
 }
 
 // Global storage for filters
@@ -20,7 +25,7 @@ pub static PACKET_FILTERS: Lazy<RwLock<Vec<PacketFilter>>> = Lazy::new(|| {
 });
 
 // Function to add filters
-pub fn add_filter(name: &str, filter_fn: impl Fn(&[u8]) -> bool + Send + Sync + 'static) {
+pub fn add_filter(name: &str, filter_fn: impl Fn(&[u8]) -> Vec<filterDTO::FilterTrigger> + Send + Sync + 'static) {
     let mut filters = PACKET_FILTERS.write().unwrap();
     filters.push(PacketFilter {
         pattern_name: name.to_string(),
@@ -29,15 +34,18 @@ pub fn add_filter(name: &str, filter_fn: impl Fn(&[u8]) -> bool + Send + Sync + 
 }
 
 // Function to apply all filters to a packet
-pub fn apply_filters(packet: &[u8]) -> Vec<String> {
+pub fn apply_filters(packet: &[u8]) -> Vec<(String, Vec<filterDTO::FilterTrigger>)> {
     let filters = PACKET_FILTERS.read().unwrap();
-    let mut tags: Vec<String> = Vec::new();
+    let mut results: Vec<(String, Vec<filterDTO::FilterTrigger>)> = Vec::new();
+    
     for filter in filters.iter() {
-        if (filter.filter_function)(packet) {
-            tags.push(filter.pattern_name.clone());
+        let triggers = (filter.filter_function)(packet);
+        if !triggers.is_empty() {
+            results.push((filter.pattern_name.clone(), triggers));
         }
     }
-    tags
+    
+    results
 }
 
 #[derive(Debug, Serialize, Deserialize)]
