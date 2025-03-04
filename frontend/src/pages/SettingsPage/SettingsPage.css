@@ -1,0 +1,7 @@
+.SettingsPage {
+    width: 100%;
+    height: calc(100% - 130px - 3px);
+    display: flex;
+    margin-top: 130px;
+    padding-top: 3px;
+}

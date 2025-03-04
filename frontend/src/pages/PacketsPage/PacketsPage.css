@@ -1,0 +1,114 @@
+.packetsPage {
+    width: 100%;
+    height: calc(100% - 130px);
+    display: flex;
+    margin-top: 130px;
+}
+.packetsPage > div{
+    overflow-x: hidden;
+    transition: 0.3s;
+    scrollbar-color: #646cff #353535;
+    scrollbar-width: bold;
+    height: 100%;
+}
+.filterTape {
+    width: 20%;
+    padding: 0;
+}
+.streams {
+    width: 30%;
+}
+.tag-filter {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    height: 50%;
+}
+.packetData {
+    overflow-y: auto;
+    background-color: #212121;
+    width: 50%;
+}
+.packetData > pre {
+    width: 100%;
+}
+#root:has( div.packetsPage) {
+    height: 100vh;
+}
+#root > div.section:has( div.packetsPage) {
+    height: calc(100%);
+}
+#root > div.section > main.content:has( > div.packetsPage) {
+    height: 100%;
+}
+
+#root:has( div.packetsPage) .header {
+    transition: 0.3s;
+    border-bottom: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .header{
+    border-bottom: solid 3px #a51900;
+}
+
+#root:has( div.packetsPage) .tag-filter {
+    transition: 0.3s;
+    border-bottom: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .tag-filter{
+    border-bottom: solid 3px #a51900;
+}
+
+#root:has( div.packetsPage) .filterTape {
+    transition: 0.3s;
+    border-right: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .filterTape{
+    border-right: solid 3px #a51900;
+}
+
+#root:has( div.packetsPage) .packetData {
+    transition: 0.3s;
+    border-left: solid 3px #646cff;
+}
+#root:has( div.packetsPage):has( .eye__apple__focus) .packetData{
+    border-left: solid 3px #a51900;
+}
+
+.side-btn {
+    width: 50%;
+    position: absolute;
+    border-radius: 100% 100% 0 0;
+    background-color: #353535;
+    font-size: 16px;
+}
+.bottom-side-btn {
+    bottom: 0;
+    left: calc(50% - 25%);
+}
+.right-side-btn {
+    right: calc(4%);
+    top: calc(50%);
+    transform: translate(50%, 0px) rotate(-90deg);
+}
+.left-side-btn {
+    left: calc(4%);
+    top: calc(50%);
+    transform: translate(-50%, 0px) rotate(90deg);
+}
+.packetsPage > div:has( .side-btn) {
+    position: relative;
+}
+
+#root:has( div.eye__apple__focus) .packetsPage > div{
+    scrollbar-color: #a51900 #353535;
+}
+.packetsPage button:hover {
+    border: solid 3px #646cff;
+}
+#root:has( div.eye__apple__focus) .packetsPage button:hover {
+    border: solid 3px #a51900;
+}
+.filterTape > div {
+    text-align: center;
+    overflow-y: auto;
+}
