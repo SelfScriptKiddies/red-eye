@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub trait Filter {
+pub trait Filter: Send + Sync {
+    fn get_pattern_name(&self) -> String;
     fn processed(&self, packet: &[u8]) -> Vec<FilterTrigger>;
 }
 
@@ -11,6 +12,7 @@ pub struct FilterDTO {
     pub filter_payload: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FilterTrigger {
     pub start_index: usize,
     pub end_index: usize

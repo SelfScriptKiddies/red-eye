@@ -13,13 +13,13 @@ impl BinarySubstrFilter {
             binary_pattern: binary_pattern.to_vec(),
         }
     }
-    
-    pub fn get_pattern_name(&self) -> &str {
-        &self.pattern_name
-    }
 }
 
 impl Filter for BinarySubstrFilter {
+    fn get_pattern_name(&self) -> String {
+        self.pattern_name.clone()
+    }
+
     fn processed(&self, packet: &[u8]) -> Vec<FilterTrigger> {
         let mut triggers = Vec::new();
         

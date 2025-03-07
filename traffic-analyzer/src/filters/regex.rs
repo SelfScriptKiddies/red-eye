@@ -20,13 +20,13 @@ impl RegexFilter {
             }
         }
     }
-    
-    pub fn get_pattern_name(&self) -> &str {
-        &self.pattern_name
-    }
 }
 
 impl Filter for RegexFilter {
+    fn get_pattern_name(&self) -> String {
+        self.pattern_name.clone()
+    }
+
     fn processed(&self, packet: &[u8]) -> Vec<crate::filters::filterDTO::FilterTrigger> {
         let mut triggers = Vec::new();
         

@@ -8,29 +8,47 @@ use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::sync::RwLock;
 use crate::configuration::ApplicationConfig;
-
-pub struct PacketFilter {
-    pub pattern_name: String,
-    pub filter_function: Box<dyn Fn(&[u8]) -> Vec<filterDTO::FilterTrigger> + Send + Sync>,
-}
+use crate::filters::filterDTO::Filter;
+use crate::filters::regex::RegexFilter;
+use crate::filters::bsubstr::BinarySubstrFilter;
+use crate::filters::substr::SubstrFilter;
 
 // Global storage for filters
-pub static PACKET_FILTERS: Lazy<RwLock<Vec<PacketFilter>>> = Lazy::new(|| {
+pub static PACKET_FILTERS: Lazy<RwLock<Vec<Box<dyn Filter>>>> = Lazy::new(|| {
     RwLock::new(Vec::new())
 });
 
 // Function to add filters
-pub fn add_filter(name: &str, filter_fn: impl Fn(&[u8]) -> Vec<filterDTO::FilterTrigger> + Send + Sync + 'static) {
+pub fn add_filter(pattern_name: String, pattern_type: String, payload: &[u8]) {
     let mut filters = PACKET_FILTERS.write().unwrap();
-    filters.push(PacketFilter {
-        pattern_name: name.to_string(),
-        filter_function: Box::new(filter_fn),
-    });
+    match pattern_type.to_lowercase().as_str() {
+        "regex" => {
+            let payload_str = match String::from_utf8(payload.to_vec()) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Error converting payload to string: {}", e);
+                    return;
+                }
+            };
+
+            match RegexFilter::new(&pattern_name, &payload_str) {
+                Ok(filter) => filters.push(Box::new(filter)),
+                Err(e) => error!("Error creating regex filter: {}", e),
+            }
+        }
+        "bsubstr" => {
+            filters.push(Box::new(BinarySubstrFilter::new(&pattern_name, &payload)));
+        }
+        "substr" => {
+            filters.push(Box::new(SubstrFilter::new(&pattern_name, &payload)));
+        }
+        _ => {
+            error!("Unsupported filter type: {}", pattern_type);
+        }
+    }
 }
 
 // Function to apply all filters to a packet
@@ -39,9 +57,9 @@ pub fn apply_filters(packet: &[u8]) -> Vec<(String, Vec<filterDTO::FilterTrigger
     let mut results: Vec<(String, Vec<filterDTO::FilterTrigger>)> = Vec::new();
     
     for filter in filters.iter() {
-        let triggers = (filter.filter_function)(packet);
+        let triggers = filter.processed(packet);
         if !triggers.is_empty() {
-            results.push((filter.pattern_name.clone(), triggers));
+            results.push((filter.get_pattern_name(), triggers));
         }
     }
     
