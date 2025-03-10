@@ -429,7 +429,6 @@ dependencies = [
  "clap",
  "colog",
  "config 0.15.5",
- "config-manager",
  "env_logger",
  "log",
  "pcap",
@@ -439,6 +438,7 @@ dependencies = [
  "strum 0.26.3",
  "strum_macros 0.26.4",
  "tokio",
+ "tonysd-config-manager",
  "utoipa",
  "utoipa-swagger-ui",
 ]
@@ -699,36 +699,6 @@ dependencies = [
  "toml 0.8.19",
  "winnow",
  "yaml-rust2",
-]
-
-[[package]]
-name = "config-manager"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bbed595af2aae6d24470ba0c3b98c6f2ca2713a4ddac40d648bb1226b22c175"
-dependencies = [
- "clap",
- "config 0.13.4",
- "config-manager-proc",
- "ctor",
- "deser-hjson",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "config-manager-proc"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eca2d852957e708809d3a213ed9c7c71b68af41a47a5fc9ffc109c597ebcc080"
-dependencies = [
- "convert_case 0.5.0",
- "proc-macro2",
- "quote",
- "strum 0.24.1",
- "strum_macros 0.24.3",
- "syn 1.0.109",
- "unzip-n",
 ]
 
 [[package]]
@@ -2994,6 +2964,36 @@ dependencies = [
  "serde_spanned",
  "toml_datetime",
  "winnow",
+]
+
+[[package]]
+name = "tonysd-config-manager"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb23a0b4073be8550ec30d4a6e53ee634fd0c96276bc57650d04ee56e0d0651c"
+dependencies = [
+ "clap",
+ "config 0.13.4",
+ "ctor",
+ "deser-hjson",
+ "serde",
+ "serde_json",
+ "tonysd-config-manager-proc",
+]
+
+[[package]]
+name = "tonysd-config-manager-proc"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1403ffa8b6f9c181a7e0c0886fa57fd2aa813a92c67a082653ce38b1159ac2fc"
+dependencies = [
+ "convert_case 0.5.0",
+ "proc-macro2",
+ "quote",
+ "strum 0.24.1",
+ "strum_macros 0.24.3",
+ "syn 1.0.109",
+ "unzip-n",
 ]
 
 [[package]]
