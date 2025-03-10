@@ -1,11 +1,10 @@
-use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
-use rdkafka::consumer::{CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer};
+use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
-use rdkafka::topic_partition_list::TopicPartitionList;
 use log::{debug, error, info, warn};
 use tokio::task;
+use crate::filters::apply_filters;
 
 type LoggingConsumer = StreamConsumer;
 
@@ -24,9 +23,7 @@ pub async fn create_consumer(brokers: &str) -> KafkaResult<LoggingConsumer> {
 
 pub async fn consume_raw_packets(consumer: LoggingConsumer) {
     info!("Starting to consume packets from topic raw_packets");
-    
     consumer.subscribe(&["raw_packets"]).expect("Failed to subscribe to topic");
-    
     loop {
         match consumer.recv().await {
             Ok(message) => {
@@ -44,8 +41,9 @@ pub async fn consume_raw_packets(consumer: LoggingConsumer) {
                 // Processing packet in a separate task with cloned data
                 task::spawn(async move {
                     debug!("Processing packet of size {} bytes: {:?}", payload.len(), payload); 
-                    // Here will be the packet processing logic
-                    // ...
+                    let triggers = apply_filters(&payload);
+                    debug!("Triggers: {:?}", triggers);
+                    
                 });
 
                 // Commit message after cloning payload

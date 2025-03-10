@@ -1,0 +1,69 @@
+.packet-card {
+    margin: 10px;
+    padding: 15px;
+    border-radius: 4px;
+    background-color: #353535;
+    max-width: 80%;
+    border: 1px solid #757575;
+}
+
+.packet-orig {
+    margin-right: auto;
+    border-left: 4px solid #2196F3;
+}
+
+.packet-dest {
+    margin-left: auto;
+    border-left: 4px solid #4CAF50;
+}
+
+.packet-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+
+.packet-dest .packet-header {
+    color: #4CAF50;
+}
+
+.packet-orig .packet-header {
+    color: #2196F3;
+}
+
+.packet-id {
+    margin-right: 10px;
+    font-weight: bold;
+    color: #212121;
+}
+
+.packet-time {
+    margin-right: 10px;
+}
+
+.packet-direction {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+}
+
+.packet-direction.orig {
+    background-color: #E3F2FD;
+    color: #1976D2;
+}
+
+.packet-direction.dest {
+    background-color: #E8F5E9;
+    color: #388E3C;
+}
+
+.packet-body {
+    padding: 10px;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #212121;
+} 
