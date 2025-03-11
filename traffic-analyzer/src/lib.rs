@@ -1,7 +1,8 @@
 pub mod configuration;
 pub mod kafka;
 pub mod filters;
-
+pub mod db;
+pub mod ethernet;
 use crate::configuration::init;
 use log::info;
 
