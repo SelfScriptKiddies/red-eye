@@ -23,27 +23,29 @@ impl Filter for BinarySubstrFilter {
     fn processed(&self, packet: &[u8]) -> Vec<FilterTrigger> {
         let mut triggers = Vec::new();
         
-        if let Some(position) = find_binary_pattern(packet, &self.binary_pattern) {
+        for position in find_binary_pattern(packet, &self.binary_pattern) {
             triggers.push(FilterTrigger {
                 start_index: position,
                 end_index: position + self.binary_pattern.len(),
             });
         }
         
-        debug!("Checking packet for binary pattern '{}': {}", 
+        debug!("Checking packet for binary pattern '{}': found {} matches", 
                self.pattern_name, 
-               !triggers.is_empty());
+               triggers.len());
                
         triggers
     }
 }
 
-fn find_binary_pattern(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+fn find_binary_pattern(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+    let mut positions = Vec::new();
+    
     if needle.is_empty() {
-        return Some(0);
+        return vec![0];
     }
     if needle.len() > haystack.len() {
-        return None;
+        return positions;
     }
     
     // KMP algorithm
@@ -59,7 +61,8 @@ fn find_binary_pattern(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         }
         
         if j == needle.len() {
-            return Some(i - j); // Return position where pattern was found
+            positions.push(i - j); // Add position where pattern was found
+            j = lps[j - 1]; // Continue searching from the last partial match
         } else if i < haystack.len() && needle[j] != haystack[i] {
             if j != 0 {
                 j = lps[j - 1];
@@ -69,7 +72,7 @@ fn find_binary_pattern(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         }
     }
     
-    None
+    positions
 }
 
 fn compute_lps_array(pattern: &[u8]) -> Vec<usize> {
