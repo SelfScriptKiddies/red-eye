@@ -18,7 +18,11 @@ use crate::filters::substr::SubstrFilter;
 
 // Global storage for filters
 pub static PACKET_FILTERS: Lazy<RwLock<Vec<Box<dyn Filter>>>> = Lazy::new(|| {
-    RwLock::new(Vec::new())
+    RwLock::new(vec![
+        Box::new(RegexFilter::new("regex_filter", "GET /\\w*").unwrap()),
+        Box::new(BinarySubstrFilter::new("binary_substr_filter", b"1234567890")),
+        Box::new(SubstrFilter::new("substr_filter", b"1234567890")),
+    ])
 });
 
 // Function to add filters
