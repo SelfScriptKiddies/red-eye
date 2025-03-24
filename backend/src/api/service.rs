@@ -2,9 +2,11 @@ pub mod service_dto;
 pub mod service_repository;
 pub mod service_service;
 
+use actix_identity::Identity;
 use actix_web::{web, HttpResponse, Responder};
 use crate::api::service::service_dto::{Service, ServiceTransfer};
 use crate::api::service::service_service::ServiceService;
+use crate::api::updater::UpdateAgent;
 use actix_web::Either;
 use actix_web::{get, post, put, delete};
 
@@ -49,7 +51,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     tag = "service"
 )]
 #[get("/service")]
-async fn get_all_services(service: web::Data<ServiceService>) -> impl Responder {
+async fn get_all_services(
+    _identity: Identity,
+    service: web::Data<ServiceService>
+) -> impl Responder {
     match service.get_all_services().await {
         Ok(services) => HttpResponse::Ok().json(services),
         Err(_) => HttpResponse::InternalServerError().finish()
@@ -77,6 +82,7 @@ async fn get_all_services(service: web::Data<ServiceService>) -> impl Responder 
 )]
 #[get("/service/{id}")]
 async fn get_service_by_id(
+    _identity: Identity,
     service: web::Data<ServiceService>,
     id: web::Path<i32>
 ) -> impl Responder {
@@ -107,11 +113,18 @@ async fn get_service_by_id(
 )]
 #[post("/service")]
 async fn create_service(
+    _identity: Identity,
     service: web::Data<ServiceService>,
+    updater: web::Data<UpdateAgent>,
     new_service: Either<web::Form<ServiceTransfer>, web::Json<ServiceTransfer>>
 ) -> impl Responder {
     match service.create_service(&new_service.into_inner().into()).await {
-        Ok(created) => HttpResponse::Created().json(created),
+        Ok(created) => {
+            if let Err(e) = updater.add_service(created.clone().into(), created.id.try_into().unwrap()).await {
+                log::error!("Failed to send update: {}", e);
+            }
+            HttpResponse::Created().json(created)
+        }
         Err(_) => HttpResponse::InternalServerError().finish()
     }
 }
@@ -137,6 +150,7 @@ async fn create_service(
 )]
 #[put("/service/{id}")]
 async fn update_service(
+    _identity: Identity,
     service: web::Data<ServiceService>,
     id: web::Path<i32>,
     updated_service: web::Json<ServiceTransfer>
@@ -162,6 +176,7 @@ async fn update_service(
 )]
 #[delete("/service/{id}")]
 async fn delete_service(
+    _identity: Identity,
     service: web::Data<ServiceService>,
     id: web::Path<i32>
 ) -> impl Responder {
