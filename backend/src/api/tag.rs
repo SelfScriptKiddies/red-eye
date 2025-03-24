@@ -4,6 +4,8 @@ use serde_json::json;
 use crate::api::tag::tag_service::TagService;
 use crate::api::tag::tag_dto::Tag;
 use crate::api::tag::tag_dto::TagName;
+use crate::api::updater::UpdateAgent;
+
 pub(crate) mod tag_dto;
 pub(crate) mod tag_repository;
 pub(crate) mod tag_service;
@@ -132,10 +134,17 @@ async fn get_tag_name_by_id(
 async fn create_tag_name(
     _identity: Identity,
     tag_name: web::Json<TagNameCreate>,
-    tag_service: web::Data<TagService>
+    tag_service: web::Data<TagService>,
+    updater: web::Data<UpdateAgent>
 ) -> Result<impl Responder, actix_web::error::Error> {
     match tag_service.create_tag_name(tag_name.into_inner()).await {
-        Ok(created_tag) => Ok(HttpResponse::Ok().json(created_tag)),
+        Ok(created_tag) => {
+            let id = created_tag.id.try_into().unwrap();
+            if let Err(e) = updater.add_filter(created_tag.clone().into(), id).await {
+                log::error!("Failed to send update: {}", e);
+            }
+            Ok(HttpResponse::Ok().json(created_tag))
+        }
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }
 }
@@ -156,11 +165,18 @@ async fn update_tag_name(
     _identity: Identity,
     path: web::Path<(i32,)>,
     tag_name: web::Json<TagNameCreate>,
-    tag_service: web::Data<TagService>
+    tag_service: web::Data<TagService>,
+    updater: web::Data<UpdateAgent>
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
     match tag_service.update_tag_name(id, tag_name.into_inner()).await {
-        Ok(updated_tag) => Ok(HttpResponse::Ok().json(updated_tag)),
+        Ok(updated_tag) => {
+            let id = updated_tag.id.try_into().unwrap();
+            if let Err(e) = updater.update_filter(id, updated_tag.clone().into()).await {
+                log::error!("Failed to send update: {}", e);
+            }
+            Ok(HttpResponse::Ok().json(updated_tag))
+        }
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }
@@ -180,11 +196,17 @@ async fn update_tag_name(
 async fn delete_tag_name(
     _identity: Identity,
     path: web::Path<(i32,)>,
-    tag_service: web::Data<TagService>
+    tag_service: web::Data<TagService>,
+    updater: web::Data<UpdateAgent>
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
     match tag_service.delete_tag_name(id).await {
-        Ok(_) => Ok(HttpResponse::NoContent().finish()),
+        Ok(_) => {
+            if let Err(e) = updater.remove_filter(id.try_into().unwrap()).await {
+                log::error!("Failed to send update: {}", e);
+            }
+            Ok(HttpResponse::NoContent().finish())
+        }
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }

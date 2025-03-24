@@ -152,6 +152,7 @@ async fn create_service(
 async fn update_service(
     _identity: Identity,
     service: web::Data<ServiceService>,
+    updater: web::Data<UpdateAgent>,
     id: web::Path<i32>,
     updated_service: web::Json<ServiceTransfer>
 ) -> impl Responder {
@@ -159,7 +160,12 @@ async fn update_service(
     service_data.id = id.into_inner();
     
     match service.update_service(&service_data).await {
-        Ok(updated) => HttpResponse::Ok().json(updated),
+        Ok(updated) => {
+            if let Err(e) = updater.update_service(updated.id.try_into().unwrap(), updated.clone().into()).await {
+                log::error!("Failed to send update: {}", e);
+            }
+            HttpResponse::Ok().json(updated)
+        }
         Err(_) => HttpResponse::NotFound().finish()
     }
 }
@@ -178,10 +184,17 @@ async fn update_service(
 async fn delete_service(
     _identity: Identity,
     service: web::Data<ServiceService>,
+    updater: web::Data<UpdateAgent>,
     id: web::Path<i32>
 ) -> impl Responder {
-    match service.delete_service(id.into_inner()).await {
-        Ok(_) => HttpResponse::Ok().finish(),
+    let id = id.into_inner();
+    match service.delete_service(id).await {
+        Ok(_) => {
+            if let Err(e) = updater.remove_service(id.try_into().unwrap()).await {
+                log::error!("Failed to send update: {}", e);
+            }
+            HttpResponse::Ok().finish()
+        }
         Err(_) => HttpResponse::NotFound().finish()
     }
 }

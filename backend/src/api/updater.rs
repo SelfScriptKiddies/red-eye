@@ -23,13 +23,26 @@ pub enum SettingsUpdate {
 
 mod dto {
     use bincode::{Encode, Decode};
-    use crate::api::service::service_dto;
+    use crate::api::{
+        service::service_dto,
+        tag::tag_dto
+    };
 
     #[derive(Debug, Encode, Decode)]
     pub struct Filter {
         pub pattern_name: String,
         pub filter_type: String,
         pub filter_payload: Vec<u8>,
+    }
+
+    impl From<tag_dto::TagName> for Filter {
+        fn from(tag_name: tag_dto::TagName) -> Self {
+            Filter {
+                pattern_name: tag_name.name,
+                filter_type: tag_name.template_type,
+                filter_payload: tag_name.template.as_bytes().to_vec(),
+            }
+        }
     }
 
     #[derive(Debug, Encode, Decode)]
@@ -102,29 +115,29 @@ impl UpdateAgent {
         self.send_update(SettingsUpdate::ServiceAdd(service), index).await
     }
     
-    pub async fn update_service(&self, index: usize, service: dto::Service, message_index: usize) -> Result<(), String> {
+    pub async fn update_service(&self, index: usize, service: dto::Service) -> Result<(), String> {
         debug!("Sending update service: (id={}, service={:?})", index, service);
-        self.send_update(SettingsUpdate::ServiceUpdate(index, service), message_index).await
+        self.send_update(SettingsUpdate::ServiceUpdate(index, service), index).await
     }
     
-    pub async fn remove_service(&self, index: usize, message_index: usize) -> Result<(), String> {
+    pub async fn remove_service(&self, index: usize) -> Result<(), String> {
         debug!("Sending remove service: (id={})", index);
-        self.send_update(SettingsUpdate::ServiceRemove(index), message_index).await
+        self.send_update(SettingsUpdate::ServiceRemove(index), index).await
     }
     
     // Filters
     pub async fn add_filter(&self, filter: dto::Filter, index: usize) -> Result<(), String> {
         debug!("Sending add filter: {:?}", filter);
-        self.send_update(SettingsUpdate::FilterAdd(filter), index).await
+        self.send_update(SettingsUpdate::FilterAdd(filter), 0).await
     }
     
-    pub async fn update_filter(&self, index: usize, filter: dto::Filter, message_index: usize) -> Result<(), String> {
+    pub async fn update_filter(&self, index: usize, filter: dto::Filter) -> Result<(), String> {
         debug!("Sending update filter: (id={}, filter={:?})", index, filter);
-        self.send_update(SettingsUpdate::FilterUpdate(index, filter), message_index).await
+        self.send_update(SettingsUpdate::FilterUpdate(index, filter), index).await
     }
     
-    pub async fn remove_filter(&self, index: usize, message_index: usize) -> Result<(), String> {
+    pub async fn remove_filter(&self, index: usize) -> Result<(), String> {
         debug!("Sending remove filter: (id={})", index);
-        self.send_update(SettingsUpdate::FilterRemove(index), message_index).await
+        self.send_update(SettingsUpdate::FilterRemove(index), index).await
     }
 }
