@@ -28,3 +28,5 @@ strum = "0.26.3"
 strum_macros = "0.26.4"
 utoipa = { version = "5", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
+bincode = "2.0.1"
+rdkafka = "0.37.0"
