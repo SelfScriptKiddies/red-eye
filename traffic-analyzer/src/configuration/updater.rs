@@ -1,9 +1,9 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
 use log::{error, info, warn, debug};
 use bincode::{config, Decode};
+use crate::filters::{add_filter, edit_filter, remove_filter};
 
 #[derive(Debug, Decode)]
 pub enum SettingsUpdate {
@@ -85,8 +85,34 @@ impl UpdateListener {
                             continue;
                         }
                     };
+
+                    match update.0 {
+                        SettingsUpdate::ServiceAdd(service) => {
+                            debug!("Received service add: {:?}", service);
+                        }
+                        SettingsUpdate::ServiceUpdate(index, service) => {
+                            debug!("Received service update: (id={}, service={:?})", index, service);
+                        }
+                        SettingsUpdate::ServiceRemove(index) => {
+                            debug!("Received service remove: (id={})", index);
+                        }
+                        SettingsUpdate::FilterAdd(filter) => {
+                            debug!("Received filter add: (id={}, filter={:?})", update.1, filter);
+                            add_filter(filter.pattern_name, filter.filter_type, &filter.filter_payload);
+                        }
+                        SettingsUpdate::FilterUpdate(index, filter) => {
+                            debug!("Received filter update: (id={}, filter={:?})", index, filter);
+                            edit_filter(index, filter.pattern_name, filter.filter_type, &filter.filter_payload);
+                        }
+                        SettingsUpdate::FilterRemove(index) => {    
+                            debug!("Received filter remove: {}", index);
+                            remove_filter(index);
+                        }
+                        _ => {
+                            debug!("Received unknown update");
+                        }
+                    }
     
-                    debug!("Received update: {:?}", update);
                     // Commit message after cloning payload
                     self.consumer.commit_message(&message, CommitMode::Async).unwrap();
                 }

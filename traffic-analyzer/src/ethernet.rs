@@ -1,5 +1,4 @@
 use log::{debug, error};
-use pcap::Packet;
 use pnet::packet::Packet as PnetPacket;
 use pnet::packet::{ethernet::{EthernetPacket, EtherTypes}, 
                   ip::IpNextHeaderProtocols,
