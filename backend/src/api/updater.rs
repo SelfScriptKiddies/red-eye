@@ -7,6 +7,7 @@ use log::{error, info, warn, debug};
 use bincode::{config, Decode, Encode};
 use std::time::Duration;
 use crate::configuration::ApplicationConfig;
+
 #[derive(Debug, Decode, Encode)]
 pub enum SettingsUpdate {
     // Service updates
@@ -22,6 +23,7 @@ pub enum SettingsUpdate {
 
 mod dto {
     use bincode::{Encode, Decode};
+    use crate::api::service::service_dto;
 
     #[derive(Debug, Encode, Decode)]
     pub struct Filter {
@@ -39,6 +41,20 @@ mod dto {
         pub inflate_websockets: bool,
         pub merge_adjacent_packets: bool,
         pub urldecode: bool,
+    }
+
+    impl From<service_dto::Service> for Service {
+        fn from(service: service_dto::Service) -> Self {
+            Service {
+                name: service.name,
+                port: service.port.try_into().unwrap(),
+                chunked_transfer_encoding: service.chunked_transfer_encoding,
+                decrypt_tls: service.decrypt_tls,
+                inflate_websockets: service.inflate_websockets,
+                merge_adjacent_packets: service.merge_adjacent_packets,
+                urldecode: service.urldecode,
+            }
+        }
     }
 }
 

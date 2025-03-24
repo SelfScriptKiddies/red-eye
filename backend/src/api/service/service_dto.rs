@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
-pub(crate) struct Service {
+pub struct Service {
     pub id: i32,
     pub name: String,
     pub port: i32,

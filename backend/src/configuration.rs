@@ -97,7 +97,7 @@ pub struct ApplicationConfig {
         clap(long, short='S', help="Kafka settings topic", help_heading = "Kafka config"),
         env = "KAFKA_SETTINGS_TOPIC",
         config = "kafka.settings_topic",
-        default = "\"settings\".to_string()")
+        default = "\"updates\".to_string()")
     ]
     pub kafka_settings_topic: String,
 
