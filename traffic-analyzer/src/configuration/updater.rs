@@ -41,7 +41,7 @@ mod dto {
 }
 
 
-struct UpdateListener {
+pub struct UpdateListener {
     consumer: StreamConsumer
 }
 
