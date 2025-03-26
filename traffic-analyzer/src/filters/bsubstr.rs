@@ -2,13 +2,15 @@ use crate::filters::filterDTO::{Filter, FilterTrigger};
 use log::debug;
 
 pub struct BinarySubstrFilter {
+    id: usize,
     pattern_name: String,
     binary_pattern: Vec<u8>,
 }
 
 impl BinarySubstrFilter {
-    pub fn new(pattern_name: &str, binary_pattern: &[u8]) -> Self {
+    pub fn new(id: usize, pattern_name: &str, binary_pattern: &[u8]) -> Self {
         BinarySubstrFilter {
+            id,
             pattern_name: pattern_name.to_string(),
             binary_pattern: binary_pattern.to_vec(),
         }
@@ -16,6 +18,10 @@ impl BinarySubstrFilter {
 }
 
 impl Filter for BinarySubstrFilter {
+    fn get_id(&self) -> usize {
+        self.id
+    }
+
     fn get_pattern_name(&self) -> String {
         self.pattern_name.clone()
     }
@@ -104,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_binary_substr_filter_match() {
-        let filter = BinarySubstrFilter::new("test_pattern", &[0x01, 0x02, 0x03]);
+        let filter = BinarySubstrFilter::new(1, "test_pattern", &[0x01, 0x02, 0x03]);
         let packet = &[0x00, 0x01, 0x02, 0x03, 0x04];
         let result = filter.processed(packet);
         assert!(!result.is_empty());
@@ -114,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_binary_substr_filter_no_match() {
-        let filter = BinarySubstrFilter::new("test_pattern", &[0x05, 0x06]);
+        let filter = BinarySubstrFilter::new(1, "test_pattern", &[0x05, 0x06]);
         let packet = &[0x00, 0x01, 0x02, 0x03, 0x04];
         let result = filter.processed(packet);
         assert!(result.is_empty());
@@ -122,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_empty_binary_pattern() {
-        let filter = BinarySubstrFilter::new("test_pattern", &[]);
+        let filter = BinarySubstrFilter::new(1, "test_pattern", &[]);
         let packet = &[0x00, 0x01, 0x02];
         let result = filter.processed(packet);
         assert!(!result.is_empty());
@@ -130,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_binary_pattern_longer_than_packet() {
-        let filter = BinarySubstrFilter::new("test_pattern", &[0x01, 0x02, 0x03, 0x04, 0x05]);
+        let filter = BinarySubstrFilter::new(1, "test_pattern", &[0x01, 0x02, 0x03, 0x04, 0x05]);
         let packet = &[0x01, 0x02, 0x03];
         let result = filter.processed(packet);
         assert!(result.is_empty());

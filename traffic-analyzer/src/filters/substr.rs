@@ -2,13 +2,15 @@ use crate::filters::filterDTO::{Filter, FilterTrigger};
 use log::debug;
 
 pub struct SubstrFilter {
+    id: usize,
     pattern_name: String,
     substring: Vec<u8>,
 }
 
 impl SubstrFilter {
-    pub fn new(pattern_name: &str, substring: &[u8]) -> Self {
+    pub fn new(id: usize, pattern_name: &str, substring: &[u8]) -> Self {
         SubstrFilter {
+            id,
             pattern_name: pattern_name.to_string(),
             substring: substring.to_vec(),
         }
@@ -16,6 +18,10 @@ impl SubstrFilter {
 }
 
 impl Filter for SubstrFilter {
+    fn get_id(&self) -> usize {
+        self.id
+    }
+
     fn get_pattern_name(&self) -> String {
         self.pattern_name.clone()
     }
@@ -109,28 +115,28 @@ mod tests {
 
     #[test]
     fn test_substr_filter_match() {
-        let filter = SubstrFilter::new("test_pattern", b"hello");
+        let filter = SubstrFilter::new(1, "test_pattern", b"hello");
         let packet = b"hello world";
         assert!(filter.processed(packet).len() > 0);
     }
 
     #[test]
     fn test_substr_filter_no_match() {
-        let filter = SubstrFilter::new("test_pattern", b"goodbye");
+        let filter = SubstrFilter::new(1, "test_pattern", b"goodbye");
         let packet = b"hello world";
         assert!(filter.processed(packet).is_empty());
     }
 
     #[test]
     fn test_empty_substring() {
-        let filter = SubstrFilter::new("test_pattern", b"");
+        let filter = SubstrFilter::new(1, "test_pattern", b"");
         let packet = b"hello world";
         assert!(filter.processed(packet).len() > 0);
     }
 
     #[test]
     fn test_substring_longer_than_packet() {
-        let filter = SubstrFilter::new("test_pattern", b"hello world and more");
+        let filter = SubstrFilter::new(1, "test_pattern", b"hello world and more");
         let packet = b"hello world";
         assert!(filter.processed(packet).is_empty());
     }

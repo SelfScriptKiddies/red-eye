@@ -98,7 +98,7 @@ impl UpdateListener {
                         }
                         SettingsUpdate::FilterAdd(filter) => {
                             debug!("Received filter add: (id={}, filter={:?})", update.1, filter);
-                            add_filter(filter.pattern_name, filter.filter_type, &filter.filter_payload);
+                            add_filter(update.1, filter.pattern_name, filter.filter_type, &filter.filter_payload);
                         }
                         SettingsUpdate::FilterUpdate(index, filter) => {
                             debug!("Received filter update: (id={}, filter={:?})", index, filter);

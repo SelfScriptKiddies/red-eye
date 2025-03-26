@@ -3,14 +3,16 @@ use crate::filters::filterDTO::Filter;
 use log::{debug, error};
 
 pub struct RegexFilter {
+    id: usize,
     pattern_name: String,
     regex: Regex,
 }
 
 impl RegexFilter {
-    pub fn new(pattern_name: &str, pattern: &str) -> Result<Self, regex::Error> {
+    pub fn new(id: usize, pattern_name: &str, pattern: &str) -> Result<Self, regex::Error> {
         match Regex::new(pattern) {
             Ok(regex) => Ok(RegexFilter {
+                id,
                 pattern_name: pattern_name.to_string(),
                 regex,
             }),
@@ -23,6 +25,10 @@ impl RegexFilter {
 }
 
 impl Filter for RegexFilter {
+    fn get_id(&self) -> usize {
+        self.id
+    }
+
     fn get_pattern_name(&self) -> String {
         self.pattern_name.clone()
     }
@@ -58,21 +64,21 @@ mod tests {
 
     #[test]
     fn test_regex_filter_match() {
-        let filter = RegexFilter::new("test_pattern", r"hello\s+world").unwrap();
+        let filter = RegexFilter::new(1, "test_pattern", r"hello\s+world").unwrap();
         let packet = b"hello world";
         assert!(filter.processed(packet).len() > 0);
     }
 
     #[test]
     fn test_regex_filter_no_match() {
-        let filter = RegexFilter::new("test_pattern", r"hello\s+world").unwrap();
+        let filter = RegexFilter::new(1, "test_pattern", r"hello\s+world").unwrap();
         let packet = b"goodbye world";
         assert!(filter.processed(packet).is_empty());
     }
 
     #[test]
     fn test_invalid_utf8() {
-        let filter = RegexFilter::new("test_pattern", r"hello").unwrap();
+        let filter = RegexFilter::new(1, "test_pattern", r"hello").unwrap();
         let packet = &[0xFF, 0xFE, 0xFD]; // Недопустимый UTF-8
         assert!(filter.processed(packet).is_empty());
     }
