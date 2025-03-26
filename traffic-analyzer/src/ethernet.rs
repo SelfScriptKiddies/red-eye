@@ -4,7 +4,7 @@ use pnet::packet::{ethernet::{EthernetPacket, EtherTypes},
                   ip::IpNextHeaderProtocols,
                   ipv4::Ipv4Packet, 
                   ipv6::Ipv6Packet,
-                  tcp::TcpPacket, 
+                  tcp::{TcpPacket, TcpFlags}, 
                   udp::UdpPacket};
 use std::net::IpAddr;
 
@@ -101,6 +101,13 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
         let src_port = tcp_packet.get_source();
         let dst_port = tcp_packet.get_destination();
         let payload = tcp_packet.payload().to_vec();
+
+        // Check for RST or FIN/ACK flags
+        if tcp_packet.get_flags() & TcpFlags::RST != 0 || 
+           (tcp_packet.get_flags() & TcpFlags::FIN != 0 && tcp_packet.get_flags() & TcpFlags::ACK != 0) {
+            unimplemented!("Stream closing not implemented yet");
+        }
+
         // Return information only if there is a payload
         if !payload.is_empty() {
             return Some(PacketInfo {
