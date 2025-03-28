@@ -87,12 +87,19 @@ pub struct ApplicationConfig {
     ]
     pub kafka_broker: String,
     #[source(
-        clap(long, short='t', help="Kafka broker topic", help_heading = "Kafka config"),
-        env = "KAFKA_TOPIC",
-        config = "kafka.topic",
+        clap(long, short='R', help="Kafka raw packets topic", help_heading = "Kafka config"),
+        env = "KAFKA_RAW_PACKETS_TOPIC",
+        config = "kafka.raw_packets_topic",
         default = "\"raw_packets\".to_string()")
     ]
-    pub kafka_topic: String,
+    pub kafka_raw_packets_topic: String,
+    #[source(
+        clap(long, short='S', help="Kafka settings topic", help_heading = "Kafka config"),
+        env = "KAFKA_SETTINGS_TOPIC",
+        config = "kafka.settings_topic",
+        default = "\"updates\".to_string()")
+    ]
+    pub kafka_settings_topic: String,
 
     /// Logging configuration
     #[source(

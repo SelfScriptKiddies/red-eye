@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema)]
+#[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema, Clone)]
 pub struct TagName {
     pub id: i32,
     pub name: String,

@@ -2,9 +2,10 @@ use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
-use log::{debug, error, info, warn};
+use log::{trace, debug, error, info, warn};
 use tokio::task;
 use crate::filters::apply_filters;
+use crate::ethernet::process_packet;
 
 type LoggingConsumer = StreamConsumer;
 
@@ -40,10 +41,14 @@ pub async fn consume_raw_packets(consumer: LoggingConsumer) {
 
                 // Processing packet in a separate task with cloned data
                 task::spawn(async move {
-                    debug!("Processing packet of size {} bytes: {:?}", payload.len(), payload); 
-                    let triggers = apply_filters(&payload);
-                    debug!("Triggers: {:?}", triggers);
+                    trace!("Processing packet of size {} bytes: {:?}", payload.len(), payload); 
+                    let parsed_packet = process_packet(payload);
                     
+                    if let Some(packet) = parsed_packet {
+                        debug!("Parsed packet: {:?}", packet);
+                        let triggers = apply_filters(&packet.payload);
+                        trace!("Triggers: {:?}", triggers);
+                    }
                 });
 
                 // Commit message after cloning payload

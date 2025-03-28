@@ -17,7 +17,8 @@ use crate::api::{
     packet::packet_service::PacketService, 
     stream::stream_service::StreamService, 
     tag::tag_service::TagService,
-    service::service_service::ServiceService
+    service::service_service::ServiceService,
+    updater::UpdateAgent
 };
 
 
@@ -62,6 +63,7 @@ pub async fn run() -> std::io::Result<()> {
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
+    let updater = web::Data::new(UpdateAgent::new(&config));
     debug!("{:?}", &config);
 
     HttpServer::new(move || {
@@ -72,6 +74,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(stream_service.clone())
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
+            .app_data(updater.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

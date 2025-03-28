@@ -3,7 +3,7 @@ pub(crate) mod stream;
 pub mod auth;
 pub mod tag;
 pub mod service;
-
+pub mod updater;
 use utoipa::OpenApi;
 use actix_web::web;
 

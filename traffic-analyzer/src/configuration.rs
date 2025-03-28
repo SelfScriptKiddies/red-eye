@@ -1,3 +1,5 @@
+pub mod updater;
+
 use config_manager::{config, ConfigInit};
 
 
@@ -58,19 +60,26 @@ pub struct ApplicationConfig {
         ]
     pub kafka_broker: String,
     #[source(
-        clap(long, short='t', help="Kafka broker topic"),
-        env = "KAFKA_TOPIC",
+        clap(long, short='R', help="Kafka broker topic"),
+        env = "KAFKA_RAW_PACKETS_TOPIC",
         config = "kafka.raw_packets_topic",
         default = "\"raw_packets\".to_string()")
     ]
     pub kafka_raw_packets_topic: String,
     #[source(
-        clap(long, short='w', help="Kafka broker topic"),
-        env = "KAFKA_TOPIC",
+        clap(long, short='W', help="Kafka broker topic"),
+        env = "KAFKA_WS_TOPIC",
         config = "kafka.websocket_packets_topic",
         default = "\"websocket_packets\".to_string()")
     ]
     pub kafka_websocket_packets_topic: String,
+    #[source(
+        clap(long, short='U', help="Kafka broker topic"),
+        env = "KAFKA_UPDATES_TOPIC",
+        config = "kafka.updates_topic",
+        default = "\"updates\".to_string()")
+    ]
+    pub kafka_updates_topic: String,
 
     /// Service UUID
     #[source(
