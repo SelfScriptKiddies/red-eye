@@ -50,5 +50,23 @@ impl DB {
             }
         }
     }
+
+    pub async fn insert_packet(&self, packet: &PacketInfo) -> Result<(), Error> {
+        let packet_data = packet.payload.clone();
+        let packet_data_hex = hex::encode(packet_data);
+        let stream_id = self.get_stream_id(&packet.src_ip, packet.src_port, &packet.dst_ip, packet.dst_port).await;
+
+        sqlx::query(
+            "INSERT INTO packets (stream_id, packet_data, timestamp) VALUES ($1, $2, $3)"
+        )
+        .bind(stream_id)
+        .bind(packet_data_hex)
+        .bind(timestamp)
+        .execute(&self.pgpool)
+        .await
+        .map(|_| ())
+    }
+
+
     
 }
