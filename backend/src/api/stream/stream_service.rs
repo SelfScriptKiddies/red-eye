@@ -23,17 +23,35 @@ impl StreamService {
         self.stream_repository.get_packet_by_id(stream_id).await
     }
 
-    pub async fn get_all_streams_with_details(&self, limit: Option<i32>, offset: Option<i32>) -> Result<Vec<StreamListResponse>, sqlx::Error> {
-        let offset = offset.unwrap_or(0);
+    pub async fn get_all_streams_with_details(
+        &self, 
+        limit: Option<i32>, 
+        offset: Option<i32>,
+        tags: Option<Vec<i32>>,
+        services: Option<Vec<i32>>
+    ) -> Result<Vec<StreamListResponse>, sqlx::Error> {
         let limit = limit.unwrap_or(10);
+        let offset = offset.unwrap_or(0);
         
-        let streams = self.stream_repository.get_streams_with_tags(limit, offset).await?;
-        Ok(streams.into_iter().map(|(id, first_time, last_time, tags, service_name)| StreamListResponse {
-            id,
-            service_id: service_name.unwrap_or("Not implemented".to_string()),
-            first_packet_time: first_time.unwrap_or(0),
-            last_packet_time: last_time.unwrap_or(0),
-            tags
-        }).collect())
+        let streams = self.stream_repository.get_streams_with_tags(
+            limit, 
+            offset,
+            tags,
+            services
+        ).await?;
+        
+        let responses = streams.into_iter()
+            .map(|(id, first_time, last_time, tags, service_name)| {
+                StreamListResponse {
+                    id,
+                    first_packet_time: first_time.unwrap_or(0),
+                    last_packet_time: last_time.unwrap_or(0),
+                    tags,
+                    service_id: service_name.unwrap_or_else(|| "Unknown".to_string()),
+                }
+            })
+            .collect();
+        
+        Ok(responses)
     }
 }

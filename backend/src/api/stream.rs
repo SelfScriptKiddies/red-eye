@@ -3,9 +3,10 @@ use actix_web::{get, HttpResponse, Responder, web};
 use serde_json::json;
 use stream_service::StreamService;
 use crate::api::packet::packet_service::PacketService;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use stream_dto::StreamResponse;
 use utoipa::IntoParams;
+use log::info;
 
 pub mod stream_dto;
 mod stream_repository;
@@ -59,7 +60,34 @@ async fn get_stream_by_id(
 #[derive(Debug, Deserialize, IntoParams)]
 struct StreamQuery {
     pub limit: Option<i32>,
-    pub offset: Option<i32>
+    pub offset: Option<i32>,
+
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_comma_separated_numbers")]
+    pub tags: Option<Vec<i32>>,
+
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_comma_separated_numbers")]
+    pub services: Option<Vec<i32>>
+}
+
+fn deserialize_comma_separated_numbers<'de, D>(deserializer: D) -> Result<Option<Vec<i32>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    if let Some(s) = s {
+        if s.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        Ok(Some(
+            s.split(',')
+                .filter_map(|s| s.trim().parse::<i32>().ok())
+                .collect()
+        ))
+    } else {
+        Ok(None)
+    }
 }
 
 #[utoipa::path(
@@ -81,7 +109,13 @@ async fn get_all_streams(
     stream_service: web::Data<StreamService>,
     query: web::Query<StreamQuery>
 ) -> Result<impl Responder, actix_web::error::Error> {
-    match stream_service.get_all_streams_with_details(query.limit, query.offset).await {
+    info!("Getting all streams with query: {:?}", query);
+    match stream_service.get_all_streams_with_details(
+        query.limit, 
+        query.offset, 
+        query.tags.clone(), 
+        query.services.clone()
+    ).await {
         Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }

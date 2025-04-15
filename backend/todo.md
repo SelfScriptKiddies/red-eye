@@ -1,1 +1,1 @@
-[ ] Tag and service filtration by get parameters
+[X] Tag and service filtration by get parameters
