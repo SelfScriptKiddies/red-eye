@@ -38,7 +38,8 @@ pub struct StreamResponse {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct StreamListResponse {
     pub id: i32,
-    pub service_id: String,
+    pub service_id: i32,
+    pub service_name: String,
     pub tags: Vec<String>,
     pub first_packet_time: i64,
     pub last_packet_time: i64

@@ -56,7 +56,8 @@ impl StreamRepository {
                 MIN(p.timestamp) as first_time,
                 MAX(p.timestamp) as last_time,
                 COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
-                s.name as service_name
+                s.name as service_name,
+                s.id as service_id
             FROM packets p
             LEFT JOIN tag t ON t.packet_id = p.id
             LEFT JOIN tag_name tn ON tn.id = t.tag_id

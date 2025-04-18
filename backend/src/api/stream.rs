@@ -97,7 +97,7 @@ where
         StreamQuery
     ),
     responses(
-        (status = 200, description = "Streams found", body = Vec<StreamResponse>, example = json!([{"id": 18, "service_id": "attention", "tags": [], "first_packet_time": 1738222782348_i64, "last_packet_time": 1738222782392_i64}, {"id": 17, "service_id": "number", "tags": [], "first_packet_time": 1738222782295_i64, "last_packet_time": 1738222782343_i64}])),
+        (status = 200, description = "Streams found", body = Vec<StreamResponse>, example = json!([{"id": 18, "service_id": 1, "service_name": "attention", "tags": [], "first_packet_time": 1738222782348_i64, "last_packet_time": 1738222782392_i64}, {"id": 17, "service_id": 2, "service_name": "number", "tags": [], "first_packet_time": 1738222782295_i64, "last_packet_time": 1738222782343_i64}])),
         (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
         (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
     ),
