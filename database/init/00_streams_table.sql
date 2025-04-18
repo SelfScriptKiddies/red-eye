@@ -8,5 +8,5 @@ CREATE TABLE IF NOT EXISTS stream (
     protocol VARCHAR(3) NOT NULL,
     active BOOLEAN NOT NULL,
     packet_count INTEGER NOT NULL DEFAULT 0,
-    service_id INTEGER
+    service_id INTEGER NOT NULL
 );

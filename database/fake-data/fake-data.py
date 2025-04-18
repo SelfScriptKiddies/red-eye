@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 # Configuration variables
 STREAMS_COUNT = 100
 PACKETS_COUNT = 1000
-TAGS_COUNT = 50
-SERVICES_COUNT = 20
+TAGS_COUNT = 10
+SERVICES_COUNT = 10
 TAGS_PER_PACKET = 3  # Average number of tags per packet
 
 # Load environment variables
@@ -92,12 +92,12 @@ def insert_fake_services(cursor):
 def insert_fake_tag_names(cursor):
     """Insert fake tag names into database"""
     tag_name_ids = []
-    for _ in range(TAGS_COUNT):
+    for i in range(TAGS_COUNT):
         cursor.execute(
             "INSERT INTO tag_name (name, color, template_type, template) "
             "VALUES (%s, %s, %s, %s) RETURNING id",
             (
-                generate_tag_name(),
+                f"Tag {i}",
                 random.randint(0, 360),
                 random.choice(['text', 'json']),
                 generate_template()
