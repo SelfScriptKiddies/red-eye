@@ -1,8 +1,8 @@
 import { useState } from "react";
 import "./ServiceCard.css"
 
-export const ServiceCard = ({service, onClick}) => {
-    const [isActive, setActive] = useState(true);
+export const ServiceCard = ({service, onTagClick}) => {
+    const [isActive, setActive] = useState(false);
 
     const getUrl = async (url) => {
         const data = await fetch(url, {
@@ -22,19 +22,23 @@ export const ServiceCard = ({service, onClick}) => {
         return data;
     };
 
+
     let clickHandler = (e) => {
         setActive((isActive) => !isActive);
-        if(isActive)
+        
+        // console.log("Changes active status in card ", e.tartget, " changed to:", isActive);
+        if(!isActive)
         {
             e.target.classList.add('service-choosen');
         }
         else {
             e.target.classList.remove('service-choosen');
         }
+        onTagClick(e);
     };
     console.log(service)
     return (
-        <div className="service-card d-inline-block" onClick={clickHandler} data-service={service.name}>
+        <div className="service-card d-inline-block" onClick={clickHandler} data-service={service.id}>
             {service.name}
         </div>
     );

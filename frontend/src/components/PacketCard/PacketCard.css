@@ -49,21 +49,23 @@
 }
 
 .packet-direction.orig {
-    background-color: #E3F2FD;
-    color: #1976D2;
+    background-color: #a9b9c5;
+    color: #0e4173;
 }
 
 .packet-direction.dest {
-    background-color: #E8F5E9;
-    color: #388E3C;
+    background-color: #99b19b;
+    /* color: #388E3C; */
+    color: #055b09;
 }
 
 .packet-body {
     padding: 10px;
-    background-color: #f5f5f5;
+    background-color: #555;
+    color: white;
     border-radius: 4px;
     font-family: monospace;
     white-space: pre-wrap;
     word-break: break-all;
-    color: #212121;
+    /* color: #212121; */
 } 
