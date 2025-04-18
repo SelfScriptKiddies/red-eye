@@ -9,6 +9,7 @@ STREAMS_COUNT = 100
 PACKETS_COUNT = 1000
 TAGS_COUNT = 50
 SERVICES_COUNT = 20
+TAGS_PER_PACKET = 3  # Average number of tags per packet
 
 # Load environment variables
 load_dotenv()
@@ -76,7 +77,7 @@ def insert_fake_services(cursor):
             "merge_adjacent_packets, inflate_websockets, decrypt_tls) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
-                f"Service {i}",
+                generate_service_name(),
                 port,
                 random.choice([True, False]),
                 random.choice([True, False]),
@@ -105,13 +106,13 @@ def insert_fake_tag_names(cursor):
         tag_name_ids.append(cursor.fetchone()[0])
     return tag_name_ids
 
-def insert_fake_streams(cursor):
+def insert_fake_streams(cursor, service_ids):
     """Insert fake streams into database"""
     stream_ids = []
     for _ in range(STREAMS_COUNT):
         cursor.execute(
-            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, service_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 generate_ip(),
                 generate_port(),
@@ -119,7 +120,8 @@ def insert_fake_streams(cursor):
                 generate_port(),
                 generate_protocol(),
                 random.choice([True, False]),
-                random.randint(0, 1000)
+                random.randint(0, 1000),
+                random.choice(service_ids) if service_ids else None
             )
         )
         stream_ids.append(cursor.fetchone()[0])
@@ -127,11 +129,12 @@ def insert_fake_streams(cursor):
 
 def insert_fake_packets(cursor, stream_ids):
     """Insert fake packets into database"""
+    packet_ids = []
     for _ in range(PACKETS_COUNT):
         timestamp = int((datetime.now() - timedelta(days=random.randint(0, 30))).timestamp() * 1000)
         cursor.execute(
             "INSERT INTO packets (timestamp, direction, stream_id, packet_data) "
-            "VALUES (%s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (
                 timestamp,
                 random.choice(['from', 'dest']),
@@ -139,6 +142,29 @@ def insert_fake_packets(cursor, stream_ids):
                 generate_packet_data()
             )
         )
+        packet_ids.append(cursor.fetchone()[0])
+    return packet_ids
+
+def insert_fake_tags(cursor, packet_ids, tag_name_ids):
+    """Insert fake tags into database"""
+    for packet_id in packet_ids:
+        # Generate random number of tags for each packet
+        num_tags = random.randint(0, TAGS_PER_PACKET * 2)  # Double the average to get some variation
+        for _ in range(num_tags):
+            packet_data_length = random.randint(20, 1500)
+            start_index = random.randint(0, packet_data_length - 1)
+            end_index = random.randint(start_index + 1, packet_data_length)
+            
+            cursor.execute(
+                "INSERT INTO tag (packet_id, tag_id, start_index, end_index) "
+                "VALUES (%s, %s, %s, %s)",
+                (
+                    packet_id,
+                    random.choice(tag_name_ids),
+                    start_index,
+                    end_index
+                )
+            )
 
 def main():
     try:
@@ -149,8 +175,9 @@ def main():
         # Insert fake data
         service_ids = insert_fake_services(cursor)
         tag_name_ids = insert_fake_tag_names(cursor)
-        stream_ids = insert_fake_streams(cursor)
-        insert_fake_packets(cursor, stream_ids)
+        stream_ids = insert_fake_streams(cursor, service_ids)
+        packet_ids = insert_fake_packets(cursor, stream_ids)
+        insert_fake_tags(cursor, packet_ids, tag_name_ids)
 
         # Commit changes
         conn.commit()

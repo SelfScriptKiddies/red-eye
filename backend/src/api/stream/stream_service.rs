@@ -41,7 +41,7 @@ impl StreamService {
         ).await?;
         
         let responses = streams.into_iter()
-            .map(|(id, first_time, last_time, tags, service_id, service_name)| {
+            .map(|(id, first_time, last_time, tags, service_name, service_id)| {
                 StreamListResponse {
                     id,
                     first_packet_time: first_time.unwrap_or(0),

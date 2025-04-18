@@ -46,7 +46,7 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, Vec<String>, Option<String>)>, sqlx::Error> {
+    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, Vec<String>, Option<String>, Option<i32>)>, sqlx::Error> {
         let mut query_parts = Vec::new();
         let mut params = Vec::new();
 
@@ -62,7 +62,7 @@ impl StreamRepository {
             LEFT JOIN tag t ON t.packet_id = p.id
             LEFT JOIN tag_name tn ON tn.id = t.tag_id
             LEFT JOIN stream str ON str.id = p.stream_id
-            LEFT JOIN service s ON s.port = str.dst_port"#.to_string());
+            LEFT JOIN service s ON s.id = str.service_id"#.to_string());
 
         let mut where_clauses = Vec::new();
 
@@ -97,7 +97,7 @@ impl StreamRepository {
 
         // Добавление GROUP BY и других частей запроса
         query_parts.push(r#"
-            GROUP BY p.stream_id, s.name
+            GROUP BY p.stream_id, s.name, s.id
             ORDER BY last_time DESC"#.to_string());
 
         // Добавление LIMIT и OFFSET
@@ -113,7 +113,7 @@ impl StreamRepository {
         log::debug!("Params: tags={:?}, services={:?}, limit={}, offset={}", tags, services, limit, offset);
         
         // Выполнение запроса с параметрами
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, Vec<String>, Option<String>)>(&query_string);
+        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, Vec<String>, Option<String>, Option<i32>)>(&query_string);
         
         // Биндинг параметров tags и services
         for param in &params {
