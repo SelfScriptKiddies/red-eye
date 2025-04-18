@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
 # Configuration variables
-STREAMS_COUNT = 100
-PACKETS_COUNT = 1000
+STREAMS_COUNT = 10
+PACKETS_COUNT = 100
 TAGS_COUNT = 10
 SERVICES_COUNT = 10
 TAGS_PER_PACKET = 3  # Average number of tags per packet
@@ -77,7 +77,7 @@ def insert_fake_services(cursor):
             "merge_adjacent_packets, inflate_websockets, decrypt_tls) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
-                generate_service_name(),
+                f"Service {i + 1}",
                 port,
                 random.choice([True, False]),
                 random.choice([True, False]),
@@ -97,7 +97,7 @@ def insert_fake_tag_names(cursor):
             "INSERT INTO tag_name (name, color, template_type, template) "
             "VALUES (%s, %s, %s, %s) RETURNING id",
             (
-                f"Tag {i}",
+                f"Tag {i + 1}",
                 random.randint(0, 360),
                 random.choice(['text', 'json']),
                 generate_template()
@@ -150,6 +150,8 @@ def insert_fake_tags(cursor, packet_ids, tag_name_ids):
     for packet_id in packet_ids:
         # Generate random number of tags for each packet
         num_tags = random.randint(0, TAGS_PER_PACKET * 2)  # Double the average to get some variation
+        if random.random() < 0.8:
+            num_tags = 0
         for _ in range(num_tags):
             packet_data_length = random.randint(20, 1500)
             start_index = random.randint(0, packet_data_length - 1)
