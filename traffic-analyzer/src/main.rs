@@ -1,8 +1,6 @@
-use crate::configuration::init_config;
+use tokio;
 
-mod configuration;
-
-fn main() {
-    let config = init_config();
-    println!("{config:?}");
+#[tokio::main]
+async fn main() {
+    traffic_analyzer::run().await;
 }

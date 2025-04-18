@@ -1,2 +1,14 @@
-[general]
-model_path = "0.0.0.0"
+[web]
+host = "0.0.0.0"
+port = 31337
+password = "password"
+
+[database]
+host = "highres.team"
+port = 5432
+username = "user"
+password = "password"
+schema = "red-eye"
+
+[kafka]
+host = "127.0.0.1"
