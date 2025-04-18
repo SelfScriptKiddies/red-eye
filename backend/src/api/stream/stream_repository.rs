@@ -70,11 +70,13 @@ impl StreamRepository {
         if let Some(tag_ids) = &tags {
             if !tag_ids.is_empty() {
                 where_clauses.push(r#"p.stream_id IN (
-                    SELECT DISTINCT p2.stream_id 
+                    SELECT p2.stream_id 
                     FROM packets p2
                     JOIN tag t2 ON t2.packet_id = p2.id 
                     JOIN tag_name tn2 ON tn2.id = t2.tag_id 
                     WHERE tn2.id = ANY($1)
+                    GROUP BY p2.stream_id
+                    HAVING COUNT(DISTINCT tn2.id) = array_length($1, 1)
                 )"#.to_string());
                 params.push(tag_ids.clone());
             }
