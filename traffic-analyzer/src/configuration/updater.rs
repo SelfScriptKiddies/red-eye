@@ -2,8 +2,9 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use log::{error, info, warn, debug};
-use bincode::{config, Decode};
+use bincode::{config, Decode, Encode};
 use crate::filters::{add_filter, edit_filter, remove_filter};
+use crate::cache::SERVICES_CACHE;
 
 #[derive(Debug, Decode)]
 pub enum SettingsUpdate {
@@ -18,17 +19,17 @@ pub enum SettingsUpdate {
     FilterRemove(usize),
 }
 
-mod dto {
+pub mod dto {
     use bincode::{Encode, Decode};
 
-    #[derive(Debug, Encode, Decode)]
+    #[derive(Debug, Encode, Decode, Clone)]
     pub struct Filter {
         pub pattern_name: String,
         pub filter_type: String,
         pub filter_payload: Vec<u8>,
     }
 
-    #[derive(Debug, Encode, Decode)]
+    #[derive(Debug, Encode, Decode, Clone)]
     pub struct Service {
         pub name: String,
         pub port: u16,
@@ -89,12 +90,15 @@ impl UpdateListener {
                     match update.0 {
                         SettingsUpdate::ServiceAdd(service) => {
                             debug!("Received service add: {:?}", service);
+                            SERVICES_CACHE.add_service(update.1, service);
                         }
                         SettingsUpdate::ServiceUpdate(index, service) => {
                             debug!("Received service update: (id={}, service={:?})", index, service);
+                            SERVICES_CACHE.update_service(index, service);
                         }
                         SettingsUpdate::ServiceRemove(index) => {
                             debug!("Received service remove: (id={})", index);
+                            SERVICES_CACHE.remove_service(index);
                         }
                         SettingsUpdate::FilterAdd(filter) => {
                             debug!("Received filter add: (id={}, filter={:?})", update.1, filter);

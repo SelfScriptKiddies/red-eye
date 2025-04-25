@@ -3,6 +3,8 @@ pub mod kafka;
 pub mod filters;
 pub mod db;
 pub mod ethernet;
+pub mod cache;
+pub mod process_packet;
 use crate::configuration::init;
 use log::info;
 
@@ -11,7 +13,7 @@ pub async fn run() {
     info!("Starting Red Eye traffic analyzer");
     println!("{:?}", config);
     
-    
+
     let config_clone = config.clone();
     let broker = config_clone.kafka_broker.clone();
     tokio::spawn(async move {

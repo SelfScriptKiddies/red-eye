@@ -90,6 +90,23 @@ pub struct ApplicationConfig {
     )]
     pub service_uuid: String,
 
+    /// Cache configuration
+    #[source(
+        clap(long, help="LRU cache capacity for streams"),
+        env = "CACHE_STREAMS_CAPACITY",
+        config = "cache.streams_capacity",
+        default = 1000
+    )]
+    pub cache_streams_capacity: usize,
+    
+    #[source(
+        clap(long, help="TTL for cached streams in seconds (0 means no TTL)"),
+        env = "CACHE_STREAMS_TTL_SECONDS",
+        config = "cache.streams_ttl_seconds",
+        default = 600
+    )]
+    pub cache_streams_ttl_seconds: u64,
+
     /// Logging configuration
     #[source(
         clap(short, long, help="Logging level (trace|debug|info|warn|error)"),
