@@ -20,7 +20,7 @@ pub struct PacketInfo {
 }
 
 /// Processes a pcap packet, extracting the payload and metadata
-pub fn process_packet(packet: Vec<u8>) -> Option<PacketInfo> {
+pub fn parse_packet(packet: Vec<u8>) -> Option<PacketInfo> {
     // Convert timestamp
     // let timestamp = (packet.header.ts.tv_sec as u64) * 1_000_000 + (packet.header.ts.tv_usec as u64);
     let timestamp = 0;

@@ -4,9 +4,8 @@ use rdkafka::error::KafkaResult;
 use rdkafka::message::Message;
 use log::{trace, debug, error, info, warn};
 use tokio::task;
-use crate::filters::apply_filters;
-use crate::ethernet::process_packet;
-
+use crate::ethernet::parse_packet;
+use crate::process_packet::process_packet;
 type LoggingConsumer = StreamConsumer;
 
 pub async fn create_consumer(brokers: &str) -> KafkaResult<LoggingConsumer> {
@@ -42,12 +41,10 @@ pub async fn consume_raw_packets(consumer: LoggingConsumer) {
                 // Processing packet in a separate task with cloned data
                 task::spawn(async move {
                     trace!("Processing packet of size {} bytes: {:?}", payload.len(), payload); 
-                    let parsed_packet = process_packet(payload);
+                    let parsed_packet = parse_packet(payload);
                     
                     if let Some(packet) = parsed_packet {
-                        debug!("Parsed packet: {:?}", packet);
-                        let triggers = apply_filters(&packet.payload);
-                        trace!("Triggers: {:?}", triggers);
+                        process_packet(packet);
                     }
                 });
 

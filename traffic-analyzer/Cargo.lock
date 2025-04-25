@@ -2453,6 +2453,7 @@ dependencies = [
  "colog",
  "config 0.15.9",
  "config-manager",
+ "hex",
  "log",
  "once_cell",
  "pcap",
