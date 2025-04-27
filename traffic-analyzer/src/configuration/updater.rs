@@ -2,9 +2,11 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use log::{error, info, warn, debug};
-use bincode::{config, Decode, Encode};
+use bincode::{config, Decode};
 use crate::filters::{add_filter, edit_filter, remove_filter};
-use crate::cache::SERVICES_CACHE;
+use std::sync::Arc;
+use std::sync::RwLock;
+use crate::cache;
 
 #[derive(Debug, Decode)]
 pub enum SettingsUpdate {
@@ -62,7 +64,7 @@ impl UpdateListener {
         }
     }
 
-    pub async fn listen_to_updates(self, topic: &str) {
+    pub async fn listen_to_updates(self, topic: &str, cache: Arc<cache::Cache>) {
         info!("Starting to consume packets from topic {}", topic);
         self.consumer.subscribe(&[topic]).expect("Failed to subscribe to topic");
     
@@ -90,15 +92,16 @@ impl UpdateListener {
                     match update.0 {
                         SettingsUpdate::ServiceAdd(service) => {
                             debug!("Received service add: {:?}", service);
-                            SERVICES_CACHE.add_service(update.1, service);
+                            cache.services.write().unwrap().insert(update.1, service);
+                            // add_service(update.1, service);
                         }
                         SettingsUpdate::ServiceUpdate(index, service) => {
                             debug!("Received service update: (id={}, service={:?})", index, service);
-                            SERVICES_CACHE.update_service(index, service);
+                            cache.services.write().unwrap().insert(index, service);
                         }
                         SettingsUpdate::ServiceRemove(index) => {
                             debug!("Received service remove: (id={})", index);
-                            SERVICES_CACHE.remove_service(index);
+                            cache.services.write().unwrap().remove(&index);
                         }
                         SettingsUpdate::FilterAdd(filter) => {
                             debug!("Received filter add: (id={}, filter={:?})", update.1, filter);

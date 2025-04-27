@@ -17,6 +17,9 @@ pub struct PacketInfo {
     pub src_port: Option<u16>,
     pub dst_ip: Option<IpAddr>,
     pub dst_port: Option<u16>,
+
+    pub stream_id: Option<usize>,
+    pub stream_closing: bool,
 }
 
 /// Processes a pcap packet, extracting the payload and metadata
@@ -101,11 +104,12 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
         let src_port = tcp_packet.get_source();
         let dst_port = tcp_packet.get_destination();
         let payload = tcp_packet.payload().to_vec();
+        let mut closing = false;
 
         // Check for RST or FIN/ACK flags
         if tcp_packet.get_flags() & TcpFlags::RST != 0 || 
            (tcp_packet.get_flags() & TcpFlags::FIN != 0 && tcp_packet.get_flags() & TcpFlags::ACK != 0) {
-            unimplemented!("Stream closing not implemented yet");
+            closing = true;
         }
 
         // Return information only if there is a payload
@@ -117,6 +121,8 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
                 src_port: Some(src_port),
                 dst_ip: Some(dst_ip),
                 dst_port: Some(dst_port),
+                stream_id: None,
+                stream_closing: closing,
             });
         }
     } else {
@@ -141,6 +147,8 @@ fn process_udp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
                 src_port: Some(src_port),
                 dst_ip: Some(dst_ip),
                 dst_port: Some(dst_port),
+                stream_id: None,
+                stream_closing: false,
             });
         }
     } else {

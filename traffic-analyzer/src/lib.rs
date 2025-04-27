@@ -7,19 +7,28 @@ pub mod cache;
 pub mod process_packet;
 use crate::configuration::init;
 use log::info;
+use std::sync::Arc;
+use std::time::Duration;
 
 pub async fn run() {
     let config = init();
     info!("Starting Red Eye traffic analyzer");
     println!("{:?}", config);
     
+    let broker = config.kafka_broker.clone();
+    let cache = Arc::new(
+        cache::Cache::new(config.cache_streams_capacity, Some(Duration::from_secs(config.cache_streams_ttl_seconds)))
+    );
 
-    let config_clone = config.clone();
-    let broker = config_clone.kafka_broker.clone();
-    tokio::spawn(async move {
-        let update_listener = configuration::updater::UpdateListener::new(&broker, &config_clone.service_uuid);
-        update_listener.listen_to_updates(&config_clone.kafka_updates_topic).await;
+    tokio::spawn({
+        let config = config.clone();
+        let cache = cache.clone();
+        async move {
+            let update_listener = configuration::updater::UpdateListener::new(&broker, &config.service_uuid);
+            update_listener.listen_to_updates(&config.kafka_updates_topic, cache).await;
+        }
     });
 
-    kafka::consume_raw_packets(kafka::create_consumer(&config.kafka_broker).await.unwrap()).await;
+    let consumer = kafka::create_consumer(&config.kafka_broker).await.unwrap();
+    kafka::consume_raw_packets(consumer, cache).await;
 }
