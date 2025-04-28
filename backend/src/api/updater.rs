@@ -7,6 +7,7 @@ use log::{error, info, warn, debug};
 use bincode::{config, Decode, Encode};
 use std::time::Duration;
 use crate::configuration::ApplicationConfig;
+pub use crate::api::updater::dto::FilterDirection;
 
 #[derive(Debug, Decode, Encode)]
 pub enum SettingsUpdate {
@@ -29,10 +30,18 @@ mod dto {
     };
 
     #[derive(Debug, Encode, Decode)]
+    pub enum FilterDirection {
+        Inbound,
+        Outbound,
+        Both
+    }
+
+    #[derive(Debug, Encode, Decode)]
     pub struct Filter {
         pub pattern_name: String,
         pub filter_type: String,
         pub filter_payload: Vec<u8>,
+        pub direction: FilterDirection,
     }
 
     impl From<tag_dto::TagName> for Filter {
@@ -41,6 +50,14 @@ mod dto {
                 pattern_name: tag_name.name,
                 filter_type: tag_name.template_type,
                 filter_payload: tag_name.template.as_bytes().to_vec(),
+                direction: {
+                    match tag_name.direction.to_lowercase().as_str() {
+                        "in" => FilterDirection::Inbound,
+                        "out" => FilterDirection::Outbound,
+                        "both" => FilterDirection::Both,
+                        _ => FilterDirection::Both,
+                    }
+                },
             }
         }
     }

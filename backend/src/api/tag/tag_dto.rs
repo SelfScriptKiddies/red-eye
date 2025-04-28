@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::api::updater::FilterDirection;
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema, Clone)]
 pub struct TagName {
@@ -7,6 +8,7 @@ pub struct TagName {
     pub color: i16,
     pub template_type: String,
     pub template: String,
+    pub direction: String
 }
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema)]
@@ -15,10 +17,11 @@ pub struct TagNameCreate {
     pub color: i16,
     pub template_type: String,
     pub template: String,
+    pub direction: String
 }
 
 
-
+/// Triggered tag, so filters found something
 #[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct Tag {
     pub id: i32,

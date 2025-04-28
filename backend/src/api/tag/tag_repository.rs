@@ -12,12 +12,13 @@ impl TagRepository {
 
     pub async fn create_tag_name(&self, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
-            "INSERT INTO tag_name (name, color, template_type, template) VALUES ($1, $2, $3, $4) RETURNING id, name, color, template_type, template"
+            "INSERT INTO tag_name (name, color, template_type, template, direction) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, color, template_type, template, direction"
         )
         .bind(tag_name.name)
         .bind(tag_name.color)
         .bind(tag_name.template_type)
         .bind(tag_name.template)
+        .bind(tag_name.direction)
         .fetch_one(&self.pool)
         .await
     }
@@ -35,7 +36,7 @@ impl TagRepository {
 
     pub async fn get_tag_name_by_id(&self, id: i32) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
-            "SELECT id, name, color, template_type, template FROM tag_name WHERE id = $1"
+            "SELECT id, name, color, template_type, template, direction FROM tag_name WHERE id = $1"
         )
         .bind(id)
         .fetch_one(&self.pool)
@@ -44,12 +45,13 @@ impl TagRepository {
 
     pub async fn update_tag_name(&self, id: i32, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
-            "UPDATE tag_name SET name = $1, color = $2, template_type = $3, template = $4 WHERE id = $5 RETURNING id, name, color, template_type, template"
+            "UPDATE tag_name SET name = $1, color = $2, template_type = $3, template = $4, direction = $5 WHERE id = $6 RETURNING id, name, color, template_type, template, direction"
         )
         .bind(tag_name.name)
         .bind(tag_name.color)
         .bind(tag_name.template_type)
         .bind(tag_name.template)
+        .bind(tag_name.direction)
         .bind(id)
         .fetch_one(&self.pool)
         .await
@@ -90,7 +92,7 @@ impl TagRepository {
 
     pub async fn get_all_tag_names(&self) -> Result<Vec<TagName>, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
-            "SELECT id, name, color, template_type, template FROM tag_name ORDER BY name"
+            "SELECT id, name, color, template_type, template, direction FROM tag_name ORDER BY name"
         )
         .fetch_all(&self.pool)
         .await
