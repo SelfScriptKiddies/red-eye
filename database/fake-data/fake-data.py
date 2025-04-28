@@ -35,9 +35,9 @@ def generate_protocol():
     """Generate random protocol"""
     return random.choice(['TCP', 'UDP'])
 
-def generate_packet_data():
+def generate_packet_data(packet_id: int):
     """Generate random packet data"""
-    return bytes([random.randint(0, 255) for _ in range(random.randint(20, 1500))])
+    return f"Packet {packet_id + 1}" # bytes([random.randint(0, 255) for _ in range(random.randint(20, 1500))])
 
 def generate_tag_name():
     """Generate random tag name"""
@@ -99,7 +99,7 @@ def insert_fake_tag_names(cursor):
             (
                 f"Tag {i + 1}",
                 random.randint(0, 360),
-                random.choice(['text', 'json']),
+                random.choice(['substr', 'bsubstr', 'regex']),
                 generate_template(),
                 random.choice(['in', 'out', 'both'])
             )
@@ -131,7 +131,7 @@ def insert_fake_streams(cursor, service_ids):
 def insert_fake_packets(cursor, stream_ids):
     """Insert fake packets into database"""
     packet_ids = []
-    for _ in range(PACKETS_COUNT):
+    for i in range(PACKETS_COUNT):
         timestamp = int((datetime.now() - timedelta(days=random.randint(0, 30))).timestamp() * 1000)
         cursor.execute(
             "INSERT INTO packets (timestamp, direction, stream_id, packet_data) "
@@ -140,7 +140,7 @@ def insert_fake_packets(cursor, stream_ids):
                 timestamp,
                 random.choice(['from', 'dest']),
                 random.choice(stream_ids),
-                generate_packet_data()
+                generate_packet_data(i)
             )
         )
         packet_ids.append(cursor.fetchone()[0])
