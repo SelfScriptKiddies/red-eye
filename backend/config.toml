@@ -6,8 +6,8 @@ password = "password"
 [database]
 host = "highres.team"
 port = 5432
-username = "user"
-password = "password"
+username = "red-eye-user"
+password = "7b375636c1c9ba28"
 schema = "red-eye"
 
 [kafka]

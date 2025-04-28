@@ -60,14 +60,14 @@ pub struct ApplicationConfig {
         clap(long, short='u', help="Database username", help_heading = "Database config"),
         env = "DB_USERNAME",
         config = "database.username",
-        default = "\"user\".to_string()")
+        default = "\"red-eye-user\".to_string()")
     ]
     pub db_username: String,
     #[source(
         clap(long, short='p', help="Database password", help_heading = "Database config"),
         env = "DB_PASSWORD",
         config = "database.password",
-        default = "\"user\".to_string()")
+        default = "\"7b375636c1c9ba28\".to_string()")
     ]
     pub db_password: String,
     #[source(
