@@ -24,11 +24,18 @@ pub enum SettingsUpdate {
 pub mod dto {
     use bincode::{Encode, Decode};
 
+    pub enum FilterDirection {
+        Inbound,
+        Outbound,
+        Both
+    }
+
     #[derive(Debug, Encode, Decode, Clone)]
     pub struct Filter {
         pub pattern_name: String,
         pub filter_type: String,
         pub filter_payload: Vec<u8>,
+        pub direction: FilterDirection,
     }
 
     #[derive(Debug, Encode, Decode, Clone)]

@@ -84,10 +84,10 @@ pub struct ApplicationConfig {
 
     /// Service UUID
     #[source(
-        clap(long="service-uuid", help="Service UUID", help_heading = "Service options"),
+        clap(long="service-uuid", help="Service UUID", long_help="UUID for registering in kafka - useful for debugging, mostly stays with default value", help_heading = "Service options"),
         env = "SERVICE_UUID",
         config = "service.uuid",
-        default = "uuid::Uuid::new_v4().to_string()"
+        default = uuid::Uuid::new_v4().to_string()
     )]
     pub service_uuid: String,
 
@@ -107,6 +107,15 @@ pub struct ApplicationConfig {
         default = 600
     )]
     pub cache_streams_ttl_seconds: u64,
+
+    /// Sniffer configuration
+    #[source(
+        clap(short='i', long="machine-ip", help="Machine IP address", help_heading = "Sniffer"),
+        env = "MACHINE_IP",
+        config = "sniffer.machine_ip",
+        default = "\"0.0.0.0\".to_string()"
+    )]
+    pub machine_ip: String,
 
     /// Logging configuration
     #[source(
