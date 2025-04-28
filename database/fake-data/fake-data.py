@@ -94,13 +94,14 @@ def insert_fake_tag_names(cursor):
     tag_name_ids = []
     for i in range(TAGS_COUNT):
         cursor.execute(
-            "INSERT INTO tag_name (name, color, template_type, template) "
-            "VALUES (%s, %s, %s, %s) RETURNING id",
+            "INSERT INTO tag_name (name, color, template_type, template, direction) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (
                 f"Tag {i + 1}",
                 random.randint(0, 360),
                 random.choice(['text', 'json']),
-                generate_template()
+                generate_template(),
+                random.choice(['in', 'out', 'both'])
             )
         )
         tag_name_ids.append(cursor.fetchone()[0])
