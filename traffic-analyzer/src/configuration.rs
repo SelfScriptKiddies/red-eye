@@ -20,7 +20,7 @@ pub struct ApplicationConfig {
         clap(long="db-host", short='H', help="Database domain", help_heading = "Database"),
         env = "DB_HOST",
         config = "database.host",
-        default = "\"db\".to_string()")
+        default = "db")
     ]
     pub db_host: String,
     #[source(
@@ -34,51 +34,51 @@ pub struct ApplicationConfig {
         clap(long="db-username", short='u', help="Database username", help_heading = "Database"),
         env = "DB_USERNAME",
         config = "database.username",
-        default = "\"red-eye-user\".to_string()")
+        default = "red-eye-user")
     ]
     pub db_username: String,
     #[source(
         clap(long="db-password", short='p', help="Database password", help_heading = "Database"),
         env = "DB_PASSWORD",
         config = "database.password",
-        default = "\"7b375636c1c9ba28\".to_string()")
+        default = "7b375636c1c9ba28")
     ]
     pub db_password: String,
     #[source(
         clap(long="db-schema", short='s', help="Database schema", help_heading = "Database"),
         env = "DB_SCHEMA",
         config = "database.schema",
-        default = "\"red-eye\".to_string()")
+        default = "red-eye")
     ]
     pub db_schema: String,
 
     /// Kafka config
     #[source(
         clap(long="kafka-host", short='b', help="Kafka broker host", help_heading = "Kafka"),
-            env = "KAFKA_HOST",
-            config = "kafka.host",
-            default = "\"kafka\".to_string()")
-        ]
+        env = "KAFKA_HOST",
+        config = "kafka.host",
+        default = "kafka")
+    ]
     pub kafka_broker: String,
     #[source(
         clap(long="kafka-raw-packets-topic", short='R', help="Kafka broker topic", help_heading = "Kafka"),
         env = "KAFKA_RAW_PACKETS_TOPIC",
         config = "kafka.raw_packets_topic",
-        default = "\"raw_packets\".to_string()")
+        default = "raw_packets")
     ]
     pub kafka_raw_packets_topic: String,
     #[source(
         clap(long="kafka-websocket-packets-topic", short='W', help="Kafka broker topic", help_heading = "Kafka"),
         env = "KAFKA_WS_TOPIC",
         config = "kafka.websocket_packets_topic",
-        default = "\"websocket_packets\".to_string()")
+        default = "websocket_packets")
     ]
     pub kafka_websocket_packets_topic: String,
     #[source(
         clap(long="kafka-updates-topic", short='U', help="Kafka broker topic", help_heading = "Kafka"),
         env = "KAFKA_UPDATES_TOPIC",
         config = "kafka.updates_topic",
-        default = "\"updates\".to_string()")
+        default = "updates")
     ]
     pub kafka_updates_topic: String,
 
@@ -113,7 +113,7 @@ pub struct ApplicationConfig {
         clap(short='i', long="machine-ip", help="Machine IP address", help_heading = "Sniffer"),
         env = "MACHINE_IP",
         config = "sniffer.machine_ip",
-        default = "\"0.0.0.0\".to_string()"
+        default = "0.0.0.0"
     )]
     pub machine_ip: String,
 
@@ -122,7 +122,7 @@ pub struct ApplicationConfig {
         clap(short='l', long="logging-level", help="Logging level (trace|debug|info|warn|error)", help_heading = "Logging"),
         env = "LOGGING_LEVEL",
         config = "logging.level",
-        default = "\"trace\".to_string()"
+        default = "trace"
     )]
     pub logging_level: String,
 }
