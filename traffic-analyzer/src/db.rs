@@ -57,41 +57,22 @@ impl DB {
         let packet_data_hex = hex::encode(packet_data);
         
         // Проверка наличия всех необходимых значений для поиска потока
-        match (&packet.src_ip, packet.src_port, &packet.dst_ip, packet.dst_port) {
-            (Some(src_ip), Some(src_port), Some(dst_ip), Some(dst_port)) => {
-                let stream_id = self.get_stream_id(
-                    &src_ip.to_string(), 
-                    src_port, 
-                    &dst_ip.to_string(), 
-                    dst_port
-                ).await;
-                
-                sqlx::query(
-                    "INSERT INTO packets (stream_id, packet_data, timestamp) VALUES ($1, $2, $3)"
-                )
-                .bind(stream_id.unwrap_or(0) as i32)
-                .bind(packet_data_hex)
-                .bind(packet.timestamp as i64)
-                .execute(&self.pgpool)
-                .await
-                .map(|_| ())
-            },
-            _ => {
-                // В случае отсутствия какого-либо из ключевых полей
-                // записываем пакет с stream_id = 0
-                sqlx::query(
-                    "INSERT INTO packets (stream_id, packet_data, timestamp) VALUES ($1, $2, $3)"
-                )
-                .bind(0 as i32)
-                .bind(packet_data_hex)
-                .bind(packet.timestamp as i64)
-                .execute(&self.pgpool)
-                .await
-                .map(|_| ())
-            }
-        }
+        
+        let stream_id = self.get_stream_id(
+            &packet.src_ip.to_string(), 
+            packet.src_port, 
+            &packet.dst_ip.to_string(), 
+            packet.dst_port
+        ).await;
+        
+        sqlx::query(
+            "INSERT INTO packets (stream_id, packet_data, timestamp) VALUES ($1, $2, $3)"
+        )
+        .bind(stream_id.unwrap_or(0) as i32)
+        .bind(packet_data_hex)
+        .bind(packet.timestamp as i64)
+        .execute(&self.pgpool)
+        .await
+        .map(|_| ())
     }
-
-
-    
 }
