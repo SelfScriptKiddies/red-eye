@@ -1,7 +1,7 @@
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
-use log::{error, info, warn, debug};
+use log::{error, info, warn, debug, trace};
 use bincode::{config, Decode};
 use crate::filters::{add_filter, edit_filter, remove_filter};
 use std::sync::Arc;
@@ -24,6 +24,7 @@ pub enum SettingsUpdate {
 pub mod dto {
     use bincode::{Encode, Decode};
 
+    #[derive(Debug, Encode, Decode, Clone)]
     pub enum FilterDirection {
         Inbound,
         Outbound,
@@ -96,9 +97,11 @@ impl UpdateListener {
                         }
                     };
 
+                    trace!("Received update: {:?}", update);
+
                     match update.0 {
                         SettingsUpdate::ServiceAdd(service) => {
-                            debug!("Received service add: {:?}", service);
+                            debug!("Received service add: {:?} with id {}", service, update.1);
                             cache.services.write().unwrap().insert(update.1, service);
                             // add_service(update.1, service);
                         }
