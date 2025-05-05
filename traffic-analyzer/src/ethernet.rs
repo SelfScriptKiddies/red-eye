@@ -13,10 +13,10 @@ use std::net::IpAddr;
 pub struct PacketInfo {
     pub payload: Vec<u8>,
     pub timestamp: u64,  // timestamp in microseconds
-    pub src_ip: Option<IpAddr>,
-    pub src_port: Option<u16>,
-    pub dst_ip: Option<IpAddr>,
-    pub dst_port: Option<u16>,
+    pub src_ip: IpAddr,
+    pub src_port: u16,
+    pub dst_ip: IpAddr,
+    pub dst_port: u16,
 
     pub stream_id: Option<usize>,
     pub stream_closing: bool,
@@ -117,10 +117,10 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
             return Some(PacketInfo {
                 payload,
                 timestamp,
-                src_ip: Some(src_ip),
-                src_port: Some(src_port),
-                dst_ip: Some(dst_ip),
-                dst_port: Some(dst_port),
+                src_ip: src_ip,
+                src_port: src_port,
+                dst_ip: dst_ip,
+                dst_port: dst_port,
                 stream_id: None,
                 stream_closing: closing,
             });
@@ -143,10 +143,10 @@ fn process_udp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
             return Some(PacketInfo {
                 payload,
                 timestamp,
-                src_ip: Some(src_ip),
-                src_port: Some(src_port),
-                dst_ip: Some(dst_ip),
-                dst_port: Some(dst_port),
+                src_ip: src_ip,
+                src_port: src_port,
+                dst_ip: dst_ip,
+                dst_port: dst_port,
                 stream_id: None,
                 stream_closing: false,
             });
