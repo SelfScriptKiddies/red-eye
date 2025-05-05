@@ -5,46 +5,64 @@ use log::{debug, trace};
 use std::sync::Arc;
 use crate::cache::Cache;
 use crate::configuration::updater::dto::FilterDirection;
+use crate::configuration::ApplicationConfig;
 
+#[derive(Debug)]
 enum Direction {
     Inbound,
     Outbound
 }
 
  pub struct PacketProcessor {
-    pub cache: Arc<Cache>
+    cache: Arc<Cache>,
+    config: Arc<ApplicationConfig>
  }
 
 impl PacketProcessor {
-    pub fn new(cache: Arc<Cache>) -> Self {
-        Self { cache }
+    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>) -> Self {
+        Self { cache, config }
     }
 
-    fn compare_ip(&self, filter_ip: String, got_ip: String) -> bool {
+    fn compare_ip(&self, filter_ip: &String, got_ip: &String) -> bool {
         filter_ip == got_ip || filter_ip == "0.0.0.0"
     }
 
-    fn find_service_and_direction(&self, packet: PacketInfo) -> Option<(usize, Direction)> {
+    fn find_service_and_direction(&self, packet: &PacketInfo) -> Option<(usize, Direction)> {
         let services = self.cache.services.read().unwrap();
         for (id, service) in services.iter() {
-            if self.compare_ip(service.ip, packet.src_ip) && service.port == packet.src_port {
-                return Some((id, Direction::Outbound));
+            if self.compare_ip(&self.config.machine_ip, &packet.src_ip.to_string()) && service.port == packet.src_port {
+                return Some((*id, Direction::Outbound));
             }
 
-            if self.compare_ip(service.ip, packet.dst_ip) && service.port == packet.dst_port {
-                return Some((id, Direction::Inbound));
+            if self.compare_ip(&self.config.machine_ip, &packet.dst_ip.to_string()) && service.port == packet.dst_port {
+                return Some((*id, Direction::Inbound));
             }
         }
         None
     }
     
-    fn find_stream_id(&self, packet: PacketInfo) -> Result<usize, Error> {
+    fn find_stream_id(&self, packet: &PacketInfo) -> Result<usize, Error> {
         // TODO: Implement this
         Ok(0)
     }
 
     pub fn process_packet(&self, packet: PacketInfo) -> Result<(), Error> {
         debug!("Parsed packet: {:?}", packet);
+        let mut packet_service_id: usize;
+        let mut packet_direction: Direction;
+        
+        match self.find_service_and_direction(&packet) {
+            Some((service_id, direction)) => {
+                packet_service_id = service_id;
+                packet_direction = direction;
+                debug!("Service ID: {:?}, Direction: {:?}", packet_service_id, packet_direction);
+            }
+            None => {
+                return Err(Error::new(std::io::ErrorKind::Other, "Service not found"));
+            }
+        }
+
+
         let triggers = apply_filters(&packet.payload);
         trace!("Triggers: {:?}", triggers);
         Ok(())
