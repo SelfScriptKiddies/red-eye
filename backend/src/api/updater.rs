@@ -145,7 +145,7 @@ impl UpdateAgent {
     // Filters
     pub async fn add_filter(&self, filter: dto::Filter, index: usize) -> Result<(), String> {
         debug!("Sending add filter: {:?}", filter);
-        self.send_update(SettingsUpdate::FilterAdd(filter), 0).await
+        self.send_update(SettingsUpdate::FilterAdd(filter), index).await
     }
     
     pub async fn update_filter(&self, index: usize, filter: dto::Filter) -> Result<(), String> {
