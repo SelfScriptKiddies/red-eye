@@ -45,23 +45,32 @@ impl PacketCatcher {
 
         info!("Started capturing on interface {} with filter: {}", self.interface, ports_filter);
 
-        let mut capture = cap;
         let kafka_client = self.kafka_client.clone();
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         self.active.store(true, Ordering::SeqCst);
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
+            let mut capture = cap;
             debug!("Thread, capturing the packets, started!");
             while active.load(Ordering::SeqCst) {
-                let packet = capture.next_packet().ok();
+                let packet: pcap::Packet<'_> = match capture.next_packet().ok() {
+                    Some(packet) => packet,
+                    None => {
+                        debug!("Got error while gathering packets, stopping...");
+                        break;
+                    }
+                };
 
-                if packet == None {
-                    debug!("Got error while gathering packets, stopping...");
-                    break
-                }
+                let payload = match bincode::encode_to_vec((packet.header.ts.tv_usec, packet.header.ts.tv_sec, packet.to_vec()), bincode::config::standard()) {
+                    Ok(bytes) => bytes,
+                    Err(e) => { 
+                        warn!("Error serializing: {}", e);
+                        continue;
+                    }
+                };
 
-                if tx.send(packet.unwrap().to_vec()).is_err() {
+                if tx.send(payload).is_err() {
                     warn!("Receiver dropped, stopping capture thread.");
                     break;
                 }
