@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;

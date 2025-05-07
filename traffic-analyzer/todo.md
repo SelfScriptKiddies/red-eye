@@ -1,5 +1,5 @@
-[ ] Stream caching (LRU cache)
-[ ] Service local storage
-[ ] Packet caching before sending?
-[ ] Recognize direction of packet
-[ ] Tag direction attribute
+[X] Stream caching (LRU cache)
+[X] Service local storage
+[X] Packet caching before sending?
+[X] Recognize direction of packet
+[X] Tag direction attribute

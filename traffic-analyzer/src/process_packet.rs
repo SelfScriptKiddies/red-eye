@@ -59,11 +59,15 @@ impl PacketProcessor {
                 packet.src_port,
             ),
         };
-            
-
+        
+        /*
+        Serious bottleneck - only 1 thread can lock the cache at a time and request database. 
+        If not, we can get race condition - 2 threads won't find the same stream id and will create a new one => we will get duplicate.
+         */
+        let mut stream_local_cache = self.cache.streams.lock().await;
         // First trying local cache
         // TODO: check the error
-        if let Some(stream_id) = self.cache.streams.lock().unwrap().get(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port) {
+        if let Some(stream_id) = stream_local_cache.get(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port) {
             return Ok(stream_id);
         }
 
@@ -77,7 +81,7 @@ impl PacketProcessor {
                                         .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
         
         // And insert into cache
-        self.cache.streams.lock().unwrap().insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+        stream_local_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
         Ok(stream_id)
         
     }
