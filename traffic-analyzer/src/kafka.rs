@@ -10,6 +10,7 @@ use crate::ethernet::parse_packet;
 use crate::process_packet::PacketProcessor;
 use crate::configuration::ApplicationConfig;
 use crate::db::DB;
+use bincode;
 type LoggingConsumer = StreamConsumer;
 
 pub async fn create_consumer(brokers: &str) -> KafkaResult<LoggingConsumer> {
@@ -49,7 +50,15 @@ pub async fn consume_raw_packets(consumer: LoggingConsumer, cache: Arc<Cache>, c
                 let processor_clone = packet_processor.clone();
                 task::spawn(async move {
                     trace!("Processing packet of size {} bytes: {:?}", payload.len(), payload); 
-                    let parsed_packet = parse_packet(payload);
+                    let packet: (i64, i64, Vec<u8>) = match bincode::decode_from_slice(&payload, bincode::config::standard()) {
+                        Ok((u, _)) => u,
+                        Err(e) => {
+                            error!("Error decoding new packet: {}", e);
+                            return;
+                        }
+                    };
+                    let timestamp: u64 = (packet.0 / 1000) as u64 + (packet.1 * 1000) as u64;
+                    let parsed_packet = parse_packet(timestamp, packet.2);
                     
                     if let Some(packet) = parsed_packet {
                         processor_clone.process_packet(packet).await.unwrap_or_else(|e| {
