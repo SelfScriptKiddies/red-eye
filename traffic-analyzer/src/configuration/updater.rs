@@ -90,7 +90,7 @@ impl UpdateListener {
                     };
                     
                     let update: (SettingsUpdate, usize) = match bincode::decode_from_slice(&payload, config::standard()) {
-                        Ok(u) => u,
+                        Ok((u, _)) => u,
                         Err(e) => {
                             error!("Error decoding update: {}", e);
                             continue;

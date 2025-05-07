@@ -47,22 +47,12 @@ impl PacketProcessor {
     }
 
     pub fn process_packet(&self, packet: PacketInfo) -> Result<(), Error> {
-        debug!("Parsed packet: {:?}", packet);
-        let mut packet_service_id: usize;
-        let mut packet_direction: Direction;
+        // Find service and direction
+        let (service_id, direction) = self.find_service_and_direction(&packet)
+                                                            .ok_or(Error::new(std::io::ErrorKind::Other, "Service not found"))?;
+
+        debug!("Processing packet: \nService ID: {:?}\nDirection: {:?}", service_id, direction);
         
-        match self.find_service_and_direction(&packet) {
-            Some((service_id, direction)) => {
-                packet_service_id = service_id;
-                packet_direction = direction;
-                debug!("Service ID: {:?}, Direction: {:?}", packet_service_id, packet_direction);
-            }
-            None => {
-                return Err(Error::new(std::io::ErrorKind::Other, "Service not found"));
-            }
-        }
-
-
         let triggers = apply_filters(&packet.payload);
         trace!("Triggers: {:?}", triggers);
         Ok(())
