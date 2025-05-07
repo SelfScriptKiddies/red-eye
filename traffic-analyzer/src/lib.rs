@@ -16,7 +16,7 @@ pub async fn run() {
     println!("{:?}", config);
     
     let cache = Arc::new(
-        cache::Cache::new(config.cache_streams_capacity, Some(Duration::from_secs(config.cache_streams_ttl_seconds)))
+        cache::Cache::new(config.cache_streams_capacity)
     );
 
     tokio::spawn({

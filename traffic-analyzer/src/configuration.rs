@@ -99,14 +99,6 @@ pub struct ApplicationConfig {
         default = 1000
     )]
     pub cache_streams_capacity: usize,
-    
-    #[source(
-        clap(long="cache-streams-ttl-seconds", help="TTL for cached streams in seconds (0 means no TTL)", help_heading = "Cache"),
-        env = "CACHE_STREAMS_TTL_SECONDS",
-        config = "cache.streams_ttl_seconds",
-        default = 600
-    )]
-    pub cache_streams_ttl_seconds: u64,
 
     /// Sniffer configuration
     #[source(

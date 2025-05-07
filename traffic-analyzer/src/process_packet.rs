@@ -42,7 +42,13 @@ impl PacketProcessor {
     }
     
     fn find_stream_id(&self, packet: &PacketInfo) -> Result<usize, Error> {
-        // TODO: Implement this
+        // First trying local cache
+        if let Some(stream_id) = self.cache.streams.lock().unwrap().get(&packet.src_ip.to_string(), packet.src_port, &packet.dst_ip.to_string(), packet.dst_port) {
+            return Ok(stream_id);
+        }
+
+        // If not found, trying to find in database
+        // let stream_id = self.db.get_stream_id(&packet.src_ip.to_string(), packet.src_port, &packet.dst_ip.to_string(), packet.dst_port);
         Ok(0)
     }
 
