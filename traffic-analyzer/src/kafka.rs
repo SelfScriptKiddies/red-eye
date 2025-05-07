@@ -9,7 +9,7 @@ use crate::cache::Cache;
 use crate::ethernet::parse_packet;
 use crate::process_packet::PacketProcessor;
 use crate::configuration::ApplicationConfig;
-
+use crate::db::DB;
 type LoggingConsumer = StreamConsumer;
 
 pub async fn create_consumer(brokers: &str) -> KafkaResult<LoggingConsumer> {
@@ -25,11 +25,11 @@ pub async fn create_consumer(brokers: &str) -> KafkaResult<LoggingConsumer> {
     Ok(consumer)
 }
 
-pub async fn consume_raw_packets(consumer: LoggingConsumer, cache: Arc<Cache>, config: Arc<ApplicationConfig>) {
+pub async fn consume_raw_packets(consumer: LoggingConsumer, cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB) {
     info!("Starting to consume packets from topic raw_packets");
     consumer.subscribe(&["raw_packets"]).expect("Failed to subscribe to topic");
 
-    let packet_processor = Arc::new(PacketProcessor::new(cache, config));
+    let packet_processor = Arc::new(PacketProcessor::new(cache, config, db));
 
     loop {
         match consumer.recv().await {
@@ -52,7 +52,7 @@ pub async fn consume_raw_packets(consumer: LoggingConsumer, cache: Arc<Cache>, c
                     let parsed_packet = parse_packet(payload);
                     
                     if let Some(packet) = parsed_packet {
-                        processor_clone.process_packet(packet).unwrap_or_else(|e| {
+                        processor_clone.process_packet(packet).await.unwrap_or_else(|e| {
                             error!("Error processing packet: {}", e);
                         });
                     }

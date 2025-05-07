@@ -1,5 +1,5 @@
 use crate::filters::filterDTO::{Filter, FilterTrigger};
-use log::debug;
+use log::trace;
 
 pub struct SubstrFilter {
     id: usize,
@@ -38,7 +38,7 @@ impl Filter for SubstrFilter {
             }
         }
         
-        debug!("Checking packet for substring '{}': {} matches found", 
+        trace!("Checking packet for substring '{}': {} matches found", 
                self.pattern_name, triggers.len());
         
         triggers

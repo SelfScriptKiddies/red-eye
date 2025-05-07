@@ -1,6 +1,6 @@
 use regex::Regex;
 use crate::filters::filterDTO::Filter;
-use log::{debug, error};
+use log::{trace, debug, error};
 
 pub struct RegexFilter {
     id: usize,
@@ -46,7 +46,7 @@ impl Filter for RegexFilter {
                     });
                 }
                 
-                debug!("Checking packet with regex '{}': {} matches found", 
+                trace!("Checking packet with regex '{}': {} matches found", 
                        self.pattern_name, triggers.len());
             },
             Err(_) => {

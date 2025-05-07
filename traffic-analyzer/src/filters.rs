@@ -14,9 +14,9 @@ use crate::filters::substr::SubstrFilter;
 // Global storage for filters
 pub static PACKET_FILTERS: Lazy<RwLock<Vec<Box<dyn Filter>>>> = Lazy::new(|| {
     RwLock::new(vec![
-        Box::new(RegexFilter::new(1, "regex_filter", "GET /\\w*").unwrap()),
-        Box::new(BinarySubstrFilter::new(2, "binary_substr_filter", b"1234567890")),
-        Box::new(SubstrFilter::new(3, "substr_filter", b"1234567890")),
+        // Box::new(RegexFilter::new(1, "regex_filter", "GET /\\w*").unwrap()),
+        // Box::new(BinarySubstrFilter::new(2, "binary_substr_filter", b"1234567890")),
+        // Box::new(SubstrFilter::new(3, "substr_filter", b"1234567890")),
     ])
 });
 
@@ -70,14 +70,14 @@ pub fn edit_filter(index: usize, pattern_name: String, pattern_type: String, pay
 }
 
 // Function to apply all filters to a packet
-pub fn apply_filters(packet: &[u8]) -> Vec<(String, Vec<filterDTO::FilterTrigger>)> {
+pub fn apply_filters(packet: &[u8]) -> Vec<(usize, Vec<filterDTO::FilterTrigger>)> {
     let filters = PACKET_FILTERS.read().unwrap();
-    let mut results: Vec<(String, Vec<filterDTO::FilterTrigger>)> = Vec::new();
+    let mut results: Vec<(usize, Vec<filterDTO::FilterTrigger>)> = Vec::new();
     
     for filter in filters.iter() {
         let triggers = filter.processed(packet);
         if !triggers.is_empty() {
-            results.push((filter.get_pattern_name(), triggers));
+            results.push((filter.get_id(), triggers));
         }
     }
     
