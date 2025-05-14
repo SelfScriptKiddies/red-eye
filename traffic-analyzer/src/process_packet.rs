@@ -4,7 +4,7 @@ use crate::filters::apply_filters;
 use log::{debug, trace};
 use std::sync::Arc;
 use crate::cache::Cache;
-use crate::configuration::updater::dto::FilterDirection;
+use crate::cache::streams::StreamsCache;
 use crate::configuration::ApplicationConfig;
 use crate::db::DB;
 
@@ -60,6 +60,15 @@ impl PacketProcessor {
             ),
         };
         
+        let key = StreamsCache::format_key(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port);
+
+        // Fast lookup
+        if let Some(id) = self.cache.streams.lock().await.get_by_key(&key) {
+            return Ok(id);
+        }
+
+        
+
         /*
         Serious bottleneck - only 1 thread can lock the cache at a time and request database. 
         If not, we can get race condition - 2 threads won't find the same stream id and will create a new one => we will get duplicate.

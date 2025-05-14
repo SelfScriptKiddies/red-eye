@@ -12,14 +12,17 @@ impl StreamsCache {
         }
     }
 
-    fn format_key(first_ip: &str, first_port: u16, second_ip: &str, second_port: u16) -> String {
+    pub fn format_key(first_ip: &str, first_port: u16, second_ip: &str, second_port: u16) -> String {
         format!("{}:{}-{}:{}", first_ip, first_port, second_ip, second_port)
     }
 
     pub fn get(&mut self, first_ip: &str, first_port: u16, second_ip: &str, second_port: u16) -> Option<usize> {
         let key = Self::format_key(first_ip, first_port, second_ip, second_port);
+        self.get_by_key(&key)
+    }
 
-        match self.cache.get(&key) {
+    pub fn get_by_key(&mut self, key: &str) -> Option<usize> {
+        match self.cache.get(key) {
             Some(value) => {
                 trace!("Found stream id for key: {}", key);
                 Some(*value)
