@@ -31,7 +31,7 @@ impl PacketRepository {
             SELECT id, timestamp, direction, stream_id, packet_data
             FROM packets
             WHERE stream_id = $1
-            ORDER BY timestamp
+            ORDER BY timestamp, timestamp_microseconds
             "#)
             .bind(stream_id)
             .fetch_all(&self.pgpool)
@@ -51,7 +51,7 @@ impl PacketRepository {
         }
 
         query_builder
-            .push("ORDER BY p.timestamp DESC LIMIT ")
+            .push("ORDER BY p.timestamp DESC, p.timestamp_microseconds DESC LIMIT ")
             .push_bind(limit as i32);
 
         query_builder
