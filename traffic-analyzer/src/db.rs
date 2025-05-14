@@ -93,9 +93,10 @@ impl DB {
         };
         
         sqlx::query(
-            "INSERT INTO packets (timestamp, direction, stream_id, packet_data) VALUES ($1, $2, $3, $4) RETURNING id"
+            "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES ($1, $2, $3, $4, $5) RETURNING id"
         )
-        .bind(packet.timestamp as i64)
+        .bind(packet.timestamp_seconds as i64)
+        .bind(packet.timestamp_microseconds as i64)
         .bind(direction_str)
         .bind(stream_id as i32)
         .bind(&packet.payload)

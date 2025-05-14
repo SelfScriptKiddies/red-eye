@@ -26,7 +26,8 @@ pub enum IpVersion {
 #[derive(Debug, Clone)]
 pub struct PacketInfo {
     pub payload: Vec<u8>,
-    pub timestamp: u64,  // timestamp in microseconds
+    pub timestamp_seconds: u64,  // seconds
+    pub timestamp_microseconds: u64, // microseconds
     pub src_ip: IpAddr,
     pub src_port: u16,
     pub dst_ip: IpAddr,
@@ -38,7 +39,7 @@ pub struct PacketInfo {
 }
 
 /// Processes a pcap packet, extracting the payload and metadata
-pub fn parse_packet(timestamp: u64, packet: Vec<u8>) -> Option<PacketInfo> {
+pub fn parse_packet(timestamp: (u64, u64), packet: Vec<u8>) -> Option<PacketInfo> {
     // Convert timestamp
     // let timestamp = 0;
     
@@ -63,7 +64,7 @@ pub fn parse_packet(timestamp: u64, packet: Vec<u8>) -> Option<PacketInfo> {
 }
 
 /// Processing IPv4 packet
-fn process_ipv4_packet(packet_data: &[u8], timestamp: u64) -> Option<PacketInfo> {
+fn process_ipv4_packet(packet_data: &[u8], timestamp: (u64, u64)) -> Option<PacketInfo> {
     if let Some(ipv4_packet) = Ipv4Packet::new(packet_data) {
         let src_ip = IpAddr::V4(ipv4_packet.get_source());
         let dst_ip = IpAddr::V4(ipv4_packet.get_destination());
@@ -88,7 +89,7 @@ fn process_ipv4_packet(packet_data: &[u8], timestamp: u64) -> Option<PacketInfo>
 }
 
 /// Processing IPv6 packet
-fn process_ipv6_packet(packet_data: &[u8], timestamp: u64) -> Option<PacketInfo> {
+fn process_ipv6_packet(packet_data: &[u8], timestamp: (u64, u64)) -> Option<PacketInfo> {
     if let Some(ipv6_packet) = Ipv6Packet::new(packet_data) {
         let src_ip = IpAddr::V6(ipv6_packet.get_source());
         let dst_ip = IpAddr::V6(ipv6_packet.get_destination());
@@ -113,7 +114,7 @@ fn process_ipv6_packet(packet_data: &[u8], timestamp: u64) -> Option<PacketInfo>
 }
 
 /// Processing TCP packet
-fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip: IpAddr, ip_version: IpVersion) -> Option<PacketInfo> {
+fn process_tcp_packet(packet_data: &[u8], timestamp: (u64, u64), src_ip: IpAddr, dst_ip: IpAddr, ip_version: IpVersion) -> Option<PacketInfo> {
     if let Some(tcp_packet) = TcpPacket::new(packet_data) {
         let src_port = tcp_packet.get_source();
         let dst_port = tcp_packet.get_destination();
@@ -130,7 +131,8 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
         if !payload.is_empty() {
             return Some(PacketInfo {
                 payload,
-                timestamp,
+                timestamp_seconds: timestamp.1,
+                timestamp_microseconds: timestamp.0,
                 src_ip: src_ip,
                 src_port: src_port,
                 dst_ip: dst_ip,
@@ -148,7 +150,7 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
 }
 
 /// Processing UDP packet
-fn process_udp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip: IpAddr, ip_version: IpVersion) -> Option<PacketInfo> {
+fn process_udp_packet(packet_data: &[u8], timestamp: (u64, u64), src_ip: IpAddr, dst_ip: IpAddr, ip_version: IpVersion) -> Option<PacketInfo> {
     if let Some(udp_packet) = UdpPacket::new(packet_data) {
         let src_port = udp_packet.get_source();
         let dst_port = udp_packet.get_destination();
@@ -158,7 +160,8 @@ fn process_udp_packet(packet_data: &[u8], timestamp: u64, src_ip: IpAddr, dst_ip
         if !payload.is_empty() {
             return Some(PacketInfo {
                 payload,
-                timestamp,
+                timestamp_seconds: timestamp.1,
+                timestamp_microseconds: timestamp.0,
                 src_ip: src_ip,
                 src_port: src_port,
                 dst_ip: dst_ip,

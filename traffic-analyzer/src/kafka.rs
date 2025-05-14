@@ -57,8 +57,8 @@ pub async fn consume_raw_packets(consumer: LoggingConsumer, cache: Arc<Cache>, c
                             return;
                         }
                     };
-                    let timestamp: u64 = (packet.0 / 1000) as u64 + (packet.1 * 1000) as u64;
-                    let parsed_packet = parse_packet(timestamp, packet.2);
+                    // packet.0 = usec, packet.1 = sec
+                    let parsed_packet = parse_packet((packet.0 as u64, packet.1 as u64), packet.2);
                     
                     if let Some(packet) = parsed_packet {
                         processor_clone.process_packet(packet).await.unwrap_or_else(|e| {
