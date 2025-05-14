@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS packets (
     id SERIAL PRIMARY KEY,
     timestamp BIGINT NOT NULL,
+    timestamp_microseconds BIGINT NOT NULL,
     direction VARCHAR(4) NOT NULL, -- from dest/orig
     stream_id INTEGER NOT NULL,
     packet_data BYTEA NOT NULL,
