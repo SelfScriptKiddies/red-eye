@@ -1,8 +1,8 @@
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::message::Message;
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::util::Timeout;
+use async_nats::{
+    ConnectOptions, 
+    Client, 
+    jetstream::{self, stream, consumer::{pull, AckPolicy}}
+};
 use log::{error, info, warn, debug};
 use bincode::{config, Decode, Encode};
 use std::time::Duration;
@@ -89,21 +89,22 @@ mod dto {
 }
 
 pub struct UpdateAgent {
-    producer: FutureProducer,
+    producer: Client,
     topic: String,
 }
 
 impl UpdateAgent {
-    pub fn new(config: &ApplicationConfig) -> Self {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", config.kafka_broker.as_str())
-            .set("message.timeout.ms", "5000")
-            .create()
-            .expect("Error creating Kafka producer");
+    pub async fn new(config: &ApplicationConfig) -> Self {
+        let producer = ConnectOptions::with_user_and_password(
+            config.nats_login.clone(), 
+            config.nats_password.clone())
+            .connect(config.nats_broker.clone())
+            .await
+            .expect("Error connecting to NATS");
             
         UpdateAgent { 
             producer,
-            topic: config.kafka_settings_topic.clone(),
+            topic: config.nats_settings_topic.clone(),
         }
     }
     
@@ -113,14 +114,9 @@ impl UpdateAgent {
             Err(e) => return Err(format!("Error serializing: {}", e)),
         };
         
-        match self.producer.send(
-            FutureRecord::to(&self.topic)
-                .payload(&payload)
-                .key("settings"), // Use "settings" as key
-            Timeout::After(Duration::from_secs(5)),
-        ).await {
+        match self.producer.publish(self.topic.clone(), payload.into()).await {
             Ok(_) => Ok(()),
-            Err((e, _)) => Err(format!("Error sending: {}", e)),
+            Err(e) => Err(format!("Error sending: {}", e)),
         }
     }
     

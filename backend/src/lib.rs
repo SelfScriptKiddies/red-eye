@@ -63,7 +63,7 @@ pub async fn run() -> std::io::Result<()> {
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
-    let updater = web::Data::new(UpdateAgent::new(&config));
+    let updater = web::Data::new(UpdateAgent::new(&config).await);
     debug!("{:?}", &config);
 
     HttpServer::new(move || {

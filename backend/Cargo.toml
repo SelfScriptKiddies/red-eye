@@ -32,7 +32,8 @@ strum_macros = "0.26.4"
 utoipa = { version = "5", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
 bincode = "2.0.1"
-rdkafka = "0.37.0"
 actix-ws = "0.3.0"
 futures-util = "0.3.31"
 actix = "0.13.5"
+async-nats = "0.42.0"
+anyhow = "1.0.98"
