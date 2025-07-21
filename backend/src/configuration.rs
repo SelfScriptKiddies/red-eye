@@ -7,7 +7,7 @@ use config_manager::config;
         format = "toml",
         clap(long = "config", short = 'c', help = "path to configuration file"),
         env = "demo_config",
-        optional=true
+        optional
     )
 )]
 pub struct ApplicationConfig {
@@ -60,53 +60,67 @@ pub struct ApplicationConfig {
         clap(long, short='u', help="Database username", help_heading = "Database config"),
         env = "DB_USERNAME",
         config = "database.username",
-        default = "\"red-eye-user\".to_string()")
+        default = "username".to_string())
     ]
     pub db_username: String,
     #[source(
         clap(long, short='p', help="Database password", help_heading = "Database config"),
         env = "DB_PASSWORD",
         config = "database.password",
-        default = "\"7b375636c1c9ba28\".to_string()")
+        default = "password".to_string())
     ]
     pub db_password: String,
     #[source(
         clap(long, short='s', help="Database schema", help_heading = "Database config"),
         env = "DB_SCHEMA",
         config = "database.schema",
-        default = "\"red-eye\".to_string()")
+        default = "red-eye".to_string())
     ]
     pub db_schema: String,
 
-    /// Kafka config
+    /// NATS config
     #[source(
-        clap(long, short='b', help="Kafka broker host", help_heading = "Kafka config"),
-        env = "KAFKA_HOST",
-        config = "kafka.host",
-        default = "\"kafka\".to_string()")
+        clap(long, short='b', help="NATS broker host", help_heading = "NATS config"),
+        env = "NATS_HOST",
+        config = "nats.host",
+        default = "nats:4222".to_string())
     ]
-    pub kafka_broker: String,
+    pub nats_broker: String,
     #[source(
-        clap(long, short='R', help="Kafka raw packets topic", help_heading = "Kafka config"),
-        env = "KAFKA_RAW_PACKETS_TOPIC",
-        config = "kafka.raw_packets_topic",
-        default = "\"raw_packets\".to_string()")
+        clap(long, short='l', help="NATS login", help_heading = "NATS config"),
+        env = "NATS_LOGIN",
+        config = "nats.login",
+        default = "username".to_string())
     ]
-    pub kafka_raw_packets_topic: String,
+    pub nats_login: String,
     #[source(
-        clap(long, short='S', help="Kafka settings topic", help_heading = "Kafka config"),
-        env = "KAFKA_SETTINGS_TOPIC",
-        config = "kafka.settings_topic",
-        default = "\"updates\".to_string()")
+        clap(long, short='p', help="NATS password", help_heading = "NATS config"),
+        env = "NATS_PASSWORD",
+        config = "nats.password",
+        default = "password".to_string())
     ]
-    pub kafka_settings_topic: String,
+    pub nats_password: String,
+    #[source(
+        clap(long, short='R', help="NATS websocket topic", help_heading = "NATS config"),
+        env = "NATS_WEBSOCKET_TOPIC",
+        config = "nats.websocket_topic",
+        default = "raw_packets".to_string())
+    ]
+    pub nats_websocket_topic: String,
+    #[source(
+        clap(long, short='S', help="NATS settings topic", help_heading = "NATS config"),
+        env = "NATS_SETTINGS_TOPIC",
+        config = "nats.settings_topic",
+        default = "updates".to_string())
+    ]
+    pub nats_settings_topic: String,
 
     /// Logging configuration
     #[source(
         clap(short, long, help="Logging level (trace|debug|info|warn|error)", help_heading = "Logging config"),
         env = "LOGGING_LEVEL",
         config = "logging.level",
-        default = "\"trace\".to_string()"
+        default = "trace".to_string()
     )]
     pub logging_level: String,
 }
