@@ -19,7 +19,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp }:
                 {/* <span className="packet-id">#{id}</span> */}
                 <span className="packet-time">{formattedTime}</span>
                 <span className={`packet-direction ${direction}`}>
-                    {direction === 'orig' ? '← От сервера' : '→ К серверу'}
+                    {direction === 'orig' ? '← Исходящий' : '→ Входящий'}
                 </span>
             </div>
             <div className="packet-body">
