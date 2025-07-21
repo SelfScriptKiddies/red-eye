@@ -1,10 +1,8 @@
 [package]
 name = "backend"
 version = "0.1.0"
-authors = [
-    "TonySD"
-]
-edition = "2021"
+authors = ["TonySD", "GreenHaze"]
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -22,7 +20,12 @@ colog = "1.3.0"
 config-manager = "0.2.1"
 config = "0.15.5"
 log = "0.4.22"
-sqlx = { version = "0.8.3", features = ["postgres", "macros", "runtime-tokio-rustls", "ipnetwork"] }
+sqlx = { version = "0.8.3", features = [
+    "postgres",
+    "macros",
+    "runtime-tokio-rustls",
+    "ipnetwork",
+] }
 base64 = "0.22.1"
 strum = "0.26.3"
 strum_macros = "0.26.4"
@@ -30,3 +33,6 @@ utoipa = { version = "5", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
 bincode = "2.0.1"
 rdkafka = "0.37.0"
+actix-ws = "0.3.0"
+futures-util = "0.3.31"
+actix = "0.13.5"
