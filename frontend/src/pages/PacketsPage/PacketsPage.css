@@ -112,3 +112,8 @@
     text-align: center;
     overflow-y: auto;
 }
+.clear-button {
+    margin: 10px;
+    width: calc(100% - 20px);
+    transition: 0.15s;
+}

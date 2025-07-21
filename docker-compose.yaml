@@ -6,60 +6,23 @@ services:
     env_file:
       - .env
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - ./volume/postgres:/var/lib/postgresql/data
     ports:
       - "5432:5432"
 
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+  nats:
+    image: nats:alpine
+    container_name: nats
+    restart: always
+    command: -c /etc/nats/nats.conf
     ports:
-      - 2181:2181
-
-  kafka:
-    image: confluentinc/cp-kafka:latest
-    depends_on:
-      - zookeeper
-    ports:
-      - 9092:9092
-    hostname: kafka
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      # Replication reduce
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
-
-  kafka-init:
-    image: confluentinc/cp-kafka:latest
-    depends_on:
-      - kafka
-    restart: "no"
-    profiles: ["init"]
-    deploy:
-      restart_policy:
-        condition: on-failure
-        max_attempts: 5
-    labels:
-      - "com.docker.compose.rm=true"
-    entrypoint: [ "bash", "-c" ]
-    command: >
-      "
-        echo 'Waiting for Kafka to be ready...' &&
-        cub kafka-ready -b kafka:9092 1 30 && 
-        echo 'Creating Kafka topics...' &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic raw_packets &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic settings_update &&
-        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic new_packets &&
-        echo 'Kafka topics created.'
-      "
+      - "4222:4222" # client port
+      # - "6222:6222" # cluster port
+      - "8222:8222" # monitoring port
+    volumes:
+      - ./message-broker/nats.conf:/etc/nats/nats.conf
+      - ./volume/nats:/data
+      
 
   # backend:
   #   build:
@@ -106,6 +69,3 @@ services:
   #   depends_on:
   #     - kafka
       # - db
-
-volumes:
-  db_data:

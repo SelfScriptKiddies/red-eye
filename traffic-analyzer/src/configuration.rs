@@ -54,33 +54,47 @@ pub struct ApplicationConfig {
 
     /// Kafka config
     #[source(
-        clap(long="kafka-host", short='b', help="Kafka broker host", help_heading = "Kafka"),
-        env = "KAFKA_HOST",
-        config = "kafka.host",
-        default = "kafka")
+        clap(long="nats-host", short='b', help="NATS broker host", help_heading = "NATS"),
+        env = "NATS_HOST",
+        config = "nats.host",
+        default = "nats")
     ]
-    pub kafka_broker: String,
+    pub nats_host: String,
     #[source(
-        clap(long="kafka-raw-packets-topic", short='R', help="Kafka broker topic", help_heading = "Kafka"),
-        env = "KAFKA_RAW_PACKETS_TOPIC",
-        config = "kafka.raw_packets_topic",
+        clap(long="nats-login", help="NATS login", help_heading = "NATS"),
+        env = "NATS_LOGIN",
+        config = "nats.login",
+        default = "user")
+    ]
+    pub nats_login: String,
+    #[source(
+        clap(long="nats-password", help="NATS password", help_heading = "NATS"),
+        env = "NATS_PASSWORD",
+        config = "nats.password",
+        default = "password")
+    ]
+    pub nats_password: String,
+    #[source(
+        clap(long="nats-raw-packets-topic", short='R', help="NATS broker topic", help_heading = "NATS"),
+        env = "NATS_RAW_PACKETS_TOPIC",
+        config = "nats.raw_packets_topic",
         default = "raw_packets")
     ]
-    pub kafka_raw_packets_topic: String,
+    pub nats_raw_packets_topic: String,
     #[source(
-        clap(long="kafka-websocket-packets-topic", short='W', help="Kafka broker topic", help_heading = "Kafka"),
-        env = "KAFKA_WS_TOPIC",
-        config = "kafka.websocket_packets_topic",
+        clap(long="nats-websocket-packets-topic", short='W', help="NATS broker topic", help_heading = "NATS"),
+        env = "NATS_WS_TOPIC",
+        config = "nats.websocket_packets_topic",
         default = "websocket_packets")
     ]
-    pub kafka_websocket_packets_topic: String,
+    pub nats_websocket_packets_topic: String,
     #[source(
-        clap(long="kafka-updates-topic", short='U', help="Kafka broker topic", help_heading = "Kafka"),
-        env = "KAFKA_UPDATES_TOPIC",
-        config = "kafka.updates_topic",
+        clap(long="nats-updates-topic", short='U', help="NATS broker topic", help_heading = "NATS"),
+        env = "NATS_UPDATES_TOPIC",
+        config = "nats.updates_topic",
         default = "updates")
     ]
-    pub kafka_updates_topic: String,
+    pub nats_updates_topic: String,
 
     /// Service UUID
     #[source(
