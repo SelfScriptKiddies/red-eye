@@ -1,20 +1,21 @@
-pub(crate) mod packet;
-pub(crate) mod stream;
 pub mod auth;
-pub mod tag;
+pub(crate) mod packet;
+pub mod realtime;
 pub mod service;
+pub(crate) mod stream;
+pub mod tag;
 pub mod updater;
-use utoipa::OpenApi;
 use actix_web::web;
+use utoipa::OpenApi;
 
 pub fn api_config(cfg: &mut web::ServiceConfig) {
-    cfg
-        .service(
-            web::scope("/api")
-                .configure(packet::packet_config)
-                .configure(stream::stream_config)
-                .configure(tag::tag_config)
-                .configure(service::config)
+    cfg.service(
+        web::scope("/api")
+            .configure(packet::packet_config)
+            .configure(stream::stream_config)
+            .configure(tag::tag_config)
+            .configure(service::config)
+            .configure(realtime::config),
     );
 }
 
