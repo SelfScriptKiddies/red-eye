@@ -1,6 +1,6 @@
-FROM rust:1.84.0 as builder
+FROM rust:1.88.0-slim as builder
 
-RUN apt update && apt upgrade -y && apt-get install -y musl-tools
+RUN apt update && apt upgrade -y && apt-get install -y musl-tools curl
 
 WORKDIR /usr/src/app
 
@@ -14,4 +14,4 @@ FROM alpine:3.17
 
 COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-musl/release/backend /usr/local/bin/backend
 
-CMD ["backend", "--help"]
+CMD ["backend"]

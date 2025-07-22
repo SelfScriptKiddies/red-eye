@@ -5,67 +5,52 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_SCHEMA}
     volumes:
       - ./volume/postgres:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # ports:
+    #   - "5432:5432"  # Uncomment to expose port
 
   nats:
     image: nats:alpine
-    container_name: nats
     restart: always
     command: -c /etc/nats/nats.conf
     ports:
       - "4222:4222" # client port
       # - "6222:6222" # cluster port
-      - "8222:8222" # monitoring port
+      # - "8222:8222" # monitoring port
     volumes:
       - ./message-broker/nats.conf:/etc/nats/nats.conf
       - ./volume/nats:/data
-      
 
-  # backend:
-  #   build:
-  #     context: ./backend
-  #   restart: always
-  #   env_file:
-  #     - .env
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     - db
-      # - kafka
+  backend:
+    build:
+      context: ./backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - nats
 
-  # traffic-sniffer:
-  #   build:
-  #     context: ./traffic-sniffer
-  #   restart: always
-  #   env_file:
-  #     - .env
-  #   ports:
-  #     - "8081:8081"
-  #   depends_on:
-  #     - kafka
-  #     - db
+  traffic-analyzer:
+    build:
+      context: ./traffic-analyzer
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - nats
+      - db
 
-  # traffic-analyzer1:
-  #   build:
-  #     context: ./traffic-analyzer
-  #   restart: always
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     - kafka
-  #     - db
-
-  # traffic-analyzer2:
-  #   build:
-  #     context: ./traffic-analyzer
-  #   restart: always
-  #   env_file:
-  #     - .env
-  #   ports:
-  #     - "8083:8080"
-  #   depends_on:
-  #     - kafka
-      # - db
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
