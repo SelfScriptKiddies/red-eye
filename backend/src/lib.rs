@@ -91,11 +91,6 @@ pub async fn run() -> std::io::Result<()> {
             )
             .configure(auth::auth_config)
             .configure(api::api_config)
-
-            .service(
-                SwaggerUi::new("/api-docs/{_:.*}")
-                .url("/api-docs/openapi.json", api::ApiDoc::openapi())
-            )
     })
     .bind((config.web_host, config.web_port))?
     .run()

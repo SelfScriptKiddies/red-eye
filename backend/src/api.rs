@@ -7,15 +7,22 @@ pub mod tag;
 pub mod updater;
 use actix_web::web;
 use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 pub fn api_config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
+    cfg
+    .service(
+        SwaggerUi::new("/api/docs/{_:.*}")
+        .url("/api/docs/openapi.json", ApiDoc::openapi())
+    )
+    .service(
         web::scope("/api")
             .configure(packet::packet_config)
             .configure(stream::stream_config)
             .configure(tag::tag_config)
             .configure(service::config)
-            .configure(realtime::config),
+            .configure(realtime::config)
+            .service(web::redirect("/docs", "/api/docs/"))
     );
 }
 
