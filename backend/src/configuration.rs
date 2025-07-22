@@ -16,7 +16,7 @@ pub struct ApplicationConfig {
         clap(long="web-host", help="Backend web ip", help_heading = "Web-application config"),
         env = "WEB_IP",
         config = "web.ip",
-        default = "\"0.0.0.0\".to_string()"
+        default = "0.0.0.0".to_string()
     )]
     pub web_host: String,
     #[source(
@@ -30,14 +30,14 @@ pub struct ApplicationConfig {
         clap(long="web-password", help="Backend web password for login", help_heading = "Web-application config"),
         env = "WEB_PASSWORD",
         config = "web.password",
-        default = "\"fbfd83ebcabfd05ace9c03cd8a2ea2f4\".to_string()"
+        default = "fbfd83ebcabfd05ace9c03cd8a2ea2f4".to_string()
     )]
     pub web_password: String,
     #[source(
         clap(long="web-cookie-key", help="Backend web cookie key", help_heading = "Web-application config"),
         env = "COOKIE_KEY",
         config = "web.cookie_key",
-        default = "\"024e7bbdd3dcf8fcb6e82f7b3edae798661704d8b2e167e1ca680cb9fd4b1ac7\".to_string()"
+        default = "024e7bbdd3dcf8fcb6e82f7b3edae798661704d8b2e167e1ca680cb9fd4b1ac7".to_string()
     )]
     pub cookie_key: String,
 
@@ -46,7 +46,7 @@ pub struct ApplicationConfig {
         clap(long="db-host", short='H', help="Database domain", help_heading = "Database config"),
         env = "DB_HOST",
         config = "database.host",
-        default = "\"db\".to_string()")
+        default = "db".to_string())
     ]
     pub db_host: String,
     #[source(
