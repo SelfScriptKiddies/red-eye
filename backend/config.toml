@@ -4,11 +4,11 @@ port = 8000
 password = "password"
 
 [database]
-host = "highres.team"
+host = "localhost"
 port = 5432
-username = "red-eye-user"
-password = "7b375636c1c9ba28"
-schema = "red-eye"
+username = "haze"
+password = "haze"
+schema = "postgres"
 
 [nats]
 host = "127.0.0.1:4222"
@@ -17,3 +17,6 @@ password = "6781261b9d9f2d24"
 
 [kafka]
 host = "127.0.0.1"
+
+[logging]
+level = "debug"
