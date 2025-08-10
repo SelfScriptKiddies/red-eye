@@ -1,157 +1,243 @@
+use actix::ActorContext;
+use actix::AsyncContext;
+use actix::fut::WrapFuture;
 use actix::prelude::*;
-use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, get, web};
+use actix::{Actor, Context, Handler, Message, Recipient, StreamHandler};
+use actix_web::{Error, HttpRequest, HttpResponse, Responder, get, post, web};
 use actix_web_actors::ws;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use utoipa::ToSchema;
 
-pub fn config(cfg: &mut web::ServiceConfig) {
-    let broadcaster = Broadcaster::new().start();
-    let broadcaster_data = web::Data::new(broadcaster);
-    cfg.service(ws_route)
-        .service(broadcast)
-        .app_data(broadcaster_data.clone());
+/// -------------------------
+/// DTO
+/// -------------------------
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BroadcastRequest {
+    pub message: String,
 }
 
-// Message type for broadcasting
+/// -------------------------
+/// Service (Actor)
+/// -------------------------
+
+/// Сообщение для рассылки всем клиентам
 #[derive(Message)]
 #[rtype(result = "()")]
-struct BroadcastMessage {
-    content: String,
+pub struct BroadcastMessage(pub String);
+
+/// Сообщение о подключении нового клиента
+#[derive(Message)]
+#[rtype(usize)]
+pub struct Connect {
+    pub addr: Recipient<BroadcastMessage>,
 }
 
-// Message to register a client
+/// Сообщение об отключении клиента
 #[derive(Message)]
 #[rtype(result = "()")]
-struct RegisterClient {
-    addr: Addr<MyWebSocket>,
+pub struct Disconnect {
+    pub id: usize,
 }
 
-// Message to unregister a client
-#[derive(Message)]
-#[rtype(result = "()")]
-struct UnregisterClient {
-    id: i32,
+/// Актор, управляющий всеми подключениями
+pub struct RealtimeService {
+    sessions: HashMap<usize, Recipient<BroadcastMessage>>,
+    next_id: usize,
 }
 
-// Broadcaster actor to manage all WebSocket clients
-struct Broadcaster {
-    clients: Arc<Mutex<HashMap<i32, Addr<MyWebSocket>>>>,
-}
-
-impl Broadcaster {
-    fn new() -> Self {
-        Broadcaster {
-            clients: Arc::new(Mutex::new(HashMap::new())),
+impl RealtimeService {
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            next_id: 1,
         }
     }
+
     fn broadcast(&self, message: &str) {
-        let clients = self.clients.lock();
-        for addr in clients.values() {
-            addr.do_send(BroadcastMessage {
-                content: message.to_string(),
-            });
+        for (_, addr) in &self.sessions {
+            let _ = addr.do_send(BroadcastMessage(message.to_string()));
         }
     }
 }
 
-impl Actor for Broadcaster {
+impl Actor for RealtimeService {
     type Context = Context<Self>;
 }
 
-impl Handler<RegisterClient> for Broadcaster {
+impl Handler<Connect> for RealtimeService {
+    type Result = usize;
+
+    fn handle(&mut self, msg: Connect, _: &mut Context<Self>) -> Self::Result {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sessions.insert(id, msg.addr);
+        log::info!("Client connected: {}", id);
+        id
+    }
+}
+
+impl Handler<Disconnect> for RealtimeService {
     type Result = ();
 
-    fn handle(&mut self, msg: RegisterClient, _: &mut Self::Context) {
-        let mut clients = self.clients.lock();
-        clients.insert(clients.len() + 1, msg.addr);
+    fn handle(&mut self, msg: Disconnect, _: &mut Context<Self>) {
+        self.sessions.remove(&msg.id);
+        log::info!("Client disconnected: {}", msg.id);
     }
 }
 
-impl Handler<UnregisterClient> for Broadcaster {
+impl Handler<BroadcastMessage> for RealtimeService {
     type Result = ();
 
-    fn handle(&mut self, msg: UnregisterClient, _: &mut Self::Context) {
-        let mut clients = self.clients.lock();
-        clients.remove(&msg.id);
+    fn handle(&mut self, msg: BroadcastMessage, _: &mut Context<Self>) {
+        self.broadcast(&msg.0);
     }
 }
 
-impl Handler<BroadcastMessage> for Broadcaster {
-    type Result = ();
+/// -------------------------
+/// WebSocket Session
+/// -------------------------
+struct RealtimeSession {
+    id: usize,
+    hb: Instant,
+    service_addr: actix::Addr<RealtimeService>,
+}
 
-    fn handle(&mut self, msg: BroadcastMessage, _: &mut Self::Context) {
-        self.broadcast(&msg.content);
+impl RealtimeSession {
+    fn new(service_addr: actix::Addr<RealtimeService>) -> Self {
+        Self {
+            id: 0,
+            hb: Instant::now(),
+            service_addr,
+        }
+    }
+
+    fn start_heartbeat(&self, ctx: &mut ws::WebsocketContext<Self>) {
+        ctx.run_interval(Duration::from_secs(5), |act, ctx| {
+            if Instant::now().duration_since(act.hb) > Duration::from_secs(30) {
+                log::warn!("Client {} heartbeat failed", act.id);
+                act.service_addr.do_send(Disconnect { id: act.id });
+                ctx.stop();
+                return;
+            }
+            ctx.ping(b"");
+        });
     }
 }
 
-// WebSocket actor for each client
-struct MyWebSocket {
-    id: i32,
-    broadcaster: Addr<Broadcaster>,
-}
-
-impl MyWebSocket {
-    fn new(id: i32, broadcaster: Addr<Broadcaster>) -> Self {
-        MyWebSocket { id, broadcaster }
-    }
-}
-
-impl Actor for MyWebSocket {
+impl Actor for RealtimeSession {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        // Register the client with the broadcaster
-        self.broadcaster.do_send(RegisterClient {
-            addr: ctx.address(),
-        });
+        let addr = ctx.address().recipient();
+        let service_addr = self.service_addr.clone();
+
+        service_addr
+            .send(Connect { addr })
+            .into_actor(self)
+            .then(|res, act, ctx| {
+                if let Ok(id) = res {
+                    act.id = id;
+                    ctx.text(format!("Connected with id {}", id));
+                } else {
+                    ctx.stop();
+                }
+                act.start_heartbeat(ctx);
+                actix::fut::ready(())
+            })
+            .wait(ctx);
     }
 
-    fn stopped(&mut self, _: &mut Self::Context) {
-        // Unregister the client when it disconnects
-        self.broadcaster.do_send(UnregisterClient { id: self.id });
+    fn stopping(&mut self, _: &mut Self::Context) -> actix::Running {
+        self.service_addr.do_send(Disconnect { id: self.id });
+        actix::Running::Stop
     }
 }
 
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Text(text)) => {
-                // Echo the message back to the client or broadcast it
-                ctx.text(text.clone());
-                self.broadcaster.do_send(BroadcastMessage {
-                    content: text.to_string(),
-                });
+impl Handler<BroadcastMessage> for RealtimeSession {
+    type Result = ();
+
+    fn handle(&mut self, msg: BroadcastMessage, ctx: &mut ws::WebsocketContext<Self>) {
+        ctx.text(msg.0);
+    }
+}
+
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RealtimeSession {
+    fn handle(
+        &mut self,
+        item: Result<ws::Message, ws::ProtocolError>,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        match item {
+            Ok(ws::Message::Ping(msg)) => {
+                self.hb = Instant::now();
+                ctx.pong(&msg);
             }
-            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
-            Ok(ws::Message::Pong(_)) => {}
-            Ok(ws::Message::Close(_)) => ctx.stop(),
-            _ => (),
+            Ok(ws::Message::Pong(_)) => {
+                self.hb = Instant::now();
+            }
+            Ok(ws::Message::Text(text)) => {
+                self.service_addr
+                    .do_send(BroadcastMessage(text.to_string()));
+            }
+            Ok(ws::Message::Close(reason)) => {
+                ctx.close(reason);
+                ctx.stop();
+            }
+            _ => {}
         }
     }
 }
 
-// WebSocket route handler
-#[get("/ws")]
+/// -------------------------
+/// HTTP Handlers
+/// -------------------------
+#[utoipa::path(
+    get,
+    path = "/api/realtime",
+    responses(
+        (status = 101, description = "WebSocket connection established"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "realtime"
+)]
+#[get("/realtime")]
 async fn ws_route(
     req: HttpRequest,
     stream: web::Payload,
-    broadcaster: web::Data<Addr<Broadcaster>>,
+    service: web::Data<actix::Addr<RealtimeService>>,
 ) -> Result<HttpResponse, Error> {
-    let id = rand::random::<i32>(); // Generate a unique ID for the client
-    let ws = MyWebSocket::new(id, broadcaster.get_ref().clone());
-    ws::start(ws, &req, stream)
+    ws::start(
+        RealtimeSession::new(service.get_ref().clone()),
+        &req,
+        stream,
+    )
 }
 
-#[get("/broadcast")]
-// HTTP route to trigger a broadcast
-async fn broadcast(
-    req: HttpRequest,
-    broadcaster: web::Data<Addr<Broadcaster>>,
-    msg: web::Json<String>,
-) -> Result<HttpResponse, Error> {
-    broadcaster.do_send(BroadcastMessage {
-        content: msg.into_inner(),
-    });
-    Ok(HttpResponse::Ok().body("Broadcast sent"))
+#[utoipa::path(
+    post,
+    path = "/api/realtime/broadcast",
+    request_body = BroadcastRequest,
+    responses(
+        (status = 200, description = "Message broadcasted to all clients"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "realtime"
+)]
+#[post("/realtime/broadcast")]
+async fn broadcast_route(
+    service: web::Data<actix::Addr<RealtimeService>>,
+    body: web::Json<BroadcastRequest>,
+) -> impl Responder {
+    service.do_send(BroadcastMessage(body.message.clone()));
+    HttpResponse::Ok().json(json!({ "status": "ok" }))
+}
+
+/// -------------------------
+/// Config
+/// -------------------------
+pub fn config(cfg: &mut web::ServiceConfig) {
+    cfg.service(ws_route).service(broadcast_route);
 }
