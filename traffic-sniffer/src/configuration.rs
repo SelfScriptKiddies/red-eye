@@ -1,4 +1,5 @@
 use config_manager::config;
+use serde::Deserialize;
 
 #[derive(Debug, Clone)]
 #[config(
@@ -30,9 +31,9 @@ pub struct ApplicationConfig {
         clap(long="ports", short='p', help="Ports to sniff", help_heading = "Client parameters"),
         env = "PORTS",
         config = "ports",
-        default = vec![31337]
+        default = PortList(vec![31337])
     )]
-    pub ports: Vec<u16>,
+    pub ports: PortList,
 
     /// NATS parameters
     #[source(
@@ -72,4 +73,23 @@ pub struct ApplicationConfig {
         default = "trace".to_string()
     )]
     pub logging_level: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PortList(pub Vec<u16>);
+
+impl std::str::FromStr for PortList {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let ports: Result<Vec<u16>, _> = s
+            .split(',')
+            .map(|p| p.trim().parse::<u16>())
+            .collect();
+
+        match ports {
+            Ok(port_list) => Ok(PortList(port_list)),
+            Err(e) => Err(format!("Failed to parse port list: {}", e))
+        }
+    }
 }

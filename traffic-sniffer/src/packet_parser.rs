@@ -23,7 +23,7 @@ impl PacketCatcher {
             handle: None,
             broker_manager: broker_manager,
             interface: config.interface.clone(),
-            ports: config.ports.clone()
+            ports: config.ports.0.clone()
         }
     }
 
@@ -34,7 +34,8 @@ impl PacketCatcher {
             .promisc(true)  // Режим промискуитета
             .snaplen(65535) // Максимальная длина захватываемых пакетов
             .timeout(1000)  // Таймаут в миллисекундах
-            .open()?;
+            .open()?
+            .setnonblock()?;
 
         let ports_filter = self.ports.iter()
             .map(|port| format!("tcp port {} or udp port {}", port, port))
@@ -56,10 +57,14 @@ impl PacketCatcher {
             let mut capture = cap;
             debug!("Capturing the packets started!");
             while active.load(Ordering::SeqCst) {
-                let packet: pcap::Packet<'_> = match capture.next_packet().ok() {
-                    Some(packet) => packet,
-                    None => {
-                        debug!("Got error while gathering packets, stopping...");
+                let packet: pcap::Packet<'_> = match capture.next_packet() {
+                    Ok(packet) => packet,
+                    Err(pcap::Error::NoMorePackets) | Err(pcap::Error::TimeoutExpired) => {
+                        std::thread::sleep(std::time::Duration::from_millis(5)); // Little timeout to avoid 100% CPU usage
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("Got error while gathering packets: {}", e);
                         break;
                     }
                 };
