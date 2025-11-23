@@ -247,8 +247,8 @@ export function SettingsPage() {
                                     </div>
                                 </div>
                                 <div className="card-actions">
-                                    <button onClick={() => openServiceModal(service)}>✎</button>
-                                    <button onClick={() => deleteService(service.id!)}>✕</button>
+                                    <button onClick={() => openServiceModal(service)}>✎ Изменить</button>
+                                    <button onClick={() => deleteService(service.id!)}>✕ Удалить</button>
                                 </div>
                             </div>
                         ))}
@@ -284,8 +284,8 @@ export function SettingsPage() {
                                     </div>
                                 </div>
                                 <div className="card-actions">
-                                    <button onClick={() => openFilterModal(filter)}>✎</button>
-                                    <button onClick={() => deleteFilter(filter.id!)}>✕</button>
+                                    <button onClick={() => openFilterModal(filter)}>✎ Изменить</button>
+                                    <button onClick={() => deleteFilter(filter.id!)}>✕ Удалить</button>
                                 </div>
                             </div>
                         ))}
