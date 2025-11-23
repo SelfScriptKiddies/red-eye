@@ -73,8 +73,9 @@ button:focus-visible {
   align-items: center;
   position: fixed;
   top: 0;
-  width: 90%;
+  width: 100%;
   padding: 0 5%;
+  box-sizing: border-box;
   height: 130px; /*Этак константа используется в других стилях*/
 }
 .header:has( .eye__apple__focus) a{
@@ -91,4 +92,10 @@ main.content {
   flex-direction: column;
   justify-content: center;
   align-items: center;
+}
+
+/* Settings page overrides */
+main.content:has(.SettingsPage) {
+  justify-content: flex-start;
+  align-items: stretch;
 }

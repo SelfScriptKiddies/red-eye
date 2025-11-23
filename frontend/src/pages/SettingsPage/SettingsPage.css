@@ -1,7 +1,519 @@
 .SettingsPage {
-    width: 100%;
-    height: calc(100% - 130px - 3px);
-    display: flex;
+    width: 100vw;
+    height: calc(100vh - 130px);
     margin-top: 130px;
-    padding-top: 3px;
+    display: flex;
+}
+
+.settings-columns {
+    display: flex;
+    width: 100%;
+    height: 100%;
+}
+
+.settings-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background-color: #242424;
+    border-right: solid 3px #646cff;
+    transition: 0.3s;
+}
+
+.settings-column:last-child {
+    border-right: none;
+}
+
+#root:has(div.eye__apple__focus) .settings-column {
+    border-right-color: #a51900;
+}
+
+#root:has(div.eye__apple__focus) .settings-column:last-child {
+    border-right: none;
+}
+
+/* Ensure SettingsPage container fills properly */
+#root:has(div.SettingsPage) {
+    height: 100vh;
+}
+
+#root > div.section:has(div.SettingsPage) {
+    height: 100vh;
+}
+
+#root > div.section > main.content:has(> div.SettingsPage) {
+    height: 100%;
+}
+
+.column-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: solid 3px #646cff;
+    transition: 0.3s;
+    min-height: 70px;
+    flex-shrink: 0;
+}
+
+#root:has(div.eye__apple__focus) .column-header {
+    border-bottom: solid 3px #a51900;
+}
+
+/* Header border for settings page */
+#root:has(div.SettingsPage) .header {
+    transition: 0.3s;
+    border-bottom: solid 3px #646cff;
+}
+
+#root:has(div.SettingsPage):has(.eye__apple__focus) .header {
+    border-bottom: solid 3px #a51900;
+}
+
+.column-header h2 {
+    font-size: 1.8em;
+    margin: 0;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+.add-btn {
+    padding: 8px 16px;
+    font-size: 14px;
+    border-radius: 20px;
+    background-color: #353535;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.3s;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+.add-btn:hover {
+    border-radius: 10px;
+    border-color: #646cff;
+}
+
+#root:has(div.eye__apple__focus) .add-btn:hover {
+    border-color: #a51900;
+}
+
+.service-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+.option-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background-color: #0a8a0a;
+    color: white;
+}
+
+.filter-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.filter-color-indicator {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: white;
+    text-shadow: 0 0 7px #f09, 0 0 14px #f09;
+    box-shadow: 0 0 5px #f09, 0 0 10px #f09;
+    flex-shrink: 0;
+}
+
+.filter-info {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.info-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background-color: #353535;
+    border: 1px solid #646cff;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+#root:has(div.eye__apple__focus) .info-badge {
+    border-color: #a51900;
+}
+
+.port-info {
+    font-size: 13px;
+    color: #999;
+    margin: 5px 0;
+}
+
+.items-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+    scrollbar-color: #646cff #353535;
+    scrollbar-width: thin;
+}
+
+#root:has(div.eye__apple__focus) .items-list {
+    scrollbar-color: #a51900 #353535;
+}
+
+.settings-card {
+    background-color: #353535;
+    border-radius: 15px;
+    padding: 15px;
+    margin-bottom: 12px;
+    transition: all 0.3s;
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-card:hover {
+    border-radius: 8px;
+    background-color: #424242;
+}
+
+.settings-card .card-content {
+    flex: 1;
+    margin-bottom: 10px;
+}
+
+.settings-card h4 {
+    font-size: 1.1em;
+    margin: 0 0 5px 0;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+.settings-card p {
+    color: #ccc;
+    margin: 3px 0;
+    font-size: 13px;
+}
+
+.settings-card .pattern-text {
+    font-family: monospace;
+    background-color: #1a1a1a;
+    padding: 6px 10px;
+    border-radius: 5px;
+    display: block;
+    margin: 8px 0;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.card-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.card-actions button {
+    flex: 1;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background-color: #1a1a1a;
+    color: rgba(255, 255, 255, 0.87);
+    cursor: pointer;
+    transition: all 0.25s;
+    font-size: 16px;
+}
+
+.card-actions button:hover {
+    border-color: #646cff;
+}
+
+#root:has(div.eye__apple__focus) .card-actions button:hover {
+    border-color: #a51900;
+}
+
+.placeholder-content {
+    padding: 40px 20px;
+    text-align: center;
+}
+
+.placeholder-content p {
+    font-size: 1em;
+    color: #999;
+    margin: 15px 0;
+}
+
+/* Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-content {
+    background-color: #2a2a2a;
+    border-radius: 15px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+    animation: slideIn 0.3s ease-out;
+    scrollbar-color: #646cff #353535;
+    scrollbar-width: thin;
+}
+
+#root:has(div.eye__apple__focus) .modal-content {
+    scrollbar-color: #a51900 #353535;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 2px solid #646cff;
+}
+
+#root:has(div.eye__apple__focus) .modal-header {
+    border-bottom-color: #a51900;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.5em;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: rgba(255, 255, 255, 0.87);
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background-color 0.2s;
+}
+
+.close-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-body input[type="text"],
+.modal-body input[type="number"],
+.modal-body select.select-input {
+    width: calc(100% - 24px);
+    padding: 12px;
+    margin-bottom: 15px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background-color: #1a1a1a;
+    color: rgba(255, 255, 255, 0.87);
+    font-size: 16px;
+    transition: border-color 0.25s;
+}
+
+.modal-body input[type="text"]:focus,
+.modal-body input[type="number"]:focus,
+.modal-body select.select-input:focus {
+    outline: none;
+    border-color: #646cff;
+}
+
+#root:has(div.eye__apple__focus) .modal-body input[type="text"]:focus,
+#root:has(div.eye__apple__focus) .modal-body input[type="number"]:focus,
+#root:has(div.eye__apple__focus) .modal-body select.select-input:focus {
+    border-color: #a51900;
+}
+
+.modal-body select.select-input {
+    cursor: pointer;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    font-size: 14px;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 15px;
+}
+
+.color-picker-wrapper {
+    margin-bottom: 15px;
+}
+
+.color-picker-wrapper label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.87);
+}
+
+.color-slider {
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(to right, 
+        hsl(0, 100%, 50%), 
+        hsl(60, 100%, 50%), 
+        hsl(120, 100%, 50%), 
+        hsl(180, 100%, 50%), 
+        hsl(240, 100%, 50%), 
+        hsl(300, 100%, 50%), 
+        hsl(360, 100%, 50%)
+    );
+    outline: none;
+    cursor: pointer;
+    margin-bottom: 10px;
+}
+
+.color-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: white;
+    border: 2px solid #646cff;
+    cursor: pointer;
+}
+
+.color-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: white;
+    border: 2px solid #646cff;
+    cursor: pointer;
+}
+
+#root:has(div.eye__apple__focus) .color-slider::-webkit-slider-thumb {
+    border-color: #a51900;
+}
+
+#root:has(div.eye__apple__focus) .color-slider::-moz-range-thumb {
+    border-color: #a51900;
+}
+
+.color-preview {
+    width: 100%;
+    height: 30px;
+    border-radius: 8px;
+    background: white;
+    text-shadow: 0 0 7px #f09, 0 0 14px #f09, 0 0 21px #f09;
+}
+
+.modal-footer {
+    display: flex;
+    gap: 10px;
+    padding: 20px;
+    border-top: 2px solid #353535;
+}
+
+.modal-footer button {
+    flex: 1;
+    padding: 12px 24px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background-color: #1a1a1a;
+    color: rgba(255, 255, 255, 0.87);
+    cursor: pointer;
+    transition: all 0.25s;
+    font-size: 16px;
+}
+
+.modal-footer button:hover {
+    border-color: #646cff;
+}
+
+#root:has(div.eye__apple__focus) .modal-footer button:hover {
+    border-color: #a51900;
+}
+
+.modal-footer button:last-child {
+    background-color: #646cff;
+}
+
+.modal-footer button:last-child:hover {
+    background-color: #535bf2;
+}
+
+#root:has(div.eye__apple__focus) .modal-footer button:last-child {
+    background-color: #a51900;
+}
+
+#root:has(div.eye__apple__focus) .modal-footer button:last-child:hover {
+    background-color: #8a1500;
+}
+
+@media (prefers-color-scheme: light) {
+    .settings-card,
+    .placeholder-content {
+        background-color: #f0f0f0;
+    }
+    
+    .card-actions button,
+    .modal-body input,
+    .modal-body select {
+        background-color: #ffffff;
+        color: #213547;
+    }
 }

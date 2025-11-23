@@ -3,6 +3,7 @@ import { usePages } from "./PagesProvider";
 import { LoginPage } from '../pages/LoginPage';
 import { MainPage } from '../pages/MainPage';
 import { PacketsPage } from "../pages/PacketsPage";
+import { SettingsPage } from "../pages/SettingsPage";
 
 function getCookie(name) {
     const value = `; ${document.cookie}`;
@@ -16,6 +17,7 @@ export const RenderPage = (): ReactNode => {
         "/": <MainPage />,
         "/login": <LoginPage />,
         "/packets": <PacketsPage />,
+        "/settings": <SettingsPage />,
     };
     if(!getCookie('id') && name !== "/login")
         window.location.href = '/login';
