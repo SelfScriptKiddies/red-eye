@@ -9,6 +9,7 @@ export function PacketsPage() {
     const [streamsArray, setStreams] = useState([]);
     const [servicesArray, setServices] = useState([]);
     const [tagsArray, setTags] = useState([]);
+    const [tagColors, setTagColors] = useState({});
     const [packetData, setPacketData] = useState(null);
     const [pageLoaded, setPageLoaded] = useState(null);
     const [usedTags, setUsedTags] = useState([]);
@@ -45,7 +46,15 @@ export function PacketsPage() {
     };
     const getTags = async () => {
         let data = await getUrl("/api/tag/names");
-        await setTags(Object.values(data));
+        const tagsData = Object.values(data);
+        await setTags(tagsData);
+        
+        // Create a map of tag names to colors for easy lookup
+        const colorMap = {};
+        tagsData.forEach(tag => {
+            colorMap[tag.name] = tag.color;
+        });
+        setTagColors(colorMap);
     };
     const getFilteredStreams = async () => {
         let req_url = "/api/stream?limit=20";
@@ -138,6 +147,7 @@ export function PacketsPage() {
                     return < StreamCard 
                         streamObj={stream} 
                         onStreamClick={handleStreamClick}
+                        tagColors={tagColors}
                     />
                 })}
             </div>

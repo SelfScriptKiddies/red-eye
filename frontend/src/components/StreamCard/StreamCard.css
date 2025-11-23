@@ -33,37 +33,10 @@
 
 .tag {
     color: white;
-    filter: hue-rotate(0deg);
-    /*Change it on different tags*/
-    text-shadow: 0 0 7px #f09, 0 0 14px #f09, 0 0 21px #f09, 0 0 42px #f09, 0 0 64px #f09;
     display: inline;
     margin: 0 5px;
     font-size: 1.25rem;
-}
-
-.SQLInj {
-    filter: hue-rotate(0deg);
-    /*Change it on different tags*/
-}
-
-.Flag {
-    filter: hue-rotate(30deg);
-    /*Change it on different tags*/
-}
-
-.XSS {
-    filter: hue-rotate(60deg);
-    /*Change it on different tags*/
-}
-
-.LFI {
-    filter: hue-rotate(90deg);
-    /*Change it on different tags*/
-}
-
-.RCE {
-    filter: hue-rotate(150deg);
-    /*Change it on different tags*/
+    /* textShadow is applied dynamically via inline styles */
 }
 
 .noselect {
