@@ -1,5 +1,5 @@
 # Stage 1: Plan dependencies
-FROM rust:1.88.0-slim as planner
+FROM rust:1.88.0-slim AS planner
 
 WORKDIR /usr/src/app
 
@@ -11,7 +11,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 
 # Stage 2: Build dependencies (cached layer)
-FROM rust:1.88.0-slim as builder
+FROM rust:1.88.0-slim AS builder
 
 WORKDIR /usr/src/app
 
