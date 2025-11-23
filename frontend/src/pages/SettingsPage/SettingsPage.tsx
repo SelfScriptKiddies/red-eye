@@ -269,7 +269,10 @@ export function SettingsPage() {
                                         <h4>{filter.name}</h4>
                                         <div 
                                             className="filter-color-indicator"
-                                            style={{ filter: `hue-rotate(${filter.color}deg)` }}
+                                            style={{ 
+                                                backgroundColor: `hsl(${filter.color}, 100%, 50%)`,
+                                                color: `hsl(${filter.color}, 100%, 50%)`
+                                            }}
                                         ></div>
                                     </div>
                                     <p className="pattern-text">{filter.template}</p>
@@ -423,7 +426,10 @@ export function SettingsPage() {
                                 />
                                 <div 
                                     className="color-preview"
-                                    style={{ filter: `hue-rotate(${filterForm.color}deg)` }}
+                                    style={{ 
+                                        backgroundColor: `hsl(${filterForm.color}, 100%, 50%)`,
+                                        color: `hsl(${filterForm.color}, 100%, 50%)`
+                                    }}
                                 ></div>
                             </div>
                         </div>

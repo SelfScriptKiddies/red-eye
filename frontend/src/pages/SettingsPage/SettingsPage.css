@@ -121,13 +121,11 @@
 }
 
 .filter-color-indicator {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
-    background: white;
-    text-shadow: 0 0 7px #f09, 0 0 14px #f09;
-    box-shadow: 0 0 5px #f09, 0 0 10px #f09;
     flex-shrink: 0;
+    box-shadow: 0 0 8px currentColor, 0 0 16px currentColor;
 }
 
 .filter-info {
@@ -422,7 +420,7 @@
     );
     outline: none;
     cursor: pointer;
-    margin-bottom: 10px;
+    margin-bottom: 20px;
 }
 
 .color-slider::-webkit-slider-thumb {
@@ -455,10 +453,9 @@
 
 .color-preview {
     width: 100%;
-    height: 30px;
+    height: 40px;
     border-radius: 8px;
-    background: white;
-    text-shadow: 0 0 7px #f09, 0 0 14px #f09, 0 0 21px #f09;
+    box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.3), 0 0 5px currentColor, 0 0 10px currentColor;
 }
 
 .modal-footer {
