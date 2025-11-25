@@ -33,7 +33,7 @@ export function StreamCard({ streamObj, onStreamClick, tagColors = {} }) {
                                 className="tag noselect" 
                                 style={{
                                     color: 'white',
-                                    textShadow: `0 0 5px ${tagColor}, 0 0 10px ${tagColor}, 0 0 15px ${tagColor}`
+                                    textShadow: `0 0 5px ${tagColor}, 0 0 5px ${tagColor}, 0 0 5px ${tagColor}`
                                 }}
                             >
                                 {tagName}
