@@ -3,9 +3,8 @@ use async_nats::{
     Client, 
     jetstream::{self, stream, consumer::{pull, AckPolicy}}
 };
-use log::{error, info, warn, debug};
+use log::{error, info, debug};
 use bincode::{config, Decode, Encode};
-use std::time::Duration;
 use crate::configuration::ApplicationConfig;
 pub use crate::api::updater::dto::FilterDirection;
 
@@ -20,6 +19,12 @@ pub enum SettingsUpdate {
     FilterAdd(dto::Filter),
     FilterUpdate(usize, dto::Filter),
     FilterRemove(usize),
+
+    // Full config sync
+    ConfigSync {
+        services: Vec<(usize, dto::Service)>,
+        filters: Vec<(usize, dto::Filter)>,
+    }
 }
 
 mod dto {
@@ -152,5 +157,77 @@ impl UpdateAgent {
     pub async fn remove_filter(&self, index: usize) -> Result<(), String> {
         debug!("Sending remove filter: (id={})", index);
         self.send_update(SettingsUpdate::FilterRemove(index), index).await
+    }
+
+    pub async fn sync_config(
+        &self,
+        services: Vec<(usize, dto::Service)>,
+        filters: Vec<(usize, dto::Filter)>,
+    ) -> Result<(), String> {
+        info!("Sending config sync: {} services, {} filters", services.len(), filters.len());
+        
+        let update = SettingsUpdate::ConfigSync { services, filters };
+        let payload = match bincode::encode_to_vec((update, 0usize), config::standard()) {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(format!("Error serializing config sync: {}", e)),
+        };
+        
+        match self.producer.publish(self.topic.clone(), payload.into()).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Error sending config sync: {}", e)),
+        }
+    }
+}
+
+pub use dto::{Service as DtoService, Filter as DtoFilter};
+
+/// Запускает периодическую синхронизацию конфигурации каждые 5 минут
+pub async fn start_config_sync_scheduler(
+    updater: std::sync::Arc<UpdateAgent>,
+    service_service: std::sync::Arc<crate::api::service::service_service::ServiceService>,
+    tag_service: std::sync::Arc<crate::api::tag::tag_service::TagService>,
+) {
+    use tokio::time::{interval, Duration};
+    
+    let mut interval = interval(Duration::from_secs(5 * 60)); // 5 минут
+    interval.tick().await; // Пропускаем первый тик, чтобы не отправлять сразу при старте
+    
+    loop {
+        interval.tick().await;
+        
+        // Получаем все сервисы
+        let services = match service_service.get_all_services().await {
+            Ok(services) => services,
+            Err(e) => {
+                error!("Failed to get services for config sync: {}", e);
+                continue;
+            }
+        };
+        
+        // Получаем все теги (фильтры)
+        let tag_names = match tag_service.get_all_tag_names().await {
+            Ok(tags) => tags,
+            Err(e) => {
+                error!("Failed to get tag names for config sync: {}", e);
+                continue;
+            }
+        };
+        
+        // Конвертируем сервисы
+        let services_data: Vec<(usize, dto::Service)> = services
+            .into_iter()
+            .map(|s| (s.id as usize, s.into()))
+            .collect();
+        
+        // Конвертируем теги в фильтры
+        let filters_data: Vec<(usize, dto::Filter)> = tag_names
+            .into_iter()
+            .map(|tag| (tag.id as usize, tag.into()))
+            .collect();
+        
+        // Отправляем синхронизацию
+        if let Err(e) = updater.sync_config(services_data, filters_data).await {
+            error!("Failed to send config sync: {}", e);
+        }
     }
 }

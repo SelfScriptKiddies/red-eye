@@ -18,8 +18,9 @@ use crate::api::{
     stream::stream_service::StreamService, 
     tag::tag_service::TagService,
     service::service_service::ServiceService,
-    updater::UpdateAgent
+    updater::{UpdateAgent, start_config_sync_scheduler}
 };
+use std::sync::Arc;
 
 
 mod api;
@@ -63,8 +64,20 @@ pub async fn run() -> std::io::Result<()> {
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
-    let updater = web::Data::new(UpdateAgent::new(&config).await);
+    
+    // Создаём UpdateAgent для использования в web и фоновой задаче
+    let updater_arc = Arc::new(UpdateAgent::new(&config).await);
+    let updater = web::Data::from(updater_arc.clone());
+    
     debug!("{:?}", &config);
+
+    // Запускаем периодическую синхронизацию конфигурации каждые 5 минут
+    let service_service_arc = Arc::new(ServiceService::new_from_pgpool(pool.clone()));
+    let tag_service_arc = Arc::new(TagService::new_from_pgpool(pool.clone()));
+    
+    tokio::spawn(async move {
+        start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
+    });
 
     HttpServer::new(move || {
         App::new()
