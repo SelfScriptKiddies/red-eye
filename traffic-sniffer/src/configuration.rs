@@ -1,11 +1,13 @@
 use config_manager::config;
 use serde::Deserialize;
 
+pub mod updater;
+
 #[derive(Debug, Clone)]
 #[config(
     clap(version, author),
     file(
-        format = "toml",
+        format = "yaml",
         clap(long = "config", short = 'c', help = "path to configuration file"),
         env = "demo_config",
         optional
@@ -64,6 +66,22 @@ pub struct ApplicationConfig {
         default = "raw_packets".to_string()
     )]
     pub nats_raw_packets_topic: String,
+    #[source(
+        clap(long="nats-updates-topic", short='U', help="NATS updates topic", help_heading = "NATS parameters"),
+        env = "NATS_UPDATES_TOPIC",
+        config = "nats.updates_topic",
+        default = "updates".to_string()
+    )]
+    pub nats_updates_topic: String,
+
+    /// Service UUID
+    #[source(
+        clap(long="service-uuid", help="Service UUID", help_heading = "Service options"),
+        env = "SERVICE_UUID",
+        config = "service.uuid",
+        default = uuid::Uuid::new_v4().to_string()
+    )]
+    pub service_uuid: String,
 
     /// Logging configuration
     #[source(

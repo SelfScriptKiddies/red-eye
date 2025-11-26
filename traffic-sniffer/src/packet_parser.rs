@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc};
 use log::{debug, info, trace, warn};
 use pcap::{Capture, Error};
 use crate::configuration::ApplicationConfig;
+use crate::configuration::updater::PortsCache;
 use crate::nats::NATSManager;
 
 pub struct PacketCatcher {
@@ -11,11 +12,11 @@ pub struct PacketCatcher {
     handle: Option<thread::JoinHandle<()>>,
     broker_manager: NATSManager,
     interface: String,
-    ports: Vec<u16>
+    ports: PortsCache
 }
 
 impl PacketCatcher {
-    pub async fn new(config: &ApplicationConfig) -> Self {
+    pub async fn new(config: &ApplicationConfig, ports_cache: PortsCache) -> Self {
         let broker_manager = NATSManager::new(config).await;
 
         Self {
@@ -23,7 +24,7 @@ impl PacketCatcher {
             handle: None,
             broker_manager: broker_manager,
             interface: config.interface.clone(),
-            ports: config.ports.0.clone()
+            ports: ports_cache
         }
     }
 
@@ -37,10 +38,16 @@ impl PacketCatcher {
             .open()?
             .setnonblock()?;
 
-        let ports_filter = self.ports.iter()
-            .map(|port| format!("tcp port {} or udp port {}", port, port))
-            .collect::<Vec<_>>()
-            .join(" or ");
+        // Получаем текущие порты для начального фильтра
+        let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
+        let ports_filter = if initial_ports.is_empty() {
+            "tcp or udp".to_string() // Если портов нет, фильтруем все TCP/UDP
+        } else {
+            initial_ports.iter()
+                .map(|port| format!("tcp port {} or udp port {}", port, port))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        };
 
         cap.filter(&ports_filter, true).unwrap_or_else(|e| {
             warn!("Failed to set filter on {}: {}", self.interface, e);
