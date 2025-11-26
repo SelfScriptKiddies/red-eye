@@ -9,7 +9,8 @@ use crate::configuration::ApplicationConfig;
 use log::{error, info, debug, trace};
 use futures::StreamExt;
 use bincode::{config, Decode};
-use crate::filters::{add_filter, edit_filter, remove_filter};
+use crate::filters::{add_filter, edit_filter, remove_filter, sync_filters};
+use std::collections::HashSet;
 use std::sync::Arc;
 use crate::cache;
 
@@ -24,6 +25,11 @@ pub enum SettingsUpdate {
     FilterAdd(dto::Filter),
     FilterUpdate(usize, dto::Filter),
     FilterRemove(usize),
+
+    ConfigSync {
+        services: Vec<(usize, dto::Service)>,
+        filters: Vec<(usize, dto::Filter)>,
+    }
 }
 
 pub mod dto {
@@ -137,8 +143,53 @@ impl UpdateListener {
                             debug!("Received filter remove: {}", index);
                             remove_filter(index);
                         }
-                        _ => {
-                            debug!("Received unknown update");
+                        SettingsUpdate::ConfigSync { services, filters } => {
+                            info!("Received config sync: {} services, {} filters", 
+                                services.len(), filters.len());
+                            
+                            // Sync services
+                            let incoming_ids: HashSet<usize> = services.iter().map(|(id, _)| *id).collect();
+                            {
+                                let existing_ids: HashSet<usize>;
+                                let missing: Vec<_>;
+                                let to_remove: Vec<usize>;
+                                
+                                // Read lock - проверяем что есть
+                                {
+                                    let services_cache = cache.services.read().unwrap();
+                                    existing_ids = services_cache.keys().cloned().collect();
+                                    missing = services.into_iter()
+                                        .filter(|(id, _)| !existing_ids.contains(id))
+                                        .collect();
+                                    to_remove = existing_ids
+                                        .difference(&incoming_ids)
+                                        .cloned()
+                                        .collect();
+                                }
+                                
+                                if !missing.is_empty() || !to_remove.is_empty() {
+                                    debug!("Services sync: adding {} missing, removing {} stale", 
+                                        missing.len(), to_remove.len());
+                                    
+                                    // Write lock - вносим изменения
+                                    let mut services_cache = cache.services.write().unwrap();
+                                    for id in to_remove {
+                                        services_cache.remove(&id);
+                                    }
+                                    for (id, service) in missing {
+                                        services_cache.insert(id, service);
+                                    }
+                                } else {
+                                    debug!("Services sync: no changes needed");
+                                }
+                            }
+                            
+                            // Sync filters
+                            let filters_data: Vec<_> = filters
+                                .into_iter()
+                                .map(|(id, f)| (id, f.pattern_name, f.filter_type, f.filter_payload))
+                                .collect();
+                            sync_filters(filters_data);
                         }
                     }
     

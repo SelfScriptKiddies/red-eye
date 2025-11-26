@@ -69,6 +69,45 @@ pub fn edit_filter(index: usize, pattern_name: String, pattern_type: String, pay
     add_filter(index, pattern_name, pattern_type, payload);
 }
 
+pub fn get_filter_ids() -> Vec<usize> {
+    let filters = PACKET_FILTERS.read().unwrap();
+    filters.iter().map(|f| f.get_id()).collect()
+}
+
+pub fn sync_filters(filters_data: Vec<(usize, String, String, Vec<u8>)>) {
+    use std::collections::HashSet;
+    
+    let incoming_ids: HashSet<usize> = filters_data.iter().map(|(id, _, _, _)| *id).collect();
+    let existing_ids: HashSet<usize> = get_filter_ids().into_iter().collect();
+    
+    // Находим отсутствующие и лишние
+    let missing: Vec<_> = filters_data
+        .into_iter()
+        .filter(|(id, _, _, _)| !existing_ids.contains(id))
+        .collect();
+    let to_remove: Vec<_> = existing_ids
+        .difference(&incoming_ids)
+        .cloned()
+        .collect();
+    
+    if missing.is_empty() && to_remove.is_empty() {
+        debug!("Filters sync: no changes needed");
+        return;
+    }
+    
+    debug!("Filters sync: adding {} missing, removing {} stale", missing.len(), to_remove.len());
+    
+    // Удаляем лишние
+    for id in to_remove {
+        remove_filter(id);
+    }
+    
+    // Добавляем отсутствующие
+    for (id, pattern_name, pattern_type, payload) in missing {
+        add_filter(id, pattern_name, pattern_type, &payload);
+    }
+}
+
 // Function to apply all filters to a packet
 pub fn apply_filters(packet: &[u8]) -> Vec<(usize, Vec<filterDTO::FilterTrigger>)> {
     let filters = PACKET_FILTERS.read().unwrap();
