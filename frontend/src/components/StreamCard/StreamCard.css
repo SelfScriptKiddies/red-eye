@@ -29,6 +29,15 @@
 
 .info-block {
     color: #ccc;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.stream-packet-count {
+    font-size: 0.85rem;
+    color: #999;
 }
 
 .tag {
