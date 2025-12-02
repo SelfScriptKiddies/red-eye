@@ -1,8 +1,9 @@
 use std::io::Error;
 use crate::ethernet::PacketInfo;
 use crate::filters::apply_filters;
-use log::{debug, trace};
+use log::debug;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use crate::cache::Cache;
 use crate::cache::streams::StreamsCache;
 use crate::configuration::ApplicationConfig;
@@ -62,37 +63,48 @@ impl PacketProcessor {
         
         let key = StreamsCache::format_key(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port);
 
-        // Fast lookup
-        if let Some(id) = self.cache.streams.lock().await.get_by_key(&key) {
-            return Ok(id);
+        // Fast lookup without lock (read-only check)
+        {
+            let mut stream_cache = self.cache.streams.lock().await;
+            if let Some(id) = stream_cache.get_by_key(&key) {
+                return Ok(id);
+            }
         }
 
+        // Get or create a per-key lock to prevent race conditions for this specific stream
+        // This allows different streams to be processed concurrently while preventing
+        // duplicate creation for the same stream
+        let lock = self.cache.stream_locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
         
+        let _guard = lock.lock().await;
 
-        /*
-        Serious bottleneck - only 1 thread can lock the cache at a time and request database. 
-        If not, we can get race condition - 2 threads won't find the same stream id and will create a new one => we will get duplicate.
-         */
-        let mut stream_local_cache = self.cache.streams.lock().await;
-        // First trying local cache
-        // TODO: check the error
-        if let Some(stream_id) = stream_local_cache.get(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port) {
-            return Ok(stream_id);
+        // Double-check after acquiring lock (another thread might have created it)
+        {
+            let mut stream_cache = self.cache.streams.lock().await;
+            if let Some(stream_id) = stream_cache.get_by_key(&key) {
+                return Ok(stream_id);
+            }
         }
 
-        // If not found, trying to find in database
+        // If not found in cache, try database
         if let Some(stream_id) = self.db.get_stream_id(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port).await {
+            // Insert into cache for future lookups
+            let mut stream_cache = self.cache.streams.lock().await;
+            stream_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
             return Ok(stream_id);
         }
         
-        // If not found, creating new stream
+        // If not found, create new stream
         let stream_id = self.db.create_stream(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, &packet.protocol, &packet.ip_version, service_id).await
                                         .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
         
-        // And insert into cache
-        stream_local_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+        // Insert into cache
+        let mut stream_cache = self.cache.streams.lock().await;
+        stream_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
         Ok(stream_id)
-        
     }
 
     pub async fn process_packet(&self, packet: PacketInfo) -> Result<(), Error> {
