@@ -22,8 +22,12 @@ export function PacketsPage() {
     const [pageLoaded, setPageLoaded] = useState(null);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
+    const [currentOffset, setCurrentOffset] = useState(0);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [hasMoreStreams, setHasMoreStreams] = useState(true);
     const wsRef = useRef<WebSocket | null>(null);
     const selectedStreamIdRef = useRef<number | null>(null);
+    const streamsContainerRef = useRef<HTMLDivElement | null>(null);
     
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
@@ -46,9 +50,12 @@ export function PacketsPage() {
         return data;
     };
     const getStreams = async () => {
-        let data = await getUrl("/api/stream?limit=20");
+        let data = await getUrl("/api/stream?limit=20&offset=0");
         // console.log(data);
-        await setStreams(Object.values(data));
+        const streams = Object.values(data);
+        await setStreams(streams);
+        setCurrentOffset(20);
+        setHasMoreStreams(streams.length === 20);
     };
     const getServices = async () => {
         let data = await getUrl("/api/service");
@@ -66,17 +73,59 @@ export function PacketsPage() {
         });
         setTagColors(colorMap);
     };
-    const getFilteredStreams = async () => {
-        let req_url = "/api/stream?limit=20";
+    const getFilteredStreams = async (reset: boolean = false) => {
+        const offset = reset ? 0 : currentOffset;
+        let req_url = `/api/stream?limit=20&offset=${offset}`;
         // let usedTags = this.state.usedTags;
-        if (usedTags)
+        if (usedTags && usedTags.length > 0)
             req_url += "&tags="+usedTags.join(',')
-        if (usedServices)
+        if (usedServices && usedServices.length > 0)
             req_url += "&services="+usedServices.join(',')
         
-        let data = await getUrl(req_url);
-        await setStreams(Object.values(data));
+        setIsLoadingMore(true);
+        try {
+            let data = await getUrl(req_url);
+            const newStreams = Object.values(data);
+            
+            if (reset) {
+                await setStreams(newStreams);
+                setCurrentOffset(20);
+            } else {
+                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams]);
+                setCurrentOffset(prev => prev + 20);
+            }
+            
+            // If we got less than 20 streams, there are no more to load
+            setHasMoreStreams(newStreams.length === 20);
+        } catch (error) {
+            console.error('Error loading streams:', error);
+        } finally {
+            setIsLoadingMore(false);
+        }
     };
+    
+    // Handle scroll event for infinite scroll
+    useEffect(() => {
+        const handleScroll = () => {
+            if (!streamsContainerRef.current || isLoadingMore || !hasMoreStreams || isRedEyeActive) return;
+            
+            const container = streamsContainerRef.current;
+            const scrollTop = container.scrollTop;
+            const scrollHeight = container.scrollHeight;
+            const clientHeight = container.clientHeight;
+            
+            // Load more when user is within 200px of the bottom
+            if (scrollTop + clientHeight >= scrollHeight - 200) {
+                getFilteredStreams(false);
+            }
+        };
+        
+        const container = streamsContainerRef.current;
+        if (container) {
+            container.addEventListener('scroll', handleScroll);
+            return () => container.removeEventListener('scroll', handleScroll);
+        }
+    }, [isLoadingMore, hasMoreStreams, isRedEyeActive, currentOffset, usedTags, usedServices]);
     if (!streamsArray.length && !isRedEyeActive)
     {
         if(!pageLoaded)
@@ -113,7 +162,9 @@ export function PacketsPage() {
                 // Update streams list when new packet arrives
                 // This will refresh the stream list to show updated timestamps and move active streams to top
                 if (!isRedEyeActive) {
-                    getFilteredStreams();
+                    setCurrentOffset(0);
+                    setHasMoreStreams(true);
+                    getFilteredStreams(true);
                 }
             } catch (error) {
                 console.error('Error parsing WebSocket message:', error);
@@ -159,6 +210,8 @@ export function PacketsPage() {
 
     const handleClearStreams = () => {
         setStreams([]);
+        setCurrentOffset(0);
+        setHasMoreStreams(true);
     };
     const handleTagClick = (e) => {
         let tag_name = e.target.dataset.service;
@@ -174,7 +227,9 @@ export function PacketsPage() {
             tmp.push(e.target.dataset.service);
         }
         setUsedTags(tmp);
-        getFilteredStreams();
+        setCurrentOffset(0);
+        setHasMoreStreams(true);
+        getFilteredStreams(true);
     };
     const handleServiceClick = (e) => {
         let service_name = e.target.dataset.service;
@@ -190,7 +245,9 @@ export function PacketsPage() {
             tmp.push(e.target.dataset.service);
         }
         setUsedServices(tmp);
-        getFilteredStreams();
+        setCurrentOffset(0);
+        setHasMoreStreams(true);
+        getFilteredStreams(true);
     };
 
     return (
@@ -210,14 +267,25 @@ export function PacketsPage() {
                     })}
                 </div>
             </div>
-            <div id="streams" className="streams">
+            <div id="streams" className="streams" ref={streamsContainerRef}>
                 {streamsArray.map((stream, index) => {
                     return < StreamCard 
+                        key={stream.id}
                         streamObj={stream} 
                         onStreamClick={handleStreamClick}
                         tagColors={tagColors}
                     />
                 })}
+                {isLoadingMore && (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#ccc' }}>
+                        Загрузка...
+                    </div>
+                )}
+                {!hasMoreStreams && streamsArray.length > 0 && (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
+                        Все стримы загружены
+                    </div>
+                )}
             </div>
             <div className="packetData">
                 {packetData && packetData.length > 0 && packetData.map(packet => (

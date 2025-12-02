@@ -17,6 +17,7 @@
 }
 .streams {
     width: 30%;
+    overflow-y: auto;
 }
 .tag-filter {
     width: 100%;
