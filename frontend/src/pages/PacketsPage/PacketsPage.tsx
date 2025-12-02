@@ -20,6 +20,8 @@ export function PacketsPage() {
     const [tagColors, setTagColors] = useState({});
     const [packetData, setPacketData] = useState<any[]>([]);
     const [pageLoaded, setPageLoaded] = useState(null);
+    const [servicesLoaded, setServicesLoaded] = useState(false);
+    const [tagsLoaded, setTagsLoaded] = useState(false);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
     const [currentOffset, setCurrentOffset] = useState(0);
@@ -58,10 +60,14 @@ export function PacketsPage() {
         setHasMoreStreams(streams.length === 20);
     };
     const getServices = async () => {
+        if (servicesLoaded) return; // Prevent multiple calls
+        setServicesLoaded(true);
         let data = await getUrl("/api/service");
         await setServices(Object.values(data));
     };
     const getTags = async () => {
+        if (tagsLoaded) return; // Prevent multiple calls
+        setTagsLoaded(true);
         let data = await getUrl("/api/tag/names");
         const tagsData = Object.values(data);
         await setTags(tagsData);
@@ -126,18 +132,23 @@ export function PacketsPage() {
             return () => container.removeEventListener('scroll', handleScroll);
         }
     }, [isLoadingMore, hasMoreStreams, isRedEyeActive, currentOffset, usedTags, usedServices]);
-    if (!streamsArray.length && !isRedEyeActive)
-    {
-        if(!pageLoaded)
-        {
+    // Initial data loading
+    useEffect(() => {
+        if (isRedEyeActive) return;
+        
+        if (!pageLoaded) {
             setPageLoaded(true);
             getStreams();
         }
-    }
-    if (!servicesArray.length && !isRedEyeActive)
-        getServices();
-    if (!tagsArray.length && !isRedEyeActive)
-        getTags();
+        
+        if (!servicesLoaded) {
+            getServices();
+        }
+        
+        if (!tagsLoaded) {
+            getTags();
+        }
+    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]); // Only run when these change
 
     // WebSocket connection for real-time packet updates
     useEffect(() => {
