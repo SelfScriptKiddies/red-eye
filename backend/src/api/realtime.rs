@@ -1,56 +1,52 @@
-use actix::{Actor, Addr};
-use actix_web::{Error, HttpRequest, HttpResponse, get, rt, web};
-use actix_ws::{AggregatedMessage, Session};
-use futures_util::StreamExt as _;
-use tokio::time::{Duration, sleep};
+use actix_web::{Error, HttpRequest, HttpResponse, get, web};
+use actix_ws::Message;
+use futures_util::StreamExt;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+pub type BroadcastSender = Arc<broadcast::Sender<String>>;
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(echo);
 }
 
-//Websocket handler
+// WebSocket handler
 #[get("/ws")]
-async fn echo(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    //send 101 i guess
-    let (res, mut session, _stream) = actix_ws::handle(&req, stream)?;
-
-    // let mut stream = stream
-    //     .aggregate_continuations()
-    //     // aggregate continuation frames up to 1MiB
-    //     .max_continuation_size(2_usize.pow(20));
-
-    // spawn handler task
-    rt::spawn(async move {
-        loop {
-            //dummy action. just send some silly string.
-            // as there is no content-type header we can just send serde_json::to_string(T) instead
-            session.text("update").await.unwrap();
-            sleep(Duration::from_millis(1000)).await;
+async fn echo(
+    req: HttpRequest,
+    stream: web::Payload,
+    broadcaster: web::Data<BroadcastSender>,
+) -> Result<HttpResponse, Error> {
+    let (res, mut session, mut msg_stream) = actix_ws::handle(&req, stream)?;
+    
+    let mut rx = broadcaster.subscribe();
+    
+    // Spawn task to send messages from broadcaster to this WebSocket session
+    let mut session_sender = session.clone();
+    actix_web::rt::spawn(async move {
+        while let Ok(msg) = rx.recv().await {
+            if session_sender.text(msg).await.is_err() {
+                break;
+            }
         }
-        //code gathered from docs to Recieve message
-        // receive messages from websocket
-        // while let Some(msg) = stream.next().await {
-        //     match msg {
-        //         Ok(AggregatedMessage::Text(text)) => {
-        //             // echo text message
-        //             session.text(text).await.unwrap();
-        //         }
-
-        //         Ok(AggregatedMessage::Binary(bin)) => {
-        //             // echo binary message
-        //             session.binary(bin).await.unwrap();
-        //         }
-
-        //         Ok(AggregatedMessage::Ping(msg)) => {
-        //             // respond to PING frame with PONG frame
-        //             session.pong(&msg).await.unwrap();
-        //         }
-
-        //         _ => {}
-        //     }
-        // }
+    });
+    
+    // Handle incoming messages (ping/pong, close, etc.) in main task
+    actix_web::rt::spawn(async move {
+        while let Some(Ok(msg)) = msg_stream.next().await {
+            match msg {
+                Message::Ping(bytes) => {
+                    if session.pong(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => {
+                    break;
+                }
+                _ => {}
+            }
+        }
     });
 
-    // respond immediately with response connected to WS session
     Ok(res)
 }

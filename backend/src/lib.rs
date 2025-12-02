@@ -18,9 +18,14 @@ use crate::api::{
     stream::stream_service::StreamService, 
     tag::tag_service::TagService,
     service::service_service::ServiceService,
-    updater::{UpdateAgent, start_config_sync_scheduler}
+    updater::{UpdateAgent, start_config_sync_scheduler},
 };
 use std::sync::Arc;
+use async_nats::ConnectOptions;
+use futures_util::StreamExt;
+use bincode::config;
+use tokio::sync::broadcast;
+use log::{info, error};
 
 
 mod api;
@@ -79,6 +84,80 @@ pub async fn run() -> std::io::Result<()> {
         start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
     });
 
+    // Create broadcaster for WebSocket connections
+    let (tx, _) = broadcast::channel::<String>(1000);
+    let broadcaster_tx = Arc::new(tx);
+    let broadcaster = web::Data::new(broadcaster_tx.clone());
+
+    // Subscribe to NATS events and broadcast to WebSocket clients
+    let broadcaster_tx_clone = broadcaster_tx.clone();
+    let config_clone = config.clone();
+    tokio::spawn(async move {
+        let nats_client = match ConnectOptions::with_user_and_password(
+            config_clone.nats_login.clone(),
+            config_clone.nats_password.clone()
+        )
+        .connect(&config_clone.nats_broker)
+        .await
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("Failed to connect to NATS for WebSocket events: {}", e);
+                return;
+            }
+        };
+
+        let topic = config_clone.nats_websocket_topic.clone();
+        info!("Subscribing to NATS topic {} for WebSocket events", topic);
+        
+        let mut subscriber = match nats_client.subscribe(topic.clone()).await {
+            Ok(sub) => sub,
+            Err(e) => {
+                error!("Failed to subscribe to NATS topic {}: {}", topic, e);
+                return;
+            }
+        };
+
+        while let Some(message) = subscriber.next().await {
+            let payload = message.payload.to_vec();
+            
+            // Decode packet event (same structure as in traffic-analyzer)
+            #[derive(serde::Serialize, serde::Deserialize, bincode::Decode)]
+            struct PacketEvent {
+                packet_id: i32,
+                stream_id: usize,
+                timestamp_seconds: u64,
+                timestamp_microseconds: u64,
+                direction: String,
+            }
+
+            match bincode::decode_from_slice::<PacketEvent, _>(&payload, config::standard()) {
+                Ok((event, _)) => {
+                    // Convert to JSON for frontend
+                    match serde_json::to_string(&event) {
+                        Ok(json) => {
+                            // Broadcast to all WebSocket clients
+                            match broadcaster_tx_clone.send(json.clone()) {
+                                Ok(_) => {
+                                    debug!("Broadcasted packet event: packet_id={}, stream_id={}", event.packet_id, event.stream_id);
+                                }
+                                Err(e) => {
+                                    debug!("No WebSocket clients connected or channel full: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to serialize packet event to JSON: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to decode packet event from NATS: {}", e);
+                }
+            }
+        }
+    });
+
     HttpServer::new(move || {
         App::new()
             .app_data(pg_pool.clone())
@@ -88,6 +167,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
             .app_data(updater.clone())
+            .app_data(broadcaster.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())
