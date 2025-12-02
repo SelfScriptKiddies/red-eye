@@ -24,5 +24,29 @@ impl Cache {
             stream_locks: Arc::new(DashMap::new()),
         }
     }
+
+    /// Clean up unused stream locks - removes locks for keys that are not in the LRU cache
+    /// This prevents memory accumulation from old stream locks
+    pub async fn cleanup_unused_locks(&self) {
+        let mut stream_cache = self.streams.lock().await;
+        
+        // Collect keys to remove (locks for streams not in cache)
+        let keys_to_remove: Vec<String> = self.stream_locks
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.key();
+                if !stream_cache.contains_key(key) {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Remove unused locks
+        for key in keys_to_remove {
+            self.stream_locks.remove(&key);
+        }
+    }
 }
 

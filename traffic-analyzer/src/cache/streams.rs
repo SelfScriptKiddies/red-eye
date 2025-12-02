@@ -39,6 +39,12 @@ impl StreamsCache {
         trace!("Inserting stream id for key: {}", key);
         self.cache.put(key, stream_id);
     }
+
+    // Check if key exists in cache (for cleanup purposes)
+    // Note: This uses get() which updates LRU order, but that's acceptable for periodic cleanup
+    pub fn contains_key(&mut self, key: &str) -> bool {
+        self.cache.get(key).is_some()
+    }
 }
     
 

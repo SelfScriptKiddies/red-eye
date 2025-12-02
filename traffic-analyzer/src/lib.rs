@@ -18,6 +18,23 @@ pub async fn run() {
         cache::Cache::new(config.cache_streams_capacity)
     );
 
+    // Periodic cleanup task for unused stream locks (every 5 minutes)
+    // This prevents memory accumulation from old stream locks
+    tokio::spawn({
+        let cache = cache.clone();
+        async move {
+            use tokio::time::{interval, Duration};
+            let mut cleanup_interval = interval(Duration::from_secs(5 * 60)); // 5 minutes
+            cleanup_interval.tick().await; // Skip first tick
+            
+            loop {
+                cleanup_interval.tick().await;
+                cache.cleanup_unused_locks().await;
+                debug!("Cleaned up unused stream locks");
+            }
+        }
+    });
+
     // Update listener
     tokio::spawn({
         let config = config.clone();
