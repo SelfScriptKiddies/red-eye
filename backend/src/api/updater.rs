@@ -1,7 +1,7 @@
 use async_nats::{
     ConnectOptions, 
     Client, 
-    jetstream::{self, stream, consumer::{pull, AckPolicy}}
+    jetstream
 };
 use log::{error, info, debug};
 use bincode::{config, Decode, Encode};
@@ -94,22 +94,26 @@ mod dto {
 }
 
 pub struct UpdateAgent {
-    producer: Client,
+    js: jetstream::Context,
     topic: String,
 }
 
 impl UpdateAgent {
     pub async fn new(config: &ApplicationConfig) -> Self {
-        let producer = ConnectOptions::with_user_and_password(
+        let client = ConnectOptions::with_user_and_password(
             config.nats_login.clone(), 
             config.nats_password.clone())
             .connect(config.nats_broker.clone())
             .await
             .expect("Error connecting to NATS");
-            
+        
+        let js = jetstream::new(client);
+        let topic = config.nats_settings_topic.clone();
+        
+        // Stream will be created by consumers, we just publish to the subject
         UpdateAgent { 
-            producer,
-            topic: config.nats_settings_topic.clone(),
+            js,
+            topic,
         }
     }
     
@@ -119,7 +123,7 @@ impl UpdateAgent {
             Err(e) => return Err(format!("Error serializing: {}", e)),
         };
         
-        match self.producer.publish(self.topic.clone(), payload.into()).await {
+        match self.js.publish(self.topic.clone(), payload.into()).await {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Error sending: {}", e)),
         }
@@ -172,7 +176,7 @@ impl UpdateAgent {
             Err(e) => return Err(format!("Error serializing config sync: {}", e)),
         };
         
-        match self.producer.publish(self.topic.clone(), payload.into()).await {
+        match self.js.publish(self.topic.clone(), payload.into()).await {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Error sending config sync: {}", e)),
         }
