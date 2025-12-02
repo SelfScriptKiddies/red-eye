@@ -1,9 +1,11 @@
 use std::io::Error;
 use crate::ethernet::PacketInfo;
 use crate::filters::apply_filters;
-use log::debug;
+use log::{debug, error};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use async_nats::Client;
+use bincode::{config, Encode};
 use crate::cache::Cache;
 use crate::cache::streams::StreamsCache;
 use crate::configuration::ApplicationConfig;
@@ -15,15 +17,33 @@ pub enum Direction {
     Outbound
 }
 
+#[derive(Debug, Encode)]
+pub struct PacketEvent {
+    pub packet_id: i32,
+    pub stream_id: usize,
+    pub timestamp_seconds: u64,
+    pub timestamp_microseconds: u64,
+    pub direction: String,
+}
+
  pub struct PacketProcessor {
     cache: Arc<Cache>,
     config: Arc<ApplicationConfig>,
-    db: DB
+    db: DB,
+    nats_client: Option<Client>,
+    nats_topic: String,
  }
 
 impl PacketProcessor {
-    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB) -> Self {
-        Self { cache, config, db }
+    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, nats_client: Option<Client>) -> Self {
+        let nats_topic = config.nats_websocket_packets_topic.clone();
+        Self { 
+            cache, 
+            config, 
+            db,
+            nats_client,
+            nats_topic,
+        }
     }
 
     fn compare_ip(&self, filter_ip: &String, got_ip: &String) -> bool {
@@ -132,6 +152,35 @@ impl PacketProcessor {
             for trigger in triggers_array {
                 self.db.insert_trigger(packet_id, filter_id, trigger.start_index, trigger.end_index).await
                     .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Trigger insertion failed: {:?}", e)))?;
+            }
+        }
+
+        // Send event to NATS for real-time updates
+        if let Some(ref client) = self.nats_client {
+            let event = PacketEvent {
+                packet_id,
+                stream_id,
+                timestamp_seconds: packet.timestamp_seconds,
+                timestamp_microseconds: packet.timestamp_microseconds,
+                direction: match direction {
+                    Direction::Inbound => "inbound".to_string(),
+                    Direction::Outbound => "outbound".to_string(),
+                },
+            };
+            
+            match bincode::encode_to_vec(&event, config::standard()) {
+                Ok(payload) => {
+                    let topic = self.nats_topic.clone();
+                    let client_clone = client.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = client_clone.publish(topic, payload.into()).await {
+                            error!("Failed to send packet event to NATS: {}", e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to encode packet event: {}", e);
+                }
             }
         }
 

@@ -33,7 +33,19 @@ pub async fn consume_raw_packets(client: Client, cache: Arc<Cache>, config: Arc<
     let mut subscriber = client.subscribe(subject.clone()).await?;
     info!("Starting to consume packets from topic {}", &subject);
 
-    let packet_processor = Arc::new(PacketProcessor::new(cache, config, db));
+    // Create separate NATS client for sending events (to avoid blocking on receive)
+    let nats_host = config.nats_host.clone();
+    let nats_login = config.nats_login.clone();
+    let nats_password = config.nats_password.clone();
+    let event_client = ConnectOptions::with_user_and_password(
+        nats_login,
+        nats_password
+    )
+    .connect(&nats_host)
+    .await
+    .ok(); // Optional - if connection fails, we just won't send events
+
+    let packet_processor = Arc::new(PacketProcessor::new(cache, config, db, event_client));
 
     while let Some(message) = subscriber.next().await {
         // Get payload and clone it so it can live in a separate task
