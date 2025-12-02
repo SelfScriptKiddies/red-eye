@@ -46,7 +46,7 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, Vec<String>, Option<String>, Option<i32>)>, sqlx::Error> {
+    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>)>, sqlx::Error> {
         let mut query_parts = Vec::new();
         let mut params = Vec::new();
 
@@ -55,6 +55,7 @@ impl StreamRepository {
                 p.stream_id,
                 MIN(p.timestamp) as first_time,
                 MAX(p.timestamp) as last_time,
+                COUNT(DISTINCT p.id) as packet_count,
                 COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
                 s.name as service_name,
                 s.id as service_id
@@ -115,7 +116,7 @@ impl StreamRepository {
         log::debug!("Params: tags={:?}, services={:?}, limit={}, offset={}", tags, services, limit, offset);
         
         // Выполнение запроса с параметрами
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, Vec<String>, Option<String>, Option<i32>)>(&query_string);
+        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>)>(&query_string);
         
         // Биндинг параметров tags и services
         for param in &params {

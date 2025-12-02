@@ -42,7 +42,8 @@ pub struct StreamListResponse {
     pub service_name: String,
     pub tags: Vec<String>,
     pub first_packet_time: i64,
-    pub last_packet_time: i64
+    pub last_packet_time: i64,
+    pub packet_count: i32
 }
 
 impl Stream {
