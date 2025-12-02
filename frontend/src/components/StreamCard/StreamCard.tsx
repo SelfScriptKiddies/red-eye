@@ -43,7 +43,7 @@ export function StreamCard({ streamObj, onStreamClick, tagColors = {} }) {
                 </p>
             </div>
             <div className="info-block column">
-                <span className="stream-time">{moment(Date(streamObj.first_packet_time)).format("HH:MM:ss")}-{moment(Date(streamObj.last_packet_time)).format("HH:MM:ss")}</span>
+                <span className="stream-time">{moment.unix(streamObj.first_packet_time).format("HH:mm:ss")}-{moment.unix(streamObj.last_packet_time).format("HH:mm:ss")}</span>
                 <span className="stream-size"></span>
             </div>
         </div>
