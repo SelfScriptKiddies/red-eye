@@ -1,19 +1,29 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
+
+interface PacketEvent {
+    packet_id: number;
+    stream_id: number;
+    timestamp_seconds: number;
+    timestamp_microseconds: number;
+    direction: string;
+}
 
 export function PacketsPage() {
     const [streamsArray, setStreams] = useState([]);
     const [servicesArray, setServices] = useState([]);
     const [tagsArray, setTags] = useState([]);
     const [tagColors, setTagColors] = useState({});
-    const [packetData, setPacketData] = useState(null);
+    const [packetData, setPacketData] = useState<any[]>([]);
     const [pageLoaded, setPageLoaded] = useState(null);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
+    const wsRef = useRef<WebSocket | null>(null);
+    const selectedStreamIdRef = useRef<number | null>(null);
     
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
@@ -80,10 +90,68 @@ export function PacketsPage() {
     if (!tagsArray.length && !isRedEyeActive)
         getTags();
 
+    // WebSocket connection for real-time packet updates
+    useEffect(() => {
+        if (isRedEyeActive) {
+            return; // Don't connect if RedEye is not active
+        }
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+            console.log('WebSocket connected');
+        };
+
+        ws.onmessage = async (event) => {
+            try {
+                const packetEvent: PacketEvent = JSON.parse(event.data);
+                console.log('Received packet event:', packetEvent);
+                
+                // Update streams list when new packet arrives
+                // This will refresh the stream list to show updated timestamps and move active streams to top
+                if (!isRedEyeActive) {
+                    getFilteredStreams();
+                }
+            } catch (error) {
+                console.error('Error parsing WebSocket message:', error);
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket disconnected, reconnecting...');
+            // Reconnect after 3 seconds
+            setTimeout(() => {
+                if (!isRedEyeActive) {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+                    wsRef.current = new WebSocket(wsUrl);
+                }
+            }, 3000);
+        };
+
+        return () => {
+            if (wsRef.current) {
+                wsRef.current.close();
+                wsRef.current = null;
+            }
+        };
+    }, [isRedEyeActive]);
+
     const handleStreamClick = async (streamId) => {
+        selectedStreamIdRef.current = streamId;
+        console.log('Stream selected:', streamId);
         try {
             const data = await getUrl(`/api/packet/stream_id/${streamId}`);
-            await setPacketData(Object.values(data));
+            const packets = Object.values(data);
+            console.log('Loaded packets for stream:', packets.length);
+            setPacketData(packets);
         } catch (error) {
             console.error('Ошибка при получении данных пакета:', error);
         }
@@ -152,7 +220,7 @@ export function PacketsPage() {
                 })}
             </div>
             <div className="packetData">
-                {packetData && packetData.sort((a, b) => a.timestamp - b.timestamp).map(packet => (
+                {packetData && packetData.length > 0 && packetData.map(packet => (
                     <PacketCard 
                         key={packet.id}
                         {...packet}
