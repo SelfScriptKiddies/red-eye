@@ -59,13 +59,47 @@
     color: #055b09;
 }
 
+.packet-section {
+    margin-top: 8px;
+}
+
+.section-title {
+    font-size: 0.9rem;
+    color: #ccc;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+}
+
+.row-space {
+    justify-content: space-between;
+}
+
 .packet-body {
     padding: 10px;
     background-color: #555;
     color: white;
     border-radius: 4px;
-    font-family: monospace;
     white-space: pre-wrap;
     word-break: break-all;
-    /* color: #212121; */
-} 
+}
+
+.monospace {
+    font-family: monospace;
+}
+
+.copy-btn {
+    background: #444;
+    color: #eee;
+    border: 1px solid #666;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    padding: 2px 8px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.copy-btn:hover {
+    background: #555;
+    border-color: #888;
+}
