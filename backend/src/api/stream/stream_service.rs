@@ -41,7 +41,7 @@ impl StreamService {
         ).await?;
         
         let responses = streams.into_iter()
-            .map(|(id, first_time, last_time, packet_count, tags, service_name, service_id)| {
+            .map(|(id, first_time, last_time, packet_count, tags, service_name, service_id, favorite)| {
                 StreamListResponse {
                     id,
                     first_packet_time: first_time.unwrap_or(0),
@@ -50,10 +50,19 @@ impl StreamService {
                     tags,
                     service_id: service_id.unwrap_or(-1),
                     service_name: service_name.unwrap_or("Unknown".to_string()),
+                    favorite,
                 }
             })
             .collect();
         
         Ok(responses)
+    }
+
+    pub async fn set_favorite(&self, stream_id: i32, favorite: bool) -> Result<bool, sqlx::Error> {
+        self.stream_repository.set_favorite(stream_id, favorite).await
+    }
+
+    pub async fn delete_old_streams(&self, age_minutes: i64) -> Result<u64, sqlx::Error> {
+        self.stream_repository.delete_old_streams(age_minutes).await
     }
 }

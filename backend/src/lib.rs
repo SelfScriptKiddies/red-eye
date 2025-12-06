@@ -8,10 +8,8 @@ use actix_web::cookie::{Key, SameSite};
 use actix_web::middleware::{ErrorHandlers, Logger};
 use actix_web::{App, HttpServer, web};
 use actix_web::http::StatusCode;
-use utoipa_swagger_ui::SwaggerUi;
-use utoipa::OpenApi;
 use config_manager::ConfigInit;
-use log::debug;
+use log::{debug, info, error};
 use api::auth;
 use crate::api::{
     packet::packet_service::PacketService, 
@@ -25,7 +23,6 @@ use async_nats::ConnectOptions;
 use futures_util::StreamExt;
 use bincode::config;
 use tokio::sync::broadcast;
-use log::{info, error};
 
 
 mod api;
@@ -83,6 +80,30 @@ pub async fn run() -> std::io::Result<()> {
     tokio::spawn(async move {
         start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
     });
+
+    // Periodic cleanup of old non-favorite streams (and their packets via CASCADE)
+    {
+        let stream_service_cleanup = StreamService::new_from_pgpool(pool.clone());
+        let age_minutes = config.cleanup_stream_age_minutes;
+        let interval_minutes = config.cleanup_interval_minutes;
+        tokio::spawn(async move {
+            use tokio::time::{interval, Duration};
+            let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
+            loop {
+                ticker.tick().await;
+                match stream_service_cleanup.delete_old_streams(age_minutes).await {
+                    Ok(removed) => {
+                        if removed > 0 {
+                            info!("Cleanup removed {} old streams", removed);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to cleanup old streams: {}", e);
+                    }
+                }
+            }
+        });
+    }
 
     // Create broadcaster for WebSocket connections
     let (tx, _) = broadcast::channel::<String>(1000);

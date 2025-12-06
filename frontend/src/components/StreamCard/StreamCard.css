@@ -11,6 +11,25 @@
     transition: 0.3s;
 }
 
+.favorite-btn {
+    background: transparent;
+    border: none;
+    color: #777;
+    font-size: 1.3rem;
+    margin-right: 10px;
+    cursor: pointer;
+    transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.favorite-btn--active {
+    color: #f7d046;
+}
+
+.favorite-btn:hover {
+    color: #ffe38a;
+    transform: scale(1.1);
+}
+
 .stream-card:hover {
     cursor: pointer;
     border-radius: 10px;

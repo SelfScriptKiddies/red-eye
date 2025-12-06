@@ -15,7 +15,7 @@ impl StreamRepository {
     pub async fn get_packet_by_id(&self, stream_id: i32) -> Result<Stream, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite
             FROM stream
             WHERE id = $1
             "#)
@@ -27,7 +27,7 @@ impl StreamRepository {
     pub async fn get_all_streams(&self) -> Result<Vec<Stream>, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite
             FROM stream
             "#)
             .fetch_all(&self.pgpool)
@@ -46,7 +46,7 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>)>, sqlx::Error> {
+    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool)>, sqlx::Error> {
         let mut query_parts = Vec::new();
         let mut params = Vec::new();
 
@@ -58,7 +58,8 @@ impl StreamRepository {
                 COUNT(DISTINCT p.id) as packet_count,
                 COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
                 s.name as service_name,
-                s.id as service_id
+                s.id as service_id,
+                str.favorite as favorite
             FROM packets p
             LEFT JOIN tag t ON t.packet_id = p.id
             LEFT JOIN tag_name tn ON tn.id = t.tag_id
@@ -100,7 +101,7 @@ impl StreamRepository {
 
         // Добавление GROUP BY и других частей запроса
         query_parts.push(r#"
-            GROUP BY p.stream_id, s.name, s.id
+            GROUP BY p.stream_id, s.name, s.id, str.favorite
             ORDER BY last_time DESC"#.to_string());
 
         // Добавление LIMIT и OFFSET
@@ -116,7 +117,7 @@ impl StreamRepository {
         log::debug!("Params: tags={:?}, services={:?}, limit={}, offset={}", tags, services, limit, offset);
         
         // Выполнение запроса с параметрами
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>)>(&query_string);
+        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool)>(&query_string);
         
         // Биндинг параметров tags и services
         for param in &params {
@@ -127,6 +128,40 @@ impl StreamRepository {
         query = query.bind(limit).bind(offset);
         
         query.fetch_all(&self.pgpool).await
+    }
+
+    pub async fn set_favorite(&self, stream_id: i32, favorite: bool) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            UPDATE stream
+            SET favorite = $2
+            WHERE id = $1
+            RETURNING favorite
+            "#,
+        )
+        .bind(stream_id)
+        .bind(favorite)
+        .fetch_one(&self.pgpool)
+        .await
+    }
+
+    pub async fn delete_old_streams(&self, age_minutes: i64) -> Result<u64, sqlx::Error> {
+        // Определяем порог в секундах для сравнения с полем timestamp в packets
+        sqlx::query(
+            r#"
+            DELETE FROM stream s
+            WHERE s.favorite = FALSE
+            AND NOT EXISTS (
+                SELECT 1 FROM packets p
+                WHERE p.stream_id = s.id
+                  AND p.timestamp >= (extract(epoch from now())::bigint - ($1 * 60))
+            )
+            "#,
+        )
+        .bind(age_minutes)
+        .execute(&self.pgpool)
+        .await
+        .map(|res| res.rows_affected())
     }
 }
 

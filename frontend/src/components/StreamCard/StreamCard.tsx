@@ -1,8 +1,9 @@
 import "./StreamCard.css"
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export function StreamCard({ streamObj, onStreamClick, tagColors = {} }) {
+export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColors = {} }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
+    const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {
         let e = event.target;
         while(!e.dataset.streamid)
@@ -10,6 +11,11 @@ export function StreamCard({ streamObj, onStreamClick, tagColors = {} }) {
             e = e.parentElement;
         }
         onStreamClick(e.dataset.streamid);
+    }
+
+    const handleFavoriteClick = (event) => {
+        event.stopPropagation();
+        onFavoriteToggle(streamObj.id, isFavorite);
     }
     
     const getTagColor = (tagName) => {
@@ -47,6 +53,13 @@ export function StreamCard({ streamObj, onStreamClick, tagColors = {} }) {
     return (
         <div className="stream-card d-flex jc-sb" onClick={clickHandler} data-streamid={streamObj.id}>
             <div className="row">
+                <button 
+                    className={`favorite-btn ${isFavorite ? 'favorite-btn--active' : ''}`}
+                    aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                    onClick={handleFavoriteClick}
+                >
+                    {isFavorite ? '★' : '☆'}
+                </button>
                 <p>
                     <StreamSign incoming={streamObj.incoming} containsFlag={containsFlag} />
                     {streamObj.tags.map((tagName, index) => {

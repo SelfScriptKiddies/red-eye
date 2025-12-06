@@ -123,4 +123,20 @@ pub struct ApplicationConfig {
         default = "trace".to_string()
     )]
     pub logging_level: String,
+
+    /// Cleanup old streams configuration
+    #[source(
+        clap(long="cleanup-stream-age-minutes", help="Delete non-favorite streams older than N minutes (by last packet time)", help_heading = "Cleanup"),
+        env = "CLEANUP_STREAM_AGE_MINUTES",
+        config = "cleanup.stream_age_minutes",
+        default = 60
+    )]
+    pub cleanup_stream_age_minutes: i64,
+    #[source(
+        clap(long="cleanup-interval-minutes", help="Run cleanup every N minutes", help_heading = "Cleanup"),
+        env = "CLEANUP_INTERVAL_MINUTES",
+        config = "cleanup.interval_minutes",
+        default = 15
+    )]
+    pub cleanup_interval_minutes: u64,
 }

@@ -219,6 +219,31 @@ export function PacketsPage() {
         }
     };
 
+    const handleFavoriteToggle = async (streamId, currentFavorite) => {
+        try {
+            const response = await fetch(`/api/stream/${streamId}/favorite`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ favorite: !currentFavorite })
+            });
+
+            if (!response.ok) {
+                console.error('Не удалось обновить избранное:', await response.text());
+                return;
+            }
+
+            setStreams((prevStreams: any[]) =>
+                prevStreams.map((stream: any) =>
+                    stream.id === streamId ? { ...stream, favorite: !currentFavorite } : stream
+                )
+            );
+        } catch (error) {
+            console.error('Ошибка при обновлении избранного:', error);
+        }
+    };
+
     const handleClearStreams = () => {
         setStreams([]);
         setCurrentOffset(0);
@@ -284,6 +309,7 @@ export function PacketsPage() {
                         key={stream.id}
                         streamObj={stream} 
                         onStreamClick={handleStreamClick}
+                        onFavoriteToggle={handleFavoriteToggle}
                         tagColors={tagColors}
                     />
                 })}

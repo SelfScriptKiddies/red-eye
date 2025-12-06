@@ -19,7 +19,8 @@ pub struct Stream {
     pub dst_port: i32,
     pub protocol: Protocol,
     pub active: bool,
-    pub packet_count: i32
+    pub packet_count: i32,
+    pub favorite: bool,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -32,6 +33,7 @@ pub struct StreamResponse {
     pub protocol: String,
     pub active: bool,
     pub packet_count: i32,
+    pub favorite: bool,
     pub packets: Vec<PacketResponse>
 }
 
@@ -43,7 +45,8 @@ pub struct StreamListResponse {
     pub tags: Vec<String>,
     pub first_packet_time: i64,
     pub last_packet_time: i64,
-    pub packet_count: i32
+    pub packet_count: i32,
+    pub favorite: bool,
 }
 
 impl Stream {
@@ -57,6 +60,7 @@ impl Stream {
             protocol: self.protocol.to_string(),
             active: self.active,
             packet_count: self.packet_count,
+            favorite: self.favorite,
             packets: service.get_packets_by_stream_id(self.id).await
                             .unwrap_or(vec![])
                             .iter()

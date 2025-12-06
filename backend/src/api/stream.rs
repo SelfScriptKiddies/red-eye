@@ -1,5 +1,5 @@
 use actix_identity::Identity;
-use actix_web::{get, HttpResponse, Responder, web};
+use actix_web::{get, put, HttpResponse, Responder, web};
 use serde_json::json;
 use stream_service::StreamService;
 use crate::api::packet::packet_service::PacketService;
@@ -7,10 +7,16 @@ use serde::{Deserialize, Deserializer};
 use stream_dto::StreamResponse;
 use utoipa::IntoParams;
 use log::info;
+use utoipa::ToSchema;
 
 pub mod stream_dto;
 mod stream_repository;
 pub(crate) mod stream_service;
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateFavoriteRequest {
+    pub favorite: bool
+}
 
 #[utoipa::path(
     get,
@@ -121,8 +127,36 @@ async fn get_all_streams(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/stream/{id}/favorite",
+    request_body = UpdateFavoriteRequest,
+    responses(
+        (status = 200, description = "Favorite flag updated", body = serde_json::Value, example = json!({"id": 1, "favorite": true})),
+        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
+        (status = 404, description = "Stream not found", body = serde_json::Value, example = json!({"error": "Stream not found"})),
+        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
+    ),
+    tag = "stream"
+)]
+#[put("/stream/{id}/favorite")]
+async fn update_stream_favorite(
+    _identity: Identity,
+    path: web::Path<(i32,)>,
+    payload: web::Json<UpdateFavoriteRequest>,
+    stream_service: web::Data<StreamService>,
+) -> Result<impl Responder, actix_web::error::Error> {
+    let stream_id = path.into_inner().0;
+    match stream_service.set_favorite(stream_id, payload.favorite).await {
+        Ok(favorite) => Ok(HttpResponse::Ok().json(json!({"id": stream_id, "favorite": favorite}))),
+        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"}))),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+    }
+}
+
 pub fn stream_config(cfg: &mut web::ServiceConfig) {
     cfg
         .service(get_all_streams)
-        .service(get_stream_by_id);
+        .service(get_stream_by_id)
+        .service(update_stream_favorite);
 }

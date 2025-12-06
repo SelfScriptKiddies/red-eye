@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS stream (
     dst_port INTEGER NOT NULL,
     protocol VARCHAR(3) NOT NULL,
     active BOOLEAN NOT NULL,
+    favorite BOOLEAN NOT NULL DEFAULT FALSE,
     packet_count INTEGER NOT NULL DEFAULT 0,
     service_id INTEGER NOT NULL
 );
