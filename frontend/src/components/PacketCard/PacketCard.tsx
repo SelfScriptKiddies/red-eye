@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './PacketCard.css';
+
+type ViewMode = 'text' | 'hex' | 'python';
 
 interface PacketProps {
     direction: string;
@@ -52,48 +54,69 @@ const toPythonBytesLiteral = (bytes: Uint8Array): string => {
 };
 
 export function PacketCard({ direction, id, packet_data, stream_id, timestamp }: PacketProps) {
+    const [viewMode, setViewMode] = useState<ViewMode>('text');
+    
     const bytes = base64ToBytes(packet_data);
     const formattedTime = new Date(timestamp).toLocaleTimeString();
-    const textPreview = toUtf8Preview(bytes);
-    const hexDump = toHexDump(bytes);
-    const pythonBytes = toPythonBytesLiteral(bytes);
 
-    const copy = async (value: string) => {
+    const getContent = (): string => {
+        switch (viewMode) {
+            case 'text':
+                return toUtf8Preview(bytes);
+            case 'hex':
+                return toHexDump(bytes);
+            case 'python':
+                return toPythonBytesLiteral(bytes);
+        }
+    };
+
+    const copy = async () => {
         try {
-            await navigator.clipboard.writeText(value);
+            await navigator.clipboard.writeText(getContent());
         } catch (e) {
-            console.error('Не удалось скопировать:', e);
+            console.error('Failed to copy:', e);
         }
     };
     
     return (
         <div className={`packet-card ${direction === 'orig' ? 'packet-orig' : 'packet-dest'}`}>
             <div className="packet-header">
+                <div className="view-mode-switcher">
+                    <button 
+                        className={`view-mode-btn ${viewMode === 'text' ? 'active' : ''}`}
+                        onClick={() => setViewMode('text')}
+                        title="Text view"
+                    >
+                        TXT
+                    </button>
+                    <button 
+                        className={`view-mode-btn ${viewMode === 'hex' ? 'active' : ''}`}
+                        onClick={() => setViewMode('hex')}
+                        title="Hex dump"
+                    >
+                        HEX
+                    </button>
+                    <button 
+                        className={`view-mode-btn ${viewMode === 'python' ? 'active' : ''}`}
+                        onClick={() => setViewMode('python')}
+                        title="Python bytes literal"
+                    >
+                        PY
+                    </button>
+                </div>
                 <span className="packet-time">{formattedTime}</span>
                 <span className={`packet-direction ${direction}`}>
                     {direction === 'orig' ? '← Исходящий' : '→ Входящий'}
                 </span>
             </div>
 
-            <div className="packet-section">
-                <div className="section-title">Text</div>
-                <pre className="packet-body">{textPreview}</pre>
-            </div>
-
-            <div className="packet-section">
-                <div className="section-title row-space">
-                    <span>Hex dump</span>
-                    <button className="copy-btn" onClick={() => copy(hexDump)}>Copy</button>
-                </div>
-                <pre className="packet-body monospace">{hexDump}</pre>
-            </div>
-
-            <div className="packet-section">
-                <div className="section-title row-space">
-                    <span>Python bytes</span>
-                    <button className="copy-btn" onClick={() => copy(pythonBytes)}>Copy</button>
-                </div>
-                <pre className="packet-body monospace">{pythonBytes}</pre>
+            <div className="packet-content">
+                <pre className={`packet-body ${viewMode !== 'text' ? 'monospace' : ''}`}>
+                    {getContent()}
+                </pre>
+                <button className="copy-btn" onClick={copy} title="Copy to clipboard">
+                    Copy
+                </button>
             </div>
         </div>
     );

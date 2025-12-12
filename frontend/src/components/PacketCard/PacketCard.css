@@ -20,6 +20,7 @@
 .packet-header {
     display: flex;
     align-items: center;
+    gap: 12px;
     margin-bottom: 10px;
     font-size: 0.9em;
 }
@@ -32,6 +33,50 @@
     color: #2196F3;
 }
 
+/* View mode switcher */
+.view-mode-switcher {
+    display: flex;
+    gap: 4px;
+}
+
+.view-mode-btn {
+    background: #2a2a2a;
+    color: #777;
+    border: none !important;
+    outline: none !important;
+    border-radius: 3px;
+    padding: 4px 9px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    box-shadow: none;
+}
+
+.view-mode-btn:hover {
+    box-shadow: inset 0 0 0 1px #646cff;
+}
+
+.view-mode-btn:focus,
+.view-mode-btn:focus-visible {
+    outline: none !important;
+}
+
+.view-mode-btn.active {
+    background: #4a4a4a;
+    color: #fff;
+}
+
+.packet-orig .view-mode-btn.active {
+    background: #1565C0;
+    color: #fff;
+}
+
+.packet-dest .view-mode-btn.active {
+    background: #2E7D32;
+    color: #fff;
+}
+
 .packet-id {
     margin-right: 10px;
     font-weight: bold;
@@ -39,13 +84,14 @@
 }
 
 .packet-time {
-    margin-right: 10px;
+    color: #999;
 }
 
 .packet-direction {
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 0.8em;
+    margin-left: auto;
 }
 
 .packet-direction.orig {
@@ -55,51 +101,40 @@
 
 .packet-direction.dest {
     background-color: #99b19b;
-    /* color: #388E3C; */
     color: #055b09;
 }
 
-.packet-section {
-    margin-top: 8px;
-}
-
-.section-title {
-    font-size: 0.9rem;
-    color: #ccc;
-    margin-bottom: 4px;
-    display: flex;
-    align-items: center;
-}
-
-.row-space {
-    justify-content: space-between;
+.packet-content {
+    position: relative;
 }
 
 .packet-body {
+    margin: 0;
     padding: 10px;
-    background-color: #555;
-    color: white;
+    padding-right: 60px;
+    background-color: #2a2a2a;
+    color: #e0e0e0;
     border-radius: 4px;
     white-space: pre-wrap;
     word-break: break-all;
+    font-size: 0.85rem;
+    line-height: 1.4;
 }
 
 .monospace {
-    font-family: monospace;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
 }
 
 .copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
     background: #444;
-    color: #eee;
-    border: 1px solid #666;
+    color: #bbb;
+    border: 1px solid #555;
     border-radius: 4px;
-    font-size: 0.8rem;
-    padding: 2px 8px;
+    font-size: 0.75rem;
+    padding: 4px 10px;
     cursor: pointer;
-    transition: 0.2s;
-}
-
-.copy-btn:hover {
-    background: #555;
-    border-color: #888;
 }
