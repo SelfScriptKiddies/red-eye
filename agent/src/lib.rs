@@ -1,7 +1,8 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use tokio::sync::Mutex;
 
 mod commands;
@@ -9,8 +10,10 @@ mod config;
 mod harpoon;
 mod heartbeat;
 mod nats;
+mod nftables;
 mod packet_synthesis;
 mod sniffer;
+mod tls_certs;
 mod updates;
 
 use config::AgentConfig;
@@ -41,6 +44,18 @@ pub async fn run() {
     info!("Starting Red Eye Agent '{}'", agent_id);
     debug!("Config: {:?}", config);
 
+    // Initialize TLS CA certificates
+    let tls_certs = match tls_certs::ensure_ca_certs(Path::new(&config.data_dir)) {
+        Ok(certs) => {
+            info!("TLS CA certs ready at {}", config.data_dir);
+            Some(certs)
+        }
+        Err(e) => {
+            warn!("Failed to initialize TLS certs: {} (TLS MITM will be unavailable)", e);
+            None
+        }
+    };
+
     // Connect to NATS
     let nats = match NatsClient::connect(&config, &agent_id).await {
         Ok(n) => n,
@@ -55,8 +70,12 @@ pub async fn run() {
     let ports_cache = create_ports_cache(config.ports.clone());
     let (restart_tx, restart_rx) = create_restart_notifier();
 
-    // Harpoon engine (shared via Arc<Mutex> for commands + heartbeat)
-    let harpoon_engine = HarpoonEngine::new(ports_cache.clone(), restart_tx.clone());
+    // Harpoon engine with TLS certs and nftables manager
+    let harpoon_engine = HarpoonEngine::new(
+        ports_cache.clone(),
+        restart_tx.clone(),
+        tls_certs,
+    );
     let harpoon = Arc::new(Mutex::new(harpoon_engine));
 
     // Capture forwarder: harpoon packets → NATS (same format as sniffer)
@@ -81,6 +100,6 @@ pub async fn run() {
     // Run sniffer (blocks until shutdown)
     sniffer::run_sniffer_loop(nats, &config, ports_cache, restart_rx).await;
 
-    // Cleanup
+    // Cleanup: stop harpoon + nftables
     harpoon.lock().await.shutdown().await;
 }

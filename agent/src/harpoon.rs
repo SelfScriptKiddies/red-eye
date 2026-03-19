@@ -8,10 +8,12 @@ use log::{debug, info, warn};
 use harpoon_core::capture::CaptureManager;
 use harpoon_core::engine::run_with_capture;
 use harpoon_core::types::endpoint::{Endpoint, Protocol};
-use harpoon_core::types::rule::{Rule, UdpSourceMode};
+use harpoon_core::types::rule::{Rule, TlsConfig, TlsMode, UdpSourceMode};
 use harpoon_core::{CoreConfig, EngineHandle};
 
+use crate::nftables::{NftablesManager, RedirectRule};
 use crate::packet_synthesis;
+use crate::tls_certs::TlsCerts;
 use crate::updates::{PortsCache, RestartNotifier};
 
 /// Maximum capture session duration (seconds). Effectively infinite.
@@ -28,15 +30,34 @@ pub struct ProxyRuleSpec {
     pub listen: SocketAddr,
     pub target: SocketAddr,
     pub protocol: Protocol,
+    /// TLS mode: None = no TLS, Some("mitm"|"terminate"|"passthrough")
+    pub tls_mode: Option<String>,
+    /// If set, create nftables redirect from this port to listen port
+    pub nft_redirect_port: Option<u16>,
 }
 
 impl ProxyRuleSpec {
     /// Convert to a harpoon-core Rule.
-    fn to_harpoon_rule(&self) -> Rule {
+    fn to_harpoon_rule(&self, tls_certs: &Option<TlsCerts>) -> Rule {
         let endpoint = match self.protocol {
             Protocol::Tcp => Endpoint::tcp,
             Protocol::Udp => Endpoint::udp,
         };
+
+        let tls = self.tls_mode.as_deref().and_then(|mode| {
+            let tls_certs = tls_certs.as_ref()?;
+            let mode = match mode {
+                "mitm" => TlsMode::Mitm,
+                "terminate" => TlsMode::Terminate,
+                "passthrough" => TlsMode::Passthrough,
+                _ => return None,
+            };
+            Some(TlsConfig {
+                mode,
+                ca_cert_path: tls_certs.ca_cert_path.clone(),
+                ca_key_path: tls_certs.ca_key_path.clone(),
+            })
+        });
 
         Rule {
             name: self.name.clone(),
@@ -45,13 +66,12 @@ impl ProxyRuleSpec {
             filters: vec![],
             duplicate: None,
             exporter: None,
-            tls: None,
+            tls,
             udp_source_mode: UdpSourceMode::Proxy,
             idle_timeout_secs: Rule::default_idle_timeout(),
         }
     }
 
-    /// Extract the listen port.
     pub fn listen_port(&self) -> u16 {
         self.listen.port()
     }
@@ -64,25 +84,54 @@ pub struct HarpoonEngine {
     handle: Option<EngineHandle>,
     capture_mgr: Arc<CaptureManager>,
     rules: HashMap<String, ProxyRuleSpec>,
+    tls_certs: Option<TlsCerts>,
+    nft: NftablesManager,
 }
 
 impl HarpoonEngine {
-    pub fn new(ports_cache: PortsCache, restart_tx: RestartNotifier) -> Self {
+    pub fn new(
+        ports_cache: PortsCache,
+        restart_tx: RestartNotifier,
+        tls_certs: Option<TlsCerts>,
+    ) -> Self {
         Self {
             ports_cache,
             restart_tx,
             handle: None,
             capture_mgr: CaptureManager::new(),
             rules: HashMap::new(),
+            tls_certs,
+            nft: NftablesManager::new(),
         }
     }
 
-    /// Add a proxy rule and restart the engine.
+    /// Add a proxy rule, set up nftables if needed, and restart the engine.
     pub async fn add_rule(&mut self, spec: ProxyRuleSpec) -> Result<()> {
         info!(
-            "Adding proxy rule '{}': {} -> {}",
-            spec.name, spec.listen, spec.target
+            "Adding proxy rule '{}': {} -> {}{}{}",
+            spec.name,
+            spec.listen,
+            spec.target,
+            spec.tls_mode
+                .as_deref()
+                .map(|m| format!(" (TLS: {})", m))
+                .unwrap_or_default(),
+            spec.nft_redirect_port
+                .map(|p| format!(" (nft: {} -> {})", p, spec.listen_port()))
+                .unwrap_or_default(),
         );
+
+        // Set up nftables redirect if requested
+        if let Some(original_port) = spec.nft_redirect_port {
+            self.nft.add_redirect(RedirectRule {
+                protocol: match spec.protocol {
+                    Protocol::Tcp => "tcp".to_string(),
+                    Protocol::Udp => "udp".to_string(),
+                },
+                original_port,
+                redirect_port: spec.listen_port(),
+            })?;
+        }
 
         let port = spec.listen_port();
         self.rules.insert(spec.name.clone(), spec);
@@ -92,7 +141,7 @@ impl HarpoonEngine {
         Ok(())
     }
 
-    /// Remove a proxy rule and restart the engine.
+    /// Remove a proxy rule, clean up nftables, and restart the engine.
     pub async fn remove_rule(&mut self, name: &str) -> Result<()> {
         let spec = self
             .rules
@@ -101,6 +150,11 @@ impl HarpoonEngine {
 
         info!("Removing proxy rule '{}'", name);
 
+        // Remove nftables redirect
+        if let Some(original_port) = spec.nft_redirect_port {
+            let _ = self.nft.remove_redirect(original_port);
+        }
+
         let port = spec.listen_port();
         self.restart_engine().await?;
         self.return_port_to_sniffer(port);
@@ -108,8 +162,15 @@ impl HarpoonEngine {
         Ok(())
     }
 
-    /// Update a proxy rule: remove old, add new.
+    /// Update a proxy rule.
     pub async fn update_rule(&mut self, spec: ProxyRuleSpec) -> Result<()> {
+        // Remove old nftables rule if present
+        if let Some(old_spec) = self.rules.get(&spec.name) {
+            if let Some(old_nft_port) = old_spec.nft_redirect_port {
+                let _ = self.nft.remove_redirect(old_nft_port);
+            }
+        }
+
         let old_port = self.rules.get(&spec.name).map(|r| r.listen_port());
         let new_port = spec.listen_port();
 
@@ -118,10 +179,21 @@ impl HarpoonEngine {
             spec.name, spec.listen, spec.target
         );
 
+        // Add new nftables rule if requested
+        if let Some(original_port) = spec.nft_redirect_port {
+            self.nft.add_redirect(RedirectRule {
+                protocol: match spec.protocol {
+                    Protocol::Tcp => "tcp".to_string(),
+                    Protocol::Udp => "udp".to_string(),
+                },
+                original_port,
+                redirect_port: spec.listen_port(),
+            })?;
+        }
+
         self.rules.insert(spec.name.clone(), spec);
         self.restart_engine().await?;
 
-        // If the port changed, update sniffer exclusions
         if let Some(old) = old_port {
             if old != new_port {
                 self.return_port_to_sniffer(old);
@@ -130,6 +202,16 @@ impl HarpoonEngine {
         self.exclude_port_from_sniffer(new_port);
 
         Ok(())
+    }
+
+    /// Apply a set of manual nftables redirect rules (replaces all current manual rules).
+    pub fn apply_nft_rules(&mut self, rules: Vec<RedirectRule>) -> Result<()> {
+        self.nft.apply_rules(rules)
+    }
+
+    /// Clear all nftables rules.
+    pub fn clear_nft_rules(&mut self) -> Result<()> {
+        self.nft.clear()
     }
 
     /// Names of currently active proxy rules.
@@ -142,18 +224,22 @@ impl HarpoonEngine {
         self.capture_mgr.clone()
     }
 
-    /// Stop the engine and all captures.
+    /// Current nftables rules (for status reporting).
+    pub fn nft_rules(&self) -> Vec<RedirectRule> {
+        self.nft.active_rules().to_vec()
+    }
+
+    /// Stop the engine, clean up nftables.
     pub async fn shutdown(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.stop();
             let _ = handle.shutdown().await;
             info!("Harpoon engine shut down");
         }
+        let _ = self.nft.clear();
     }
 
-    /// Stop and restart the harpoon engine with current rules.
     async fn restart_engine(&mut self) -> Result<()> {
-        // Stop existing engine
         if let Some(handle) = self.handle.take() {
             handle.stop();
             let _ = handle.shutdown().await;
@@ -165,21 +251,21 @@ impl HarpoonEngine {
             return Ok(());
         }
 
-        // Build config from current rules
-        let rules: Vec<Rule> = self.rules.values().map(|s| s.to_harpoon_rule()).collect();
+        let rules: Vec<Rule> = self
+            .rules
+            .values()
+            .map(|s| s.to_harpoon_rule(&self.tls_certs))
+            .collect();
         let config = CoreConfig {
             rules,
             pipelines: vec![],
             ..Default::default()
         };
 
-        // Start engine with shared capture manager (preserved across restarts)
-        let handle: EngineHandle =
-            run_with_capture(config, self.capture_mgr.clone())
-                .await
-                .context("Failed to start harpoon engine")?;
+        let handle: EngineHandle = run_with_capture(config, self.capture_mgr.clone())
+            .await
+            .context("Failed to start harpoon engine")?;
 
-        // Start capture on each rule for packet forwarding
         for name in self.rules.keys() {
             if let Err(e) = self
                 .capture_mgr
@@ -204,7 +290,6 @@ impl HarpoonEngine {
         Ok(())
     }
 
-    /// Remove a port from sniffer's BPF filter (it's now handled by harpoon).
     fn exclude_port_from_sniffer(&self, port: u16) {
         let removed = self.ports_cache.write().unwrap().remove(&port);
         if removed {
@@ -213,9 +298,7 @@ impl HarpoonEngine {
         }
     }
 
-    /// Return a port to sniffer's BPF filter (no longer proxied).
     fn return_port_to_sniffer(&self, port: u16) {
-        // Only return if no other rule uses this port
         let still_proxied = self.rules.values().any(|r| r.listen_port() == port);
         if !still_proxied {
             self.ports_cache.write().unwrap().insert(port);
@@ -226,7 +309,10 @@ impl HarpoonEngine {
 }
 
 /// Spawn a background task that forwards captured packets from harpoon to NATS.
-pub fn spawn_capture_forwarder(capture_mgr: Arc<CaptureManager>, nats: crate::nats::NatsClient) {
+pub fn spawn_capture_forwarder(
+    capture_mgr: Arc<CaptureManager>,
+    nats: crate::nats::NatsClient,
+) {
     tokio::spawn(async move {
         let mut rx = capture_mgr.subscribe();
         info!("Harpoon capture forwarder started");

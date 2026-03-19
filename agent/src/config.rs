@@ -43,6 +43,10 @@ pub struct AgentConfig {
     #[arg(long, env = "HEARTBEAT_INTERVAL_SECS", default_value_t = 5)]
     pub heartbeat_interval_secs: u64,
 
+    /// Data directory for CA certs and persistent state
+    #[arg(long, env = "DATA_DIR", default_value = "/var/lib/red-eye-agent")]
+    pub data_dir: String,
+
     /// Logging level (trace|debug|info|warn|error)
     #[arg(long, short = 'l', env = "LOGGING_LEVEL", default_value = "info")]
     pub logging_level: String,

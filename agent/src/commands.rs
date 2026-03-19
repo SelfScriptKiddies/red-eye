@@ -9,6 +9,7 @@ use harpoon_core::types::endpoint::Protocol;
 
 use crate::harpoon::{HarpoonEngine, ProxyRuleSpec};
 use crate::nats::NatsClient;
+use crate::nftables::RedirectRule;
 use crate::updates::{PortsCache, RestartNotifier};
 
 #[derive(Debug, Deserialize)]
@@ -19,28 +20,36 @@ pub enum AgentCommand {
     SnifferConfig { ports: Vec<u16> },
     Shutdown,
 
-    // Phase 2
+    // Phase 2: proxy management
     ProxyAdd {
         name: String,
         listen: String,
         target: String,
         protocol: String,
+        /// TLS mode: "mitm", "terminate", "passthrough", or omit for no TLS
+        tls_mode: Option<String>,
+        /// If set, create nftables redirect from this port to the listen port
+        nft_redirect_port: Option<u16>,
     },
     ProxyUpdate {
         name: String,
         listen: String,
         target: String,
         protocol: String,
+        tls_mode: Option<String>,
+        nft_redirect_port: Option<u16>,
     },
     ProxyRemove {
         name: String,
     },
 
-    // Phase 3+
+    // Phase 3: nftables (manual management)
     NftablesApply {
-        rules: Vec<String>,
+        rules: Vec<RedirectRule>,
     },
     NftablesClear,
+
+    // Phase 4+
     FilterSync {
         filters: Vec<serde_json::Value>,
     },
@@ -110,8 +119,17 @@ async fn handle_command(
             listen,
             target,
             protocol,
+            tls_mode,
+            nft_redirect_port,
         } => {
-            let spec = match parse_proxy_spec(&name, &listen, &target, &protocol) {
+            let spec = match parse_proxy_spec(
+                &name,
+                &listen,
+                &target,
+                &protocol,
+                tls_mode,
+                nft_redirect_port,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Invalid ProxyAdd '{}': {}", name, e);
@@ -128,8 +146,17 @@ async fn handle_command(
             listen,
             target,
             protocol,
+            tls_mode,
+            nft_redirect_port,
         } => {
-            let spec = match parse_proxy_spec(&name, &listen, &target, &protocol) {
+            let spec = match parse_proxy_spec(
+                &name,
+                &listen,
+                &target,
+                &protocol,
+                tls_mode,
+                nft_redirect_port,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Invalid ProxyUpdate '{}': {}", name, e);
@@ -147,13 +174,21 @@ async fn handle_command(
             }
         }
 
-        // Phase 3+
-        AgentCommand::NftablesApply { .. } => {
-            warn!("NftablesApply not implemented yet (Phase 3)");
+        AgentCommand::NftablesApply { rules } => {
+            info!("Applying {} manual nftables rules", rules.len());
+            if let Err(e) = harpoon.lock().await.apply_nft_rules(rules) {
+                error!("Failed to apply nftables rules: {}", e);
+            }
         }
+
         AgentCommand::NftablesClear => {
-            warn!("NftablesClear not implemented yet (Phase 3)");
+            info!("Clearing all nftables rules");
+            if let Err(e) = harpoon.lock().await.clear_nft_rules() {
+                error!("Failed to clear nftables rules: {}", e);
+            }
         }
+
+        // Phase 4+
         AgentCommand::FilterSync { .. } => {
             warn!("FilterSync not implemented yet (Phase 4)");
         }
@@ -168,6 +203,8 @@ fn parse_proxy_spec(
     listen: &str,
     target: &str,
     protocol: &str,
+    tls_mode: Option<String>,
+    nft_redirect_port: Option<u16>,
 ) -> anyhow::Result<ProxyRuleSpec> {
     let protocol = match protocol.to_lowercase().as_str() {
         "tcp" => Protocol::Tcp,
@@ -180,5 +217,7 @@ fn parse_proxy_spec(
         listen: listen.parse()?,
         target: target.parse()?,
         protocol,
+        tls_mode,
+        nft_redirect_port,
     })
 }

@@ -17,7 +17,16 @@ pub struct AgentStatus {
     pub sniffer_active: bool,
     pub sniffer_ports: Vec<u16>,
     pub harpoon_rules: Vec<String>,
+    pub nft_redirects: Vec<NftRedirectStatus>,
+    pub tls_available: bool,
     pub timestamp_ms: u64,
+}
+
+#[derive(Serialize)]
+pub struct NftRedirectStatus {
+    pub protocol: String,
+    pub from_port: u16,
+    pub to_port: u16,
 }
 
 pub fn spawn_heartbeat(
@@ -38,7 +47,19 @@ pub fn spawn_heartbeat(
             interval.tick().await;
 
             let ports: Vec<u16> = ports_cache.read().unwrap().iter().cloned().collect();
-            let harpoon_rules = harpoon.lock().await.active_rule_names();
+
+            let harpoon_guard = harpoon.lock().await;
+            let harpoon_rules = harpoon_guard.active_rule_names();
+            let nft_redirects: Vec<NftRedirectStatus> = harpoon_guard
+                .nft_rules()
+                .iter()
+                .map(|r| NftRedirectStatus {
+                    protocol: r.protocol.clone(),
+                    from_port: r.original_port,
+                    to_port: r.redirect_port,
+                })
+                .collect();
+            drop(harpoon_guard);
 
             let status = AgentStatus {
                 agent_id: agent_id.clone(),
@@ -46,6 +67,8 @@ pub fn spawn_heartbeat(
                 sniffer_active: true,
                 sniffer_ports: ports,
                 harpoon_rules,
+                nft_redirects,
+                tls_available: true,
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
