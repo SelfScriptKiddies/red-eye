@@ -12,11 +12,12 @@ use config_manager::ConfigInit;
 use log::{debug, info, error};
 use api::auth;
 use crate::api::{
-    packet::packet_service::PacketService, 
-    stream::stream_service::StreamService, 
+    packet::packet_service::PacketService,
+    stream::stream_service::StreamService,
     tag::tag_service::TagService,
     service::service_service::ServiceService,
     updater::{UpdateAgent, start_config_sync_scheduler},
+    agent::agent_service::{AgentService, spawn_heartbeat_listener},
 };
 use std::sync::Arc;
 use async_nats::ConnectOptions;
@@ -105,6 +106,21 @@ pub async fn run() -> std::io::Result<()> {
         });
     }
 
+    // Create AgentService for agent management
+    let agent_nats_client = ConnectOptions::with_user_and_password(
+        config.nats_login.clone(),
+        config.nats_password.clone()
+    )
+    .connect(&config.nats_broker)
+    .await
+    .expect("Failed to connect to NATS for agent service");
+
+    let agent_service = Arc::new(AgentService::new(agent_nats_client.clone()));
+    let agent_service_data = web::Data::new(agent_service.clone());
+
+    // Subscribe to agent heartbeats
+    spawn_heartbeat_listener(agent_nats_client, agent_service.clone());
+
     // Create broadcaster for WebSocket connections
     let (tx, _) = broadcast::channel::<String>(1000);
     let broadcaster_tx = Arc::new(tx);
@@ -189,6 +205,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(service_service.clone())
             .app_data(updater.clone())
             .app_data(broadcaster.clone())
+            .app_data(agent_service_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

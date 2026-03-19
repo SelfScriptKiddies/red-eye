@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod auth;
 pub(crate) mod packet;
 pub mod realtime;
@@ -22,6 +23,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(tag::tag_config)
             .configure(service::config)
             .configure(realtime::config)
+            .configure(agent::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }
@@ -57,7 +59,12 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         service::get_service_by_id,
         service::create_service,
         service::update_service,
-        service::delete_service
+        service::delete_service,
+
+        agent::get_all_agents,
+        agent::get_agent_by_id,
+        agent::send_agent_command,
+        agent::broadcast_agent_command
     ),
     components(
         schemas(auth::LoginData, packet::GetPacketsQuery)
@@ -67,7 +74,8 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         (name = "packet", description = "Packet endpoints"),
         (name = "stream", description = "Stream endpoints"),
         (name = "tag", description = "Tag endpoints"),
-        (name = "service", description = "Service endpoints")
+        (name = "service", description = "Service endpoints"),
+        (name = "agent", description = "Agent management endpoints")
     )
 
 )]
