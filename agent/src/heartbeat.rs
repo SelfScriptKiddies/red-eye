@@ -1,0 +1,65 @@
+use std::time::Instant;
+
+use log::{debug, error};
+use serde::Serialize;
+
+use crate::config::AgentConfig;
+use crate::nats::NatsClient;
+use crate::updates::PortsCache;
+
+#[derive(Serialize)]
+pub struct AgentStatus {
+    pub agent_id: String,
+    pub uptime_secs: u64,
+    pub sniffer_active: bool,
+    pub sniffer_ports: Vec<u16>,
+    pub harpoon_rules: Vec<String>, // Phase 2+
+    pub timestamp_ms: u64,
+}
+
+pub fn spawn_heartbeat(
+    nats: NatsClient,
+    config: &AgentConfig,
+    ports_cache: PortsCache,
+) {
+    let interval_secs = config.heartbeat_interval_secs;
+    let agent_id = nats.agent_id.clone();
+    let started_at = Instant::now();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(
+            tokio::time::Duration::from_secs(interval_secs),
+        );
+
+        loop {
+            interval.tick().await;
+
+            let ports: Vec<u16> = ports_cache
+                .read()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect();
+
+            let status = AgentStatus {
+                agent_id: agent_id.clone(),
+                uptime_secs: started_at.elapsed().as_secs(),
+                sniffer_active: true,
+                sniffer_ports: ports,
+                harpoon_rules: vec![],
+                timestamp_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            };
+
+            match serde_json::to_vec(&status) {
+                Ok(json) => {
+                    nats.send_heartbeat(json).await;
+                    debug!("Heartbeat sent (uptime: {}s)", status.uptime_secs);
+                }
+                Err(e) => error!("Failed to serialize heartbeat: {}", e),
+            }
+        }
+    });
+}

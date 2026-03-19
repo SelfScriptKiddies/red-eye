@@ -1,0 +1,60 @@
+use clap::Parser;
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "red-eye-agent", version, about = "Red Eye traffic capture agent")]
+pub struct AgentConfig {
+    /// Agent identifier (defaults to hostname)
+    #[arg(long, env = "AGENT_ID")]
+    pub agent_id: Option<String>,
+
+    /// Network interface to capture on
+    #[arg(long, short = 'i', env = "INTERFACE", default_value = "eth0")]
+    pub interface: String,
+
+    /// Machine IP address
+    #[arg(long, short = 'm', env = "MACHINE_IP", default_value = "0.0.0.0")]
+    pub machine_ip: String,
+
+    /// Ports to sniff (comma-separated)
+    #[arg(long, short = 'p', env = "PORTS", value_delimiter = ',')]
+    pub ports: Vec<u16>,
+
+    /// NATS broker host
+    #[arg(long, env = "NATS_HOST", default_value = "nats:4222")]
+    pub nats_host: String,
+
+    /// NATS login
+    #[arg(long, env = "NATS_LOGIN", default_value = "username")]
+    pub nats_login: String,
+
+    /// NATS password
+    #[arg(long, env = "NATS_PASSWORD", default_value = "password")]
+    pub nats_password: String,
+
+    /// NATS raw packets topic
+    #[arg(long, env = "NATS_RAW_PACKETS_TOPIC", default_value = "raw_packets")]
+    pub nats_raw_packets_topic: String,
+
+    /// NATS updates topic
+    #[arg(long, env = "NATS_UPDATES_TOPIC", default_value = "updates")]
+    pub nats_updates_topic: String,
+
+    /// Heartbeat interval in seconds
+    #[arg(long, env = "HEARTBEAT_INTERVAL_SECS", default_value_t = 5)]
+    pub heartbeat_interval_secs: u64,
+
+    /// Logging level (trace|debug|info|warn|error)
+    #[arg(long, short = 'l', env = "LOGGING_LEVEL", default_value = "info")]
+    pub logging_level: String,
+}
+
+impl AgentConfig {
+    pub fn resolved_agent_id(&self) -> String {
+        self.agent_id.clone().unwrap_or_else(|| {
+            hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        })
+    }
+}
