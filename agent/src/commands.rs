@@ -1,7 +1,13 @@
+use std::sync::Arc;
+
 use futures::StreamExt;
 use log::{debug, error, info, warn};
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
+use harpoon_core::types::endpoint::Protocol;
+
+use crate::harpoon::{HarpoonEngine, ProxyRuleSpec};
 use crate::nats::NatsClient;
 use crate::updates::{PortsCache, RestartNotifier};
 
@@ -13,7 +19,7 @@ pub enum AgentCommand {
     SnifferConfig { ports: Vec<u16> },
     Shutdown,
 
-    // Phase 2+ (skeleton)
+    // Phase 2
     ProxyAdd {
         name: String,
         listen: String,
@@ -29,6 +35,8 @@ pub enum AgentCommand {
     ProxyRemove {
         name: String,
     },
+
+    // Phase 3+
     NftablesApply {
         rules: Vec<String>,
     },
@@ -46,6 +54,7 @@ pub fn spawn_command_listener(
     nats: NatsClient,
     ports_cache: PortsCache,
     restart_tx: RestartNotifier,
+    harpoon: Arc<Mutex<HarpoonEngine>>,
 ) {
     tokio::spawn(async move {
         let mut sub = match nats.subscribe_commands().await {
@@ -71,12 +80,17 @@ pub fn spawn_command_listener(
             };
 
             debug!("Received command: {:?}", cmd);
-            handle_command(cmd, &ports_cache, &restart_tx);
+            handle_command(cmd, &ports_cache, &restart_tx, &harpoon).await;
         }
     });
 }
 
-fn handle_command(cmd: AgentCommand, ports_cache: &PortsCache, restart_tx: &RestartNotifier) {
+async fn handle_command(
+    cmd: AgentCommand,
+    ports_cache: &PortsCache,
+    restart_tx: &RestartNotifier,
+    harpoon: &Arc<Mutex<HarpoonEngine>>,
+) {
     match cmd {
         AgentCommand::SnifferConfig { ports } => {
             info!("Updating sniffer ports: {:?}", ports);
@@ -87,19 +101,53 @@ fn handle_command(cmd: AgentCommand, ports_cache: &PortsCache, restart_tx: &Rest
 
         AgentCommand::Shutdown => {
             info!("Shutdown command received");
+            harpoon.lock().await.shutdown().await;
             std::process::exit(0);
         }
 
-        // Phase 2+ stubs
-        AgentCommand::ProxyAdd { name, .. } => {
-            warn!("ProxyAdd '{}' not implemented yet (Phase 2)", name);
+        AgentCommand::ProxyAdd {
+            name,
+            listen,
+            target,
+            protocol,
+        } => {
+            let spec = match parse_proxy_spec(&name, &listen, &target, &protocol) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Invalid ProxyAdd '{}': {}", name, e);
+                    return;
+                }
+            };
+            if let Err(e) = harpoon.lock().await.add_rule(spec).await {
+                error!("Failed to add proxy '{}': {}", name, e);
+            }
         }
-        AgentCommand::ProxyUpdate { name, .. } => {
-            warn!("ProxyUpdate '{}' not implemented yet (Phase 2)", name);
+
+        AgentCommand::ProxyUpdate {
+            name,
+            listen,
+            target,
+            protocol,
+        } => {
+            let spec = match parse_proxy_spec(&name, &listen, &target, &protocol) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Invalid ProxyUpdate '{}': {}", name, e);
+                    return;
+                }
+            };
+            if let Err(e) = harpoon.lock().await.update_rule(spec).await {
+                error!("Failed to update proxy '{}': {}", name, e);
+            }
         }
+
         AgentCommand::ProxyRemove { name } => {
-            warn!("ProxyRemove '{}' not implemented yet (Phase 2)", name);
+            if let Err(e) = harpoon.lock().await.remove_rule(&name).await {
+                error!("Failed to remove proxy '{}': {}", name, e);
+            }
         }
+
+        // Phase 3+
         AgentCommand::NftablesApply { .. } => {
             warn!("NftablesApply not implemented yet (Phase 3)");
         }
@@ -113,4 +161,24 @@ fn handle_command(cmd: AgentCommand, ports_cache: &PortsCache, restart_tx: &Rest
             warn!("ReplayForward not implemented yet (Phase 5)");
         }
     }
+}
+
+fn parse_proxy_spec(
+    name: &str,
+    listen: &str,
+    target: &str,
+    protocol: &str,
+) -> anyhow::Result<ProxyRuleSpec> {
+    let protocol = match protocol.to_lowercase().as_str() {
+        "tcp" => Protocol::Tcp,
+        "udp" => Protocol::Udp,
+        other => anyhow::bail!("Unknown protocol: {}", other),
+    };
+
+    Ok(ProxyRuleSpec {
+        name: name.to_string(),
+        listen: listen.parse()?,
+        target: target.parse()?,
+        protocol,
+    })
 }

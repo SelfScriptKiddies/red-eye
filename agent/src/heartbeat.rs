@@ -1,9 +1,12 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use log::{debug, error};
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 use crate::config::AgentConfig;
+use crate::harpoon::HarpoonEngine;
 use crate::nats::NatsClient;
 use crate::updates::PortsCache;
 
@@ -13,7 +16,7 @@ pub struct AgentStatus {
     pub uptime_secs: u64,
     pub sniffer_active: bool,
     pub sniffer_ports: Vec<u16>,
-    pub harpoon_rules: Vec<String>, // Phase 2+
+    pub harpoon_rules: Vec<String>,
     pub timestamp_ms: u64,
 }
 
@@ -21,32 +24,28 @@ pub fn spawn_heartbeat(
     nats: NatsClient,
     config: &AgentConfig,
     ports_cache: PortsCache,
+    harpoon: Arc<Mutex<HarpoonEngine>>,
 ) {
     let interval_secs = config.heartbeat_interval_secs;
     let agent_id = nats.agent_id.clone();
     let started_at = Instant::now();
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(
-            tokio::time::Duration::from_secs(interval_secs),
-        );
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
 
         loop {
             interval.tick().await;
 
-            let ports: Vec<u16> = ports_cache
-                .read()
-                .unwrap()
-                .iter()
-                .cloned()
-                .collect();
+            let ports: Vec<u16> = ports_cache.read().unwrap().iter().cloned().collect();
+            let harpoon_rules = harpoon.lock().await.active_rule_names();
 
             let status = AgentStatus {
                 agent_id: agent_id.clone(),
                 uptime_secs: started_at.elapsed().as_secs(),
                 sniffer_active: true,
                 sniffer_ports: ports,
-                harpoon_rules: vec![],
+                harpoon_rules,
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
