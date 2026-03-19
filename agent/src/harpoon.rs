@@ -8,6 +8,7 @@ use log::{debug, info, warn};
 use harpoon_core::capture::CaptureManager;
 use harpoon_core::engine::run_with_capture;
 use harpoon_core::types::endpoint::{Endpoint, Protocol};
+use harpoon_core::types::filter::{Direction, Filter, FilterAction, FilterKind};
 use harpoon_core::types::rule::{Rule, TlsConfig, TlsMode, UdpSourceMode};
 use harpoon_core::{CoreConfig, EngineHandle};
 
@@ -37,8 +38,8 @@ pub struct ProxyRuleSpec {
 }
 
 impl ProxyRuleSpec {
-    /// Convert to a harpoon-core Rule.
-    fn to_harpoon_rule(&self, tls_certs: &Option<TlsCerts>) -> Rule {
+    /// Convert to a harpoon-core Rule with global filters applied.
+    fn to_harpoon_rule(&self, tls_certs: &Option<TlsCerts>, filters: &[Filter]) -> Rule {
         let endpoint = match self.protocol {
             Protocol::Tcp => Endpoint::tcp,
             Protocol::Udp => Endpoint::udp,
@@ -63,7 +64,7 @@ impl ProxyRuleSpec {
             name: self.name.clone(),
             listen: endpoint(self.listen),
             target: endpoint(self.target),
-            filters: vec![],
+            filters: filters.to_vec(),
             duplicate: None,
             exporter: None,
             tls,
@@ -84,6 +85,7 @@ pub struct HarpoonEngine {
     handle: Option<EngineHandle>,
     capture_mgr: Arc<CaptureManager>,
     rules: HashMap<String, ProxyRuleSpec>,
+    filters: Vec<Filter>,
     tls_certs: Option<TlsCerts>,
     nft: NftablesManager,
 }
@@ -100,6 +102,7 @@ impl HarpoonEngine {
             handle: None,
             capture_mgr: CaptureManager::new(),
             rules: HashMap::new(),
+            filters: Vec::new(),
             tls_certs,
             nft: NftablesManager::new(),
         }
@@ -204,6 +207,21 @@ impl HarpoonEngine {
         Ok(())
     }
 
+    /// Sync global filters (applied to all proxy rules). Restarts engine.
+    pub async fn sync_filters(&mut self, filters: Vec<Filter>) -> Result<()> {
+        info!("Syncing {} firewall filters", filters.len());
+        self.filters = filters;
+        if !self.rules.is_empty() {
+            self.restart_engine().await?;
+        }
+        Ok(())
+    }
+
+    /// Current filter count (for status).
+    pub fn filter_count(&self) -> usize {
+        self.filters.len()
+    }
+
     /// Apply a set of manual nftables redirect rules (replaces all current manual rules).
     pub fn apply_nft_rules(&mut self, rules: Vec<RedirectRule>) -> Result<()> {
         self.nft.apply_rules(rules)
@@ -254,7 +272,7 @@ impl HarpoonEngine {
         let rules: Vec<Rule> = self
             .rules
             .values()
-            .map(|s| s.to_harpoon_rule(&self.tls_certs))
+            .map(|s| s.to_harpoon_rule(&self.tls_certs, &self.filters))
             .collect();
         let config = CoreConfig {
             rules,
@@ -306,6 +324,45 @@ impl HarpoonEngine {
             debug!("Port {} returned to sniffer", port);
         }
     }
+}
+
+/// Parse a filter definition from JSON fields into a harpoon-core Filter.
+pub fn parse_filter(
+    kind: &str,
+    pattern: &str,
+    direction: &str,
+    action: &str,
+) -> Result<Filter> {
+    let filter_kind = match kind {
+        "substr" => FilterKind::Substr(pattern.to_string()),
+        "bsubstr" => {
+            let bytes = hex::decode(pattern)
+                .or_else(|_| Ok::<Vec<u8>, anyhow::Error>(pattern.as_bytes().to_vec()))?;
+            FilterKind::BinarySubstr(bytes)
+        }
+        "regex" => FilterKind::Regex(pattern.to_string()),
+        other => anyhow::bail!("Unknown filter kind: {}", other),
+    };
+
+    let dir = match direction {
+        "c2s" | "inbound" | "in" => Direction::ClientToServer,
+        "s2c" | "outbound" | "out" => Direction::ServerToClient,
+        "both" | "" => Direction::Both,
+        other => anyhow::bail!("Unknown direction: {}", other),
+    };
+
+    let action = match action {
+        "drop" => FilterAction::Drop,
+        "alert" | "tap" => FilterAction::TapOnly,
+        "pass" | "" => FilterAction::Pass,
+        other => anyhow::bail!("Unknown action: {}", other),
+    };
+
+    Ok(Filter {
+        kind: filter_kind,
+        direction: dir,
+        action_on_match: action,
+    })
 }
 
 /// Spawn a background task that forwards captured packets from harpoon to NATS.

@@ -7,10 +7,33 @@ use tokio::sync::Mutex;
 
 use harpoon_core::types::endpoint::Protocol;
 
-use crate::harpoon::{HarpoonEngine, ProxyRuleSpec};
+use crate::harpoon::{self, HarpoonEngine, ProxyRuleSpec};
 use crate::nats::NatsClient;
 use crate::nftables::RedirectRule;
 use crate::updates::{PortsCache, RestartNotifier};
+
+#[derive(Debug, Deserialize)]
+pub struct FilterDef {
+    pub name: String,
+    /// "substr", "bsubstr", "regex"
+    pub kind: String,
+    /// Pattern string (or hex for bsubstr)
+    pub pattern: String,
+    /// "c2s", "s2c", "both"
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// "drop", "alert", "pass"
+    #[serde(default = "default_action")]
+    pub action: String,
+}
+
+fn default_direction() -> String {
+    "both".to_string()
+}
+
+fn default_action() -> String {
+    "drop".to_string()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -49,10 +72,12 @@ pub enum AgentCommand {
     },
     NftablesClear,
 
-    // Phase 4+
+    // Phase 4: firewall filters
     FilterSync {
-        filters: Vec<serde_json::Value>,
+        filters: Vec<FilterDef>,
     },
+
+    // Phase 5+
     ReplayForward {
         listen_port: u16,
         target_addr: String,
@@ -188,10 +213,31 @@ async fn handle_command(
             }
         }
 
-        // Phase 4+
-        AgentCommand::FilterSync { .. } => {
-            warn!("FilterSync not implemented yet (Phase 4)");
+        AgentCommand::FilterSync { filters } => {
+            info!("Syncing {} firewall filters", filters.len());
+            let mut parsed = Vec::new();
+            let mut errors = 0;
+            for f in &filters {
+                match harpoon::parse_filter(&f.kind, &f.pattern, &f.direction, &f.action) {
+                    Ok(filter) => {
+                        debug!("Filter '{}': {} {} -> {}", f.name, f.kind, f.direction, f.action);
+                        parsed.push(filter);
+                    }
+                    Err(e) => {
+                        error!("Invalid filter '{}': {}", f.name, e);
+                        errors += 1;
+                    }
+                }
+            }
+            if errors > 0 {
+                warn!("{} filters failed to parse, applying {} valid ones", errors, parsed.len());
+            }
+            if let Err(e) = harpoon.lock().await.sync_filters(parsed).await {
+                error!("Failed to sync filters: {}", e);
+            }
         }
+
+        // Phase 5+
         AgentCommand::ReplayForward { .. } => {
             warn!("ReplayForward not implemented yet (Phase 5)");
         }

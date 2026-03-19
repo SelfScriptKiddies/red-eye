@@ -17,6 +17,7 @@ pub struct AgentStatus {
     pub sniffer_active: bool,
     pub sniffer_ports: Vec<u16>,
     pub harpoon_rules: Vec<String>,
+    pub active_filters: usize,
     pub nft_redirects: Vec<NftRedirectStatus>,
     pub tls_available: bool,
     pub timestamp_ms: u64,
@@ -50,6 +51,7 @@ pub fn spawn_heartbeat(
 
             let harpoon_guard = harpoon.lock().await;
             let harpoon_rules = harpoon_guard.active_rule_names();
+            let active_filters = harpoon_guard.filter_count();
             let nft_redirects: Vec<NftRedirectStatus> = harpoon_guard
                 .nft_rules()
                 .iter()
@@ -67,6 +69,7 @@ pub fn spawn_heartbeat(
                 sniffer_active: true,
                 sniffer_ports: ports,
                 harpoon_rules,
+                active_filters,
                 nft_redirects,
                 tls_available: true,
                 timestamp_ms: std::time::SystemTime::now()
