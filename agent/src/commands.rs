@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -39,20 +40,19 @@ fn default_action() -> String {
 #[serde(tag = "type")]
 #[allow(dead_code)]
 pub enum AgentCommand {
-    // Phase 1
     SnifferConfig { ports: Vec<u16> },
     Shutdown,
 
-    // Phase 2: proxy management
+    // Proxy management
     ProxyAdd {
         name: String,
         listen: String,
         target: String,
         protocol: String,
-        /// TLS mode: "mitm", "terminate", "passthrough", or omit for no TLS
         tls_mode: Option<String>,
-        /// If set, create nftables redirect from this port to the listen port
         nft_redirect_port: Option<u16>,
+        /// Copy traffic to another endpoint (e.g. another team's server)
+        duplicate_to: Option<String>,
     },
     ProxyUpdate {
         name: String,
@@ -61,26 +61,31 @@ pub enum AgentCommand {
         protocol: String,
         tls_mode: Option<String>,
         nft_redirect_port: Option<u16>,
+        duplicate_to: Option<String>,
     },
     ProxyRemove {
         name: String,
     },
 
-    // Phase 3: nftables (manual management)
+    // nftables manual management
     NftablesApply {
         rules: Vec<RedirectRule>,
     },
     NftablesClear,
 
-    // Phase 4: firewall filters
+    // Firewall filters
     FilterSync {
         filters: Vec<FilterDef>,
     },
 
-    // Phase 5+
+    // Replay: TCP forward to another team
     ReplayForward {
+        name: String,
         listen_port: u16,
         target_addr: String,
+    },
+    ReplayStop {
+        name: String,
     },
 }
 
@@ -146,6 +151,7 @@ async fn handle_command(
             protocol,
             tls_mode,
             nft_redirect_port,
+            duplicate_to,
         } => {
             let spec = match parse_proxy_spec(
                 &name,
@@ -154,6 +160,7 @@ async fn handle_command(
                 &protocol,
                 tls_mode,
                 nft_redirect_port,
+                duplicate_to,
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -173,6 +180,7 @@ async fn handle_command(
             protocol,
             tls_mode,
             nft_redirect_port,
+            duplicate_to,
         } => {
             let spec = match parse_proxy_spec(
                 &name,
@@ -181,6 +189,7 @@ async fn handle_command(
                 &protocol,
                 tls_mode,
                 nft_redirect_port,
+                duplicate_to,
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -220,7 +229,10 @@ async fn handle_command(
             for f in &filters {
                 match harpoon::parse_filter(&f.kind, &f.pattern, &f.direction, &f.action) {
                     Ok(filter) => {
-                        debug!("Filter '{}': {} {} -> {}", f.name, f.kind, f.direction, f.action);
+                        debug!(
+                            "Filter '{}': {} {} -> {}",
+                            f.name, f.kind, f.direction, f.action
+                        );
                         parsed.push(filter);
                     }
                     Err(e) => {
@@ -230,16 +242,53 @@ async fn handle_command(
                 }
             }
             if errors > 0 {
-                warn!("{} filters failed to parse, applying {} valid ones", errors, parsed.len());
+                warn!(
+                    "{} filters failed to parse, applying {} valid ones",
+                    errors,
+                    parsed.len()
+                );
             }
             if let Err(e) = harpoon.lock().await.sync_filters(parsed).await {
                 error!("Failed to sync filters: {}", e);
             }
         }
 
-        // Phase 5+
-        AgentCommand::ReplayForward { .. } => {
-            warn!("ReplayForward not implemented yet (Phase 5)");
+        AgentCommand::ReplayForward {
+            name,
+            listen_port,
+            target_addr,
+        } => {
+            let target: SocketAddr = match target_addr.parse() {
+                Ok(a) => a,
+                Err(e) => {
+                    error!("Invalid replay target '{}': {}", target_addr, e);
+                    return;
+                }
+            };
+            let spec = ProxyRuleSpec {
+                name: format!("replay-{}", name),
+                listen: format!("0.0.0.0:{}", listen_port).parse().unwrap(),
+                target,
+                protocol: Protocol::Tcp,
+                tls_mode: None,
+                nft_redirect_port: None,
+                duplicate_to: None,
+            };
+            info!(
+                "Starting replay forward '{}': :{} -> {}",
+                name, listen_port, target_addr
+            );
+            if let Err(e) = harpoon.lock().await.add_rule(spec).await {
+                error!("Failed to start replay '{}': {}", name, e);
+            }
+        }
+
+        AgentCommand::ReplayStop { name } => {
+            let rule_name = format!("replay-{}", name);
+            info!("Stopping replay forward '{}'", name);
+            if let Err(e) = harpoon.lock().await.remove_rule(&rule_name).await {
+                error!("Failed to stop replay '{}': {}", name, e);
+            }
         }
     }
 }
@@ -251,12 +300,17 @@ fn parse_proxy_spec(
     protocol: &str,
     tls_mode: Option<String>,
     nft_redirect_port: Option<u16>,
+    duplicate_to: Option<String>,
 ) -> anyhow::Result<ProxyRuleSpec> {
     let protocol = match protocol.to_lowercase().as_str() {
         "tcp" => Protocol::Tcp,
         "udp" => Protocol::Udp,
         other => anyhow::bail!("Unknown protocol: {}", other),
     };
+
+    let duplicate_to = duplicate_to
+        .map(|s| s.parse::<SocketAddr>())
+        .transpose()?;
 
     Ok(ProxyRuleSpec {
         name: name.to_string(),
@@ -265,5 +319,6 @@ fn parse_proxy_spec(
         protocol,
         tls_mode,
         nft_redirect_port,
+        duplicate_to,
     })
 }

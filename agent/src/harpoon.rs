@@ -9,7 +9,7 @@ use harpoon_core::capture::CaptureManager;
 use harpoon_core::engine::run_with_capture;
 use harpoon_core::types::endpoint::{Endpoint, Protocol};
 use harpoon_core::types::filter::{Direction, Filter, FilterAction, FilterKind};
-use harpoon_core::types::rule::{Rule, TlsConfig, TlsMode, UdpSourceMode};
+use harpoon_core::types::rule::{DuplicateTarget, Rule, TlsConfig, TlsMode, UdpSourceMode};
 use harpoon_core::{CoreConfig, EngineHandle};
 
 use crate::nftables::{NftablesManager, RedirectRule};
@@ -35,6 +35,8 @@ pub struct ProxyRuleSpec {
     pub tls_mode: Option<String>,
     /// If set, create nftables redirect from this port to listen port
     pub nft_redirect_port: Option<u16>,
+    /// If set, duplicate all traffic to this endpoint (e.g. another team)
+    pub duplicate_to: Option<SocketAddr>,
 }
 
 impl ProxyRuleSpec {
@@ -60,12 +62,16 @@ impl ProxyRuleSpec {
             })
         });
 
+        let duplicate = self.duplicate_to.map(|addr| DuplicateTarget {
+            endpoint: endpoint(addr),
+        });
+
         Rule {
             name: self.name.clone(),
             listen: endpoint(self.listen),
             target: endpoint(self.target),
             filters: filters.to_vec(),
-            duplicate: None,
+            duplicate,
             exporter: None,
             tls,
             udp_source_mode: UdpSourceMode::Proxy,
