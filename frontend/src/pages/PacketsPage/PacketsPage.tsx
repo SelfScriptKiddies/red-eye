@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
+import { HttpView } from '../../components/HttpView';
 
 interface PacketEvent {
     packet_id: number;
@@ -19,6 +20,8 @@ export function PacketsPage() {
     const [tagsArray, setTags] = useState([]);
     const [tagColors, setTagColors] = useState({});
     const [packetData, setPacketData] = useState<any[]>([]);
+    const [selectedStreamL7, setSelectedStreamL7] = useState<string>('unknown');
+    const [selectedStreamId, setSelectedStreamId] = useState<number | null>(null);
     const [pageLoaded, setPageLoaded] = useState(null);
     const [servicesLoaded, setServicesLoaded] = useState(false);
     const [tagsLoaded, setTagsLoaded] = useState(false);
@@ -208,7 +211,13 @@ export function PacketsPage() {
 
     const handleStreamClick = async (streamId) => {
         selectedStreamIdRef.current = streamId;
+        setSelectedStreamId(streamId);
         console.log('Stream selected:', streamId);
+
+        // Check stream's L7 protocol
+        const stream = streamsArray.find((s: any) => s.id === streamId);
+        setSelectedStreamL7(stream?.l7_protocol || 'unknown');
+
         try {
             const data = await getUrl(`/api/packet/stream_id/${streamId}`);
             const packets = Object.values(data);
@@ -217,6 +226,13 @@ export function PacketsPage() {
         } catch (error) {
             console.error('Ошибка при получении данных пакета:', error);
         }
+    };
+
+    const handleStreamNavigate = (streamId: number) => {
+        handleStreamClick(streamId);
+        // Scroll to stream in list
+        const streamEl = document.querySelector(`[data-stream-id="${streamId}"]`);
+        if (streamEl) streamEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
     const handleFavoriteToggle = async (streamId, currentFavorite) => {
@@ -325,8 +341,14 @@ export function PacketsPage() {
                 )}
             </div>
             <div className="packetData">
+                {selectedStreamId && selectedStreamL7 === 'http1' && (
+                    <HttpView
+                        streamId={selectedStreamId}
+                        onStreamNavigate={handleStreamNavigate}
+                    />
+                )}
                 {packetData && packetData.length > 0 && packetData.map(packet => (
-                    <PacketCard 
+                    <PacketCard
                         key={packet.id}
                         {...packet}
                     />

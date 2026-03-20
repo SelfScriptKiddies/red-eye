@@ -1,0 +1,283 @@
+.http-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Search Bar */
+.search-bar {
+  background: #1a1a2e;
+  border-bottom: 2px solid #646cff;
+  padding: 10px 15px;
+  flex-shrink: 0;
+}
+
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2a2a4a;
+  border: 1px solid #646cff;
+  border-radius: 16px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #ccc;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-chip button {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.search-chip button:hover {
+  color: #ff4444;
+}
+
+.search-results-info {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+}
+
+.search-stream-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.search-stream-link {
+  background: #353535;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #646cff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 8px;
+  transition: all 0.2s;
+}
+
+.search-stream-link:hover {
+  border-color: #646cff;
+  background: #2a2a4a;
+}
+
+/* Messages */
+.http-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.http-message {
+  background: #2a2a2a;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.http-message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.http-message-header:hover {
+  background: #353535;
+}
+
+.http-message-header.expanded {
+  border-bottom: 1px solid #444;
+}
+
+.expand-icon {
+  color: #666;
+  font-size: 10px;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.http-method {
+  font-weight: bold;
+  color: #646cff;
+  flex-shrink: 0;
+}
+
+.http-path {
+  color: #ccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.http-status {
+  font-weight: bold;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.status-2xx { color: #0a8a0a; }
+.status-3xx { color: #c4a000; }
+.status-4xx { color: #e06000; }
+.status-5xx { color: #e00000; }
+
+.http-content-type {
+  color: #888;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.http-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #666;
+}
+
+.body-size {
+  color: #888;
+}
+
+.http-version {
+  color: #555;
+}
+
+/* Expanded Body */
+.http-message-body {
+  padding: 10px 14px;
+  background: #1e1e1e;
+}
+
+.http-headers-list {
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.http-header-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.header-name {
+  color: #646cff;
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
+.header-value {
+  color: #ccc;
+  word-break: break-all;
+  flex: 1;
+}
+
+.search-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.search-btn:hover {
+  opacity: 1;
+}
+
+.http-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #333;
+}
+
+.curl-btn {
+  background: #353535;
+  border: 1px solid #646cff;
+  border-radius: 4px;
+  color: #646cff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 12px;
+  font-family: monospace;
+  transition: all 0.2s;
+}
+
+.curl-btn:hover {
+  background: #646cff;
+  color: white;
+}
+
+/* Scrollbar */
+.http-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.http-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.http-messages::-webkit-scrollbar-thumb {
+  background: #646cff;
+  border-radius: 3px;
+}
+
+/* Focus mode */
+body:has(.eye__apple__focus) .search-bar {
+  border-bottom-color: #a51900;
+}
+
+body:has(.eye__apple__focus) .search-chip {
+  border-color: #a51900;
+}
+
+body:has(.eye__apple__focus) .http-method,
+body:has(.eye__apple__focus) .header-name {
+  color: #a51900;
+}
+
+body:has(.eye__apple__focus) .search-stream-link {
+  color: #a51900;
+}
+
+body:has(.eye__apple__focus) .curl-btn {
+  border-color: #a51900;
+  color: #a51900;
+}
+
+body:has(.eye__apple__focus) .curl-btn:hover {
+  background: #a51900;
+  color: white;
+}
