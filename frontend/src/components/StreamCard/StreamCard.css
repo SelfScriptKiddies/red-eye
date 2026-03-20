@@ -14,21 +14,23 @@
 .favorite-btn {
     background: transparent;
     border: none;
-    color: #555;
-    font-size: 1.3rem;
+    color: #646cff;
     margin-right: 10px;
     cursor: pointer;
     transition: color 0.2s ease, transform 0.2s ease;
-    -webkit-text-stroke: 1px #646cff;
+    display: flex;
+    align-items: center;
+    padding: 0;
+    opacity: 0.5;
 }
 
 .favorite-btn--active {
-    color: #646cff;
+    opacity: 1;
 }
 
 .favorite-btn:hover {
-    color: #8a8fff;
-    transform: scale(1.1);
+    opacity: 1;
+    transform: scale(1.15);
 }
 
 .stream-card:hover {
