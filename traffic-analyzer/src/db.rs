@@ -117,5 +117,75 @@ impl DB {
         .await
         .map(|_| ())
     }
-    
+
+    /// Update stream's L7 protocol (only if currently 'unknown')
+    pub async fn update_stream_l7_protocol(&self, stream_id: usize, protocol: &str) -> Result<(), Error> {
+        sqlx::query(
+            "UPDATE stream SET l7_protocol = $1 WHERE id = $2 AND l7_protocol = 'unknown'"
+        )
+        .bind(protocol)
+        .bind(stream_id as i32)
+        .execute(&self.pgpool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Insert an HTTP message and return its ID
+    pub async fn insert_http_message(
+        &self,
+        stream_id: usize,
+        packet_id: i32,
+        is_request: bool,
+        method: Option<&str>,
+        path: Option<&str>,
+        status_code: Option<u16>,
+        http_version: Option<&str>,
+        content_type: Option<&str>,
+        content_length: Option<i32>,
+        body_offset: i32,
+        body_length: i32,
+        timestamp: i64,
+    ) -> Result<i32, Error> {
+        sqlx::query(
+            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, timestamp)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             RETURNING id"
+        )
+        .bind(stream_id as i32)
+        .bind(packet_id)
+        .bind(is_request)
+        .bind(method)
+        .bind(path)
+        .bind(status_code.map(|c| c as i16))
+        .bind(http_version)
+        .bind(content_type)
+        .bind(content_length)
+        .bind(body_offset)
+        .bind(body_length)
+        .bind(timestamp)
+        .fetch_one(&self.pgpool)
+        .await
+        .map(|row| row.get::<i32, _>("id"))
+    }
+
+    /// Insert HTTP headers in batch
+    pub async fn insert_http_headers(
+        &self,
+        message_id: i32,
+        headers: &[(String, String)],
+        timestamp: i64,
+    ) -> Result<(), Error> {
+        for (name, value) in headers {
+            sqlx::query(
+                "INSERT INTO http_header (message_id, name, value, timestamp) VALUES ($1, $2, $3, $4)"
+            )
+            .bind(message_id)
+            .bind(name)
+            .bind(value)
+            .bind(timestamp)
+            .execute(&self.pgpool)
+            .await?;
+        }
+        Ok(())
+    }
 }

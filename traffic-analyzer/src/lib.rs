@@ -5,6 +5,7 @@ pub mod db;
 pub mod ethernet;
 pub mod cache;
 pub mod process_packet;
+pub mod http_parser;
 use crate::configuration::init;
 use log::{info, debug, error};
 use std::sync::Arc;

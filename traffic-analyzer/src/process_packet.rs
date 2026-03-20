@@ -1,6 +1,7 @@
 use std::io::Error;
 use crate::ethernet::PacketInfo;
 use crate::filters::apply_filters;
+use crate::http_parser;
 use log::{debug, error};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -152,6 +153,55 @@ impl PacketProcessor {
             for trigger in triggers_array {
                 self.db.insert_trigger(packet_id, filter_id, trigger.start_index, trigger.end_index).await
                     .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Trigger insertion failed: {:?}", e)))?;
+            }
+        }
+
+        // Try L7 HTTP parsing
+        if let Some(parsed) = http_parser::try_parse_http(&packet.payload) {
+            // Extract Content-Type and Content-Length from headers
+            let content_type = parsed.headers.iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.clone());
+            let content_length = parsed.headers.iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, v)| v.parse::<i32>().ok());
+
+            let body_length = (packet.payload.len() as i32 - parsed.body_offset as i32).max(0);
+
+            match self.db.insert_http_message(
+                stream_id,
+                packet_id,
+                parsed.is_request,
+                parsed.method.as_deref(),
+                parsed.path.as_deref(),
+                parsed.status_code,
+                parsed.http_version.as_deref(),
+                content_type.as_deref(),
+                content_length,
+                parsed.body_offset as i32,
+                body_length,
+                packet.timestamp_seconds as i64,
+            ).await {
+                Ok(message_id) => {
+                    if !parsed.headers.is_empty() {
+                        if let Err(e) = self.db.insert_http_headers(
+                            message_id,
+                            &parsed.headers,
+                            packet.timestamp_seconds as i64,
+                        ).await {
+                            error!("Failed to insert HTTP headers: {:?}", e);
+                        }
+                    }
+                    // Mark stream as HTTP
+                    let _ = self.db.update_stream_l7_protocol(stream_id, "http1").await;
+                    debug!("HTTP {} parsed: {} headers",
+                        if parsed.is_request { "request" } else { "response" },
+                        parsed.headers.len()
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to insert HTTP message: {:?}", e);
+                }
             }
         }
 
