@@ -94,8 +94,10 @@ main.content {
   align-items: center;
 }
 
-/* Settings page overrides */
-main.content:has(.SettingsPage) {
+/* Full-width page overrides */
+main.content:has(.SettingsPage),
+main.content:has(.AgentsPage),
+main.content:has(.packetsPage) {
   justify-content: flex-start;
   align-items: stretch;
 }
