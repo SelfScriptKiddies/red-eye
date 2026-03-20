@@ -12,16 +12,19 @@
 }
 
 .favorite-btn {
-    background: transparent;
-    border: none;
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
     color: #646cff;
     margin-right: 10px;
     cursor: pointer;
-    transition: color 0.2s ease, transform 0.2s ease;
+    transition: color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
     display: flex;
     align-items: center;
-    padding: 0;
+    padding: 0 !important;
     opacity: 0.5;
+    line-height: 1;
 }
 
 .favorite-btn--active {
@@ -31,6 +34,8 @@
 .favorite-btn:hover {
     opacity: 1;
     transform: scale(1.15);
+    border: none !important;
+    border-color: transparent !important;
 }
 
 .stream-card:hover {
