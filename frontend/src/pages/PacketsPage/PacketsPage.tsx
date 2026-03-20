@@ -214,8 +214,9 @@ export function PacketsPage() {
         setSelectedStreamId(streamId);
         console.log('Stream selected:', streamId);
 
-        // Check stream's L7 protocol
-        const stream = streamsArray.find((s: any) => s.id === streamId);
+        // Check stream's L7 protocol (streamId comes as string from dataset)
+        const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
+        const stream = streamsArray.find((s: any) => s.id === numericId);
         setSelectedStreamL7(stream?.l7_protocol || 'unknown');
 
         try {
