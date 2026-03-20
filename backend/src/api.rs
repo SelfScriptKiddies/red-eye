@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod auth;
+pub mod l7;
 pub(crate) mod packet;
 pub mod realtime;
 pub mod service;
@@ -24,6 +25,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(service::config)
             .configure(realtime::config)
             .configure(agent::config)
+            .configure(l7::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }
@@ -64,7 +66,13 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         agent::get_all_agents,
         agent::get_agent_by_id,
         agent::send_agent_command,
-        agent::broadcast_agent_command
+        agent::broadcast_agent_command,
+
+        l7::get_http_messages,
+        l7::get_http_message_full,
+        l7::get_http_headers,
+        l7::search_by_header,
+        l7::search_by_headers
     ),
     components(
         schemas(auth::LoginData, packet::GetPacketsQuery)
@@ -75,7 +83,8 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         (name = "stream", description = "Stream endpoints"),
         (name = "tag", description = "Tag endpoints"),
         (name = "service", description = "Service endpoints"),
-        (name = "agent", description = "Agent management endpoints")
+        (name = "agent", description = "Agent management endpoints"),
+        (name = "l7", description = "L7 protocol analysis endpoints")
     )
 
 )]

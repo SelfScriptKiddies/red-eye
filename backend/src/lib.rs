@@ -18,6 +18,7 @@ use crate::api::{
     service::service_service::ServiceService,
     updater::{UpdateAgent, start_config_sync_scheduler},
     agent::agent_service::{AgentService, spawn_heartbeat_listener},
+    l7::l7_service::L7Service,
 };
 use std::sync::Arc;
 use async_nats::ConnectOptions;
@@ -66,6 +67,7 @@ pub async fn run() -> std::io::Result<()> {
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
+    let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
     
     // Создаём UpdateAgent для использования в web и фоновой задаче
@@ -227,6 +229,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(stream_service.clone())
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
+            .app_data(l7_service.clone())
             .app_data(updater.clone())
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
