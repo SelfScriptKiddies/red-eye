@@ -138,3 +138,114 @@
     padding: 4px 10px;
     cursor: pointer;
 }
+
+/* HTTP parsed view */
+.http-parsed {
+    background: #2a2a2a;
+    border-radius: 4px;
+    padding: 10px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.83rem;
+    line-height: 1.5;
+}
+
+.http-status-line {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #444;
+}
+
+.http-method {
+    color: #646cff;
+    font-weight: bold;
+}
+
+.http-path {
+    color: #e0e0e0;
+}
+
+.http-ver {
+    color: #666;
+}
+
+.http-code-2 { color: #4CAF50; font-weight: bold; }
+.http-code-3 { color: #c4a000; font-weight: bold; }
+.http-code-4 { color: #e06000; font-weight: bold; }
+.http-code-5 { color: #e00000; font-weight: bold; }
+
+.http-headers {
+    margin-bottom: 8px;
+}
+
+.http-header-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 1px 0;
+}
+
+.h-name {
+    color: #646cff;
+    flex-shrink: 0;
+}
+
+.h-value {
+    color: #ccc;
+    word-break: break-all;
+    flex: 1;
+}
+
+.header-search-btn {
+    background: none !important;
+    border: 1px solid transparent !important;
+    color: #646cff;
+    cursor: pointer;
+    padding: 2px 4px !important;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+}
+
+.http-header-line:hover .header-search-btn {
+    opacity: 0.6;
+}
+
+.header-search-btn:hover {
+    opacity: 1 !important;
+    border-color: #646cff !important;
+}
+
+.http-body {
+    margin: 0;
+    padding: 8px 0 0;
+    border-top: 1px solid #444;
+    color: #aaa;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 0.8rem;
+}
+
+.curl-copy-btn {
+    margin-top: 8px;
+    background: transparent !important;
+    border: 1px solid #646cff !important;
+    color: #646cff;
+    cursor: pointer;
+    padding: 3px 10px !important;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-family: monospace;
+}
+
+.curl-copy-btn:hover {
+    background: #646cff !important;
+    color: white;
+}
+
+.http-loading {
+    color: #666;
+    padding: 10px;
+}

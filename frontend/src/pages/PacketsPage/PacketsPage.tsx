@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
-import { HttpView } from '../../components/HttpView';
 
 interface PacketEvent {
     packet_id: number;
@@ -342,16 +341,14 @@ export function PacketsPage() {
                 )}
             </div>
             <div className="packetData">
-                {selectedStreamId && selectedStreamL7 === 'http1' && (
-                    <HttpView
-                        streamId={selectedStreamId}
-                        onStreamNavigate={handleStreamNavigate}
-                    />
-                )}
                 {packetData && packetData.length > 0 && packetData.map(packet => (
                     <PacketCard
                         key={packet.id}
                         {...packet}
+                        isHttp={selectedStreamL7 === 'http1'}
+                        onHeaderSearch={(name: string, value: string) => {
+                            console.log('Search header:', name, value);
+                        }}
                     />
                 ))}
             </div>

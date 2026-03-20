@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './PacketCard.css';
 
-type ViewMode = 'text' | 'hex' | 'python';
+type ViewMode = 'text' | 'hex' | 'python' | 'http';
 
 interface PacketProps {
     direction: string;
@@ -9,6 +9,24 @@ interface PacketProps {
     packet_data: string;
     stream_id: number;
     timestamp: number;
+    isHttp?: boolean;
+    onHeaderSearch?: (name: string, value: string) => void;
+}
+
+interface HttpHeader {
+    id: number;
+    name: string;
+    value: string;
+}
+
+interface HttpMessageData {
+    id: number;
+    is_request: boolean;
+    method: string | null;
+    path: string | null;
+    status_code: number | null;
+    http_version: string | null;
+    headers: HttpHeader[];
 }
 
 const base64ToBytes = (b64: string): Uint8Array => {
@@ -53,11 +71,51 @@ const toPythonBytesLiteral = (bytes: Uint8Array): string => {
     return `b'${body}'`;
 };
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp }: PacketProps) {
-    const [viewMode, setViewMode] = useState<ViewMode>('text');
-    
+function generateCurl(msg: HttpMessageData): string {
+    const parts = [`curl -X ${msg.method} '<HOST>${msg.path}'`];
+    for (const h of msg.headers) {
+        parts.push(`  -H '${h.name}: ${h.value}'`);
+    }
+    return parts.join(' \\\n');
+}
+
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch }: PacketProps) {
+    const [viewMode, setViewMode] = useState<ViewMode>(isHttp ? 'http' : 'text');
+    const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
+    const [httpLoading, setHttpLoading] = useState(false);
+
     const bytes = base64ToBytes(packet_data);
     const formattedTime = new Date(timestamp).toLocaleTimeString();
+
+    // Load HTTP data when switching to http mode or on mount if isHttp
+    useEffect(() => {
+        if (isHttp && !httpData && !httpLoading) {
+            setHttpLoading(true);
+            // Find http_message for this packet
+            fetch(`/api/http/stream/${stream_id}`)
+                .then(r => r.json())
+                .then((messages: any[]) => {
+                    const msg = messages.find((m: any) => m.packet_id === id);
+                    if (msg) {
+                        return fetch(`/api/http/headers/${msg.id}`)
+                            .then(r => r.json())
+                            .then(headers => {
+                                setHttpData({
+                                    id: msg.id,
+                                    is_request: msg.is_request,
+                                    method: msg.method,
+                                    path: msg.path,
+                                    status_code: msg.status_code,
+                                    http_version: msg.http_version,
+                                    headers: Array.isArray(headers) ? headers : [],
+                                });
+                            });
+                    }
+                })
+                .catch(() => {})
+                .finally(() => setHttpLoading(false));
+        }
+    }, [isHttp, id, stream_id]);
 
     const getContent = (): string => {
         switch (viewMode) {
@@ -67,42 +125,98 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp }:
                 return toHexDump(bytes);
             case 'python':
                 return toPythonBytesLiteral(bytes);
+            case 'http':
+                return ''; // Rendered as JSX below
         }
     };
 
     const copy = async () => {
+        let text: string;
+        if (viewMode === 'http' && httpData) {
+            text = generateCurl(httpData);
+        } else {
+            text = getContent();
+        }
         try {
-            await navigator.clipboard.writeText(getContent());
+            await navigator.clipboard.writeText(text);
         } catch (e) {
             console.error('Failed to copy:', e);
         }
     };
-    
+
+    const renderHttpView = () => {
+        if (httpLoading) return <div className="http-loading">Loading...</div>;
+        if (!httpData) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
+
+        return (
+            <div className="http-parsed">
+                {/* Status line */}
+                <div className="http-status-line">
+                    {httpData.is_request ? (
+                        <><span className="http-method">{httpData.method}</span> <span className="http-path">{httpData.path}</span> <span className="http-ver">HTTP/{httpData.http_version}</span></>
+                    ) : (
+                        <><span className="http-ver">HTTP/{httpData.http_version}</span> <span className={`http-code http-code-${Math.floor((httpData.status_code || 0) / 100)}`}>{httpData.status_code}</span></>
+                    )}
+                </div>
+
+                {/* Headers */}
+                <div className="http-headers">
+                    {httpData.headers.map(h => (
+                        <div key={h.id} className="http-header-line">
+                            <span className="h-name">{h.name}:</span>
+                            <span className="h-value">{h.value}</span>
+                            {onHeaderSearch && (
+                                <button
+                                    className="header-search-btn"
+                                    title={`Найти: ${h.name}: ${h.value}`}
+                                    onClick={() => onHeaderSearch(h.name, h.value)}
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+
+                {/* Body separator + raw body */}
+                {bytes.length > 0 && (
+                    <pre className="http-body">{toUtf8Preview(bytes).split('\r\n\r\n').slice(1).join('\r\n\r\n') || ''}</pre>
+                )}
+
+                {/* CURL button for requests */}
+                {httpData.is_request && (
+                    <button className="curl-copy-btn" onClick={() => navigator.clipboard.writeText(generateCurl(httpData))}>
+                        CURL
+                    </button>
+                )}
+            </div>
+        );
+    };
+
     return (
         <div className={`packet-card ${direction === 'orig' ? 'packet-orig' : 'packet-dest'}`}>
             <div className="packet-header">
                 <div className="view-mode-switcher">
-                    <button 
+                    <button
                         className={`view-mode-btn ${viewMode === 'text' ? 'active' : ''}`}
                         onClick={() => setViewMode('text')}
-                        title="Text view"
-                    >
-                        TXT
-                    </button>
-                    <button 
+                    >TXT</button>
+                    <button
                         className={`view-mode-btn ${viewMode === 'hex' ? 'active' : ''}`}
                         onClick={() => setViewMode('hex')}
-                        title="Hex dump"
-                    >
-                        HEX
-                    </button>
-                    <button 
+                    >HEX</button>
+                    <button
                         className={`view-mode-btn ${viewMode === 'python' ? 'active' : ''}`}
                         onClick={() => setViewMode('python')}
-                        title="Python bytes literal"
-                    >
-                        PY
-                    </button>
+                    >PY</button>
+                    {isHttp && (
+                        <button
+                            className={`view-mode-btn ${viewMode === 'http' ? 'active' : ''}`}
+                            onClick={() => setViewMode('http')}
+                        >HTTP</button>
+                    )}
                 </div>
                 <span className="packet-time">{formattedTime}</span>
                 <span className={`packet-direction ${direction}`}>
@@ -111,13 +225,15 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp }:
             </div>
 
             <div className="packet-content">
-                <pre className={`packet-body ${viewMode !== 'text' ? 'monospace' : ''}`}>
-                    {getContent()}
-                </pre>
-                <button className="copy-btn" onClick={copy} title="Copy to clipboard">
-                    Copy
-                </button>
+                {viewMode === 'http' ? renderHttpView() : (
+                    <pre className={`packet-body ${viewMode !== 'text' ? 'monospace' : ''}`}>
+                        {getContent()}
+                    </pre>
+                )}
+                {viewMode !== 'http' && (
+                    <button className="copy-btn" onClick={copy} title="Copy to clipboard">Copy</button>
+                )}
             </div>
         </div>
     );
-} 
+}
