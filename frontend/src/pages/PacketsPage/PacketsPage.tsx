@@ -29,6 +29,9 @@ export function PacketsPage() {
     const [currentOffset, setCurrentOffset] = useState(0);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [hasMoreStreams, setHasMoreStreams] = useState(true);
+    const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
+    const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
+    const [headerSearching, setHeaderSearching] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const selectedStreamIdRef = useRef<number | null>(null);
     const streamsContainerRef = useRef<HTMLDivElement | null>(null);
@@ -208,6 +211,40 @@ export function PacketsPage() {
         };
     }, [isRedEyeActive]);
 
+    const addHeaderFilter = (name: string, value: string) => {
+        const exists = headerFilters.some(f => f.name === name && f.value === value);
+        if (!exists) {
+            const updated = [...headerFilters, { name, value }];
+            setHeaderFilters(updated);
+            runHeaderSearch(updated);
+        }
+    };
+
+    const removeHeaderFilter = (index: number) => {
+        const updated = headerFilters.filter((_, i) => i !== index);
+        setHeaderFilters(updated);
+        if (updated.length > 0) {
+            runHeaderSearch(updated);
+        } else {
+            setHeaderSearchResults(null);
+        }
+    };
+
+    const runHeaderSearch = async (filters: {name: string, value: string}[]) => {
+        setHeaderSearching(true);
+        try {
+            const data = await fetch('/api/http/search/multi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(filters.map(f => ({ name: f.name, value: f.value }))),
+            }).then(r => r.json());
+            setHeaderSearchResults(data);
+        } catch {
+            setHeaderSearchResults(null);
+        }
+        setHeaderSearching(false);
+    };
+
     const handleStreamClick = async (streamId) => {
         selectedStreamIdRef.current = streamId;
         setSelectedStreamId(streamId);
@@ -341,14 +378,40 @@ export function PacketsPage() {
                 )}
             </div>
             <div className="packetData">
+                {/* Header search bar */}
+                {headerFilters.length > 0 && (
+                    <div className="header-search-bar">
+                        <div className="header-search-chips">
+                            {headerFilters.map((f, i) => (
+                                <span key={i} className="header-chip">
+                                    <span className="header-chip-name">{f.name}:</span>
+                                    <span className="header-chip-value">{f.value.length > 40 ? f.value.slice(0, 40) + '...' : f.value}</span>
+                                    <button onClick={() => removeHeaderFilter(i)}>✕</button>
+                                </span>
+                            ))}
+                        </div>
+                        <div className="header-search-info">
+                            {headerSearching ? 'Поиск...' :
+                             headerSearchResults ? `${headerSearchResults.total} стримов` : ''}
+                        </div>
+                        {headerSearchResults && headerSearchResults.stream_ids.length > 0 && (
+                            <div className="header-search-streams">
+                                {headerSearchResults.stream_ids.slice(0, 30).map(sid => (
+                                    <button key={sid} className="stream-link-btn" onClick={() => handleStreamClick(sid)}>
+                                        #{sid}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {packetData && packetData.length > 0 && packetData.map(packet => (
                     <PacketCard
                         key={packet.id}
                         {...packet}
                         isHttp={selectedStreamL7 === 'http1'}
-                        onHeaderSearch={(name: string, value: string) => {
-                            console.log('Search header:', name, value);
-                        }}
+                        onHeaderSearch={addHeaderFilter}
                     />
                 ))}
             </div>
