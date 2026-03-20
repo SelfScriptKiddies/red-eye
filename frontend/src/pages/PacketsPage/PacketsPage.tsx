@@ -211,6 +211,11 @@ export function PacketsPage() {
         };
     }, [isRedEyeActive]);
 
+    // Filter streams by header search results
+    const filteredStreams = headerSearchResults
+        ? streamsArray.filter((s: any) => headerSearchResults.stream_ids.includes(s.id))
+        : streamsArray;
+
     const addHeaderFilter = (name: string, value: string) => {
         const exists = headerFilters.some(f => f.name === name && f.value === value);
         if (!exists) {
@@ -357,10 +362,31 @@ export function PacketsPage() {
                 </div>
             </div>
             <div id="streams" className="streams" ref={streamsContainerRef}>
-                {streamsArray.map((stream, index) => {
-                    return < StreamCard 
+                {/* Filter indicator */}
+                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0) && (
+                    <div className="filter-indicator">
+                        <span>Фильтр активен</span>
+                        {headerFilters.length > 0 && (
+                            <div className="filter-indicator-chips">
+                                {headerFilters.map((f, i) => (
+                                    <span key={i} className="filter-indicator-chip">
+                                        {f.name}: {f.value.length > 25 ? f.value.slice(0, 25) + '...' : f.value}
+                                        <button onClick={() => removeHeaderFilter(i)}>✕</button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        {headerFilters.length > 0 && (
+                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); }}>
+                                Сбросить HTTP фильтры
+                            </button>
+                        )}
+                    </div>
+                )}
+                {filteredStreams.map((stream, index) => {
+                    return < StreamCard
                         key={stream.id}
-                        streamObj={stream} 
+                        streamObj={stream}
                         onStreamClick={handleStreamClick}
                         onFavoriteToggle={handleFavoriteToggle}
                         tagColors={tagColors}
@@ -371,41 +397,18 @@ export function PacketsPage() {
                         Загрузка...
                     </div>
                 )}
-                {!hasMoreStreams && streamsArray.length > 0 && (
+                {!hasMoreStreams && filteredStreams.length > 0 && !headerSearchResults && (
                     <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
                         Все стримы загружены
                     </div>
                 )}
-            </div>
-            <div className="packetData">
-                {/* Header search bar */}
-                {headerFilters.length > 0 && (
-                    <div className="header-search-bar">
-                        <div className="header-search-chips">
-                            {headerFilters.map((f, i) => (
-                                <span key={i} className="header-chip">
-                                    <span className="header-chip-name">{f.name}:</span>
-                                    <span className="header-chip-value">{f.value.length > 40 ? f.value.slice(0, 40) + '...' : f.value}</span>
-                                    <button onClick={() => removeHeaderFilter(i)}>✕</button>
-                                </span>
-                            ))}
-                        </div>
-                        <div className="header-search-info">
-                            {headerSearching ? 'Поиск...' :
-                             headerSearchResults ? `${headerSearchResults.total} стримов` : ''}
-                        </div>
-                        {headerSearchResults && headerSearchResults.stream_ids.length > 0 && (
-                            <div className="header-search-streams">
-                                {headerSearchResults.stream_ids.slice(0, 30).map(sid => (
-                                    <button key={sid} className="stream-link-btn" onClick={() => handleStreamClick(sid)}>
-                                        #{sid}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
+                {headerSearchResults && filteredStreams.length === 0 && (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
+                        Нет стримов по заданным фильтрам
                     </div>
                 )}
-
+            </div>
+            <div className="packetData">
                 {packetData && packetData.length > 0 && packetData.map(packet => (
                     <PacketCard
                         key={packet.id}
