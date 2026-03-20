@@ -131,11 +131,10 @@ pub async fn run_sniffer_loop(
 ) {
     let mut sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
 
-    if let Err(e) = sniffer.start().await {
-        error!("Failed to start sniffer: {}", e);
-        return;
+    match sniffer.start().await {
+        Ok(_) => info!("Sniffer engine started"),
+        Err(e) => warn!("Failed to start sniffer (will retry on port change): {}", e),
     }
-    info!("Sniffer engine started");
 
     loop {
         tokio::select! {
