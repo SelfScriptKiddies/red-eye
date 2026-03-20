@@ -9,5 +9,6 @@ CREATE TABLE IF NOT EXISTS stream (
     active BOOLEAN NOT NULL,
     favorite BOOLEAN NOT NULL DEFAULT FALSE,
     packet_count INTEGER NOT NULL DEFAULT 0,
-    service_id INTEGER NOT NULL
+    service_id INTEGER NOT NULL,
+    l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown'
 );

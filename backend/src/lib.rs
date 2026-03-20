@@ -82,9 +82,9 @@ pub async fn run() -> std::io::Result<()> {
         start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
     });
 
-    // Periodic cleanup of old non-favorite streams (and their packets via CASCADE)
+    // Partition management + cleanup via partition drops
     {
-        let stream_service_cleanup = StreamService::new_from_pgpool(pool.clone());
+        let cleanup_pool = pool.clone();
         let age_minutes = config.cleanup_stream_age_minutes;
         let interval_minutes = config.cleanup_interval_minutes;
         tokio::spawn(async move {
@@ -92,15 +92,39 @@ pub async fn run() -> std::io::Result<()> {
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
             loop {
                 ticker.tick().await;
-                match stream_service_cleanup.delete_old_streams(age_minutes).await {
-                    Ok(removed) => {
-                        if removed > 0 {
-                            info!("Cleanup removed {} old streams", removed);
+
+                // Ensure partitions exist for upcoming data
+                match sqlx::query_scalar::<_, i32>(
+                    "SELECT ensure_current_partitions(60, 120, 300)"
+                )
+                .fetch_one(&cleanup_pool)
+                .await
+                {
+                    Ok(created) => {
+                        if created > 0 {
+                            debug!("Created {} new partitions", created);
                         }
                     }
-                    Err(e) => {
-                        error!("Failed to cleanup old streams: {}", e);
+                    Err(e) => error!("Failed to create partitions: {}", e),
+                }
+
+                // Drop old partitions + orphaned streams
+                match sqlx::query_as::<_, (i32, i64)>(
+                    "SELECT * FROM cleanup_old_data($1)"
+                )
+                .bind(age_minutes as i32)
+                .fetch_one(&cleanup_pool)
+                .await
+                {
+                    Ok((partitions, streams)) => {
+                        if partitions > 0 || streams > 0 {
+                            info!(
+                                "Cleanup: dropped {} partitions, removed {} streams",
+                                partitions, streams
+                            );
+                        }
                     }
+                    Err(e) => error!("Cleanup failed: {}", e),
                 }
             }
         });

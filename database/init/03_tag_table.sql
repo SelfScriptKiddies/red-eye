@@ -1,16 +1,15 @@
-CREATE TABLE tag (
-    id SERIAL PRIMARY KEY,
-    packet_id INTEGER,
-    tag_id INTEGER,
+-- Create partitioned 'tag' table (filter matches on packets)
+-- No FK to packets — cleanup handled by partition drops
+CREATE TABLE IF NOT EXISTS tag (
+    id SERIAL,
+    packet_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
     start_index INTEGER NOT NULL,
     end_index INTEGER NOT NULL,
-
-    CONSTRAINT fk_packet
-        FOREIGN KEY(packet_id) 
-            REFERENCES packets(id)
-            ON DELETE CASCADE,
+    timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+    PRIMARY KEY (id, timestamp),
     CONSTRAINT fk_tag
-        FOREIGN KEY(tag_id) 
+        FOREIGN KEY(tag_id)
             REFERENCES tag_name(id)
             ON DELETE CASCADE
-);
+) PARTITION BY RANGE (timestamp);
