@@ -14,19 +14,20 @@
 .favorite-btn {
     background: transparent;
     border: none;
-    color: #777;
+    color: #555;
     font-size: 1.3rem;
     margin-right: 10px;
     cursor: pointer;
     transition: color 0.2s ease, transform 0.2s ease;
+    -webkit-text-stroke: 1px #646cff;
 }
 
 .favorite-btn--active {
-    color: #f7d046;
+    color: #646cff;
 }
 
 .favorite-btn:hover {
-    color: #ffe38a;
+    color: #8a8fff;
     transform: scale(1.1);
 }
 
