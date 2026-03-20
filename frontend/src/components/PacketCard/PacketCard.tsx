@@ -11,6 +11,7 @@ interface PacketProps {
     timestamp: number;
     isHttp?: boolean;
     onHeaderSearch?: (name: string, value: string) => void;
+    _merged_count?: number;
 }
 
 interface HttpHeader {
@@ -79,7 +80,7 @@ function generateCurl(msg: HttpMessageData): string {
     return parts.join(' \\\n');
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch }: PacketProps) {
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, _merged_count }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isHttp ? 'http' : 'text');
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
     const [httpLoading, setHttpLoading] = useState(false);
@@ -222,6 +223,9 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 <span className={`packet-direction ${direction}`}>
                     {direction === 'orig' ? '← Исходящий' : '→ Входящий'}
                 </span>
+                {_merged_count && _merged_count > 1 && (
+                    <span className="merged-badge">{_merged_count} пакетов</span>
+                )}
             </div>
 
             <div className="packet-content">

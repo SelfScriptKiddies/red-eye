@@ -211,6 +211,30 @@ export function PacketsPage() {
         };
     }, [isRedEyeActive]);
 
+    // Merge adjacent packets with the same direction
+    const mergedPackets = (() => {
+        if (!packetData || packetData.length === 0) return [];
+        const groups: any[] = [];
+        for (const pkt of packetData) {
+            const last = groups[groups.length - 1];
+            if (last && last.direction === pkt.direction) {
+                // Concatenate base64: decode both, merge, re-encode
+                const a = atob(last.packet_data);
+                const b = atob(pkt.packet_data);
+                const merged = new Uint8Array(a.length + b.length);
+                for (let i = 0; i < a.length; i++) merged[i] = a.charCodeAt(i);
+                for (let i = 0; i < b.length; i++) merged[a.length + i] = b.charCodeAt(i);
+                let binary = '';
+                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
+                last.packet_data = btoa(binary);
+                last._merged_count = (last._merged_count || 1) + 1;
+            } else {
+                groups.push({ ...pkt, _merged_count: 1 });
+            }
+        }
+        return groups;
+    })();
+
     // Filter streams by header search results
     const filteredStreams = headerSearchResults
         ? streamsArray.filter((s: any) => headerSearchResults.stream_ids.includes(s.id))
@@ -409,7 +433,7 @@ export function PacketsPage() {
                 )}
             </div>
             <div className="packetData">
-                {packetData && packetData.length > 0 && packetData.map(packet => (
+                {mergedPackets.map(packet => (
                     <PacketCard
                         key={packet.id}
                         {...packet}
