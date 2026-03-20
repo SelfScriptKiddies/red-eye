@@ -12,4 +12,4 @@ CREATE TABLE IF NOT EXISTS service (
 );
 
 -- Создание индекса на поле port для ускорения поиска по порту
-CREATE INDEX IF NOT EXISTS idx_services_port ON services(port);
+CREATE INDEX IF NOT EXISTS idx_services_port ON service(port);
