@@ -267,6 +267,92 @@
     border-color: #646cff !important;
 }
 
+/* Packet toolbar */
+.packet-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.toolbar-left, .toolbar-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.merge-toggle-btn, .toolbar-btn {
+    background: #2a2a2a !important;
+    border: 1px solid #444 !important;
+    border-radius: 4px;
+    color: #888;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 10px !important;
+    transition: all 0.2s;
+}
+
+.merge-toggle-btn.active {
+    border-color: #646cff !important;
+    color: #646cff;
+}
+
+.toolbar-btn:hover {
+    border-color: #646cff !important;
+    color: #646cff;
+}
+
+.merge-reset-btn {
+    background: transparent !important;
+    border: none !important;
+    color: #666;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 6px !important;
+}
+
+.merge-reset-btn:hover {
+    color: #646cff;
+}
+
+/* Export dropdown */
+.export-dropdown {
+    position: relative;
+}
+
+.export-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: #2a2a2a;
+    border: 1px solid #646cff;
+    border-radius: 6px;
+    overflow: hidden;
+    z-index: 100;
+    min-width: 120px;
+}
+
+.export-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent !important;
+    border: none !important;
+    color: #ccc;
+    padding: 8px 14px !important;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: monospace;
+}
+
+.export-menu button:hover {
+    background: #353535 !important;
+    color: #646cff;
+}
+
 /* Merge toggle */
 .merge-toggle {
     display: flex;

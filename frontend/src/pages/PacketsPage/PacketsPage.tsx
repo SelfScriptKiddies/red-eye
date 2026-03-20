@@ -138,23 +138,30 @@ export function PacketsPage() {
             return () => container.removeEventListener('scroll', handleScroll);
         }
     }, [isLoadingMore, hasMoreStreams, isRedEyeActive, currentOffset, usedTags, usedServices]);
-    // Initial data loading
+    // Initial data loading + handle ?stream=ID from URL
     useEffect(() => {
         if (isRedEyeActive) return;
-        
+
         if (!pageLoaded) {
             setPageLoaded(true);
             getStreams();
+
+            // Auto-select stream from URL query param
+            const params = new URLSearchParams(window.location.search);
+            const streamParam = params.get('stream');
+            if (streamParam) {
+                setTimeout(() => handleStreamClick(parseInt(streamParam)), 500);
+            }
         }
-        
+
         if (!servicesLoaded) {
             getServices();
         }
-        
+
         if (!tagsLoaded) {
             getTags();
         }
-    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]); // Only run when these change
+    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]);
 
     // WebSocket connection for real-time packet updates
     useEffect(() => {
@@ -344,6 +351,113 @@ export function PacketsPage() {
         }
     };
 
+    // Share: copy link + auto-favorite
+    const shareStream = async () => {
+        if (!selectedStreamId) return;
+        const url = `${window.location.origin}/packets?stream=${selectedStreamId}`;
+        await navigator.clipboard.writeText(url);
+        // Auto-favorite so it survives cleanup
+        const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
+        const stream = streamsArray.find((s: any) => s.id === numId);
+        if (stream && !stream.favorite) {
+            handleFavoriteToggle(numId, false);
+        }
+        setShareCopied(true);
+        setTimeout(() => setShareCopied(false), 2000);
+    };
+
+    // Export generators
+    const exportPwntools = (): string => {
+        if (!packetData || packetData.length === 0) return '';
+        const stream = streamsArray.find((s: any) => s.id === (typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId));
+        const host = stream ? `TARGET_IP` : 'TARGET_IP';
+        const port = stream?.service_name ? '????' : '????';
+        const lines = [`from pwn import *\n`, `r = remote('${host}', ${port})\n`];
+        for (const pkt of packetData) {
+            const raw = atob(pkt.packet_data);
+            const pyBytes = Array.from(raw).map((c: string) => {
+                const code = c.charCodeAt(0);
+                if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
+                return `\\x${code.toString(16).padStart(2, '0')}`;
+            }).join('');
+            if (pkt.direction === 'dest') {
+                lines.push(`r.send(b'${pyBytes}')`);
+            } else {
+                lines.push(`r.recv(${raw.length})  # ${raw.length} bytes`);
+            }
+        }
+        lines.push(`\nr.interactive()`);
+        return lines.join('\n');
+    };
+
+    const exportRequests = (): string => {
+        if (!packetData || packetData.length === 0) return '';
+        const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
+        // Parse merged packets for HTTP messages
+        for (const pkt of mergedPackets) {
+            if (pkt.direction !== 'dest') continue;
+            const text = atob(pkt.packet_data);
+            const methodMatch = text.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\S+)\s+HTTP/);
+            if (!methodMatch) continue;
+            const [, method, path] = methodMatch;
+            // Extract headers
+            const headerSection = text.split('\r\n\r\n')[0];
+            const headerLines = headerSection.split('\r\n').slice(1);
+            const headers: Record<string, string> = {};
+            for (const line of headerLines) {
+                const idx = line.indexOf(':');
+                if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+            }
+            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+            const headersStr = Object.entries(headers)
+                .filter(([k]) => !['Host', 'Content-Length', 'Connection'].includes(k))
+                .map(([k, v]) => `        '${k}': '${v}'`).join(',\n');
+
+            let call = `resp = s.${method.toLowerCase()}(f'{BASE}${path}'`;
+            if (headersStr) call += `,\n    headers={\n${headersStr}\n    }`;
+            if (body && method !== 'GET') call += `,\n    data=${JSON.stringify(body)}`;
+            call += ')';
+            lines.push(call);
+            lines.push(`print(resp.status_code, resp.text[:200])\n`);
+        }
+        return lines.join('\n');
+    };
+
+    const exportCurl = (): string => {
+        if (!packetData || packetData.length === 0) return '';
+        const lines = ['#!/bin/bash\n'];
+        for (const pkt of mergedPackets) {
+            if (pkt.direction !== 'dest') continue;
+            const text = atob(pkt.packet_data);
+            const methodMatch = text.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\S+)\s+HTTP/);
+            if (!methodMatch) continue;
+            const [, method, path] = methodMatch;
+            const headerSection = text.split('\r\n\r\n')[0];
+            const headerLines = headerSection.split('\r\n').slice(1);
+            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+
+            const parts = [`curl -s -X ${method} 'http://TARGET_IP:PORT${path}'`];
+            for (const line of headerLines) {
+                const idx = line.indexOf(':');
+                if (idx > 0) {
+                    const name = line.slice(0, idx).trim();
+                    if (!['Host', 'Content-Length', 'Connection'].includes(name)) {
+                        parts.push(`  -H '${line.trim()}'`);
+                    }
+                }
+            }
+            if (body && method !== 'GET') {
+                parts.push(`  -d '${body.replace(/'/g, "'\\''")}'`);
+            }
+            lines.push(parts.join(' \\\n'));
+            lines.push('echo\n');
+        }
+        return lines.join('\n');
+    };
+
+    const [shareCopied, setShareCopied] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
     const handleClearStreams = () => {
         setStreams([]);
         setCurrentOffset(0);
@@ -452,19 +566,46 @@ export function PacketsPage() {
             </div>
             <div className="packetData">
                 {packetData.length > 0 && (
-                    <div className="merge-toggle">
-                        <button
-                            className={`merge-toggle-btn ${shouldMerge ? 'active' : ''}`}
-                            onClick={() => setMergeOverride(shouldMerge ? false : true)}
-                            title={shouldMerge ? 'Показать отдельные TCP-сегменты' : 'Склеить соседние пакеты'}
-                        >
-                            {shouldMerge ? 'Склейка вкл' : 'Склейка выкл'}
-                        </button>
-                        {mergeOverride !== null && (
-                            <button className="merge-reset-btn" onClick={() => setMergeOverride(null)} title="Авто">
-                                авто
+                    <div className="packet-toolbar">
+                        <div className="toolbar-left">
+                            <button
+                                className={`merge-toggle-btn ${shouldMerge ? 'active' : ''}`}
+                                onClick={() => setMergeOverride(shouldMerge ? false : true)}
+                                title={shouldMerge ? 'Показать отдельные TCP-сегменты' : 'Склеить соседние пакеты'}
+                            >
+                                {shouldMerge ? 'Склейка вкл' : 'Склейка выкл'}
                             </button>
-                        )}
+                            {mergeOverride !== null && (
+                                <button className="merge-reset-btn" onClick={() => setMergeOverride(null)}>авто</button>
+                            )}
+                        </div>
+                        <div className="toolbar-right">
+                            <button className="toolbar-btn" onClick={shareStream} title="Скопировать ссылку на стрим">
+                                {shareCopied ? '✓ Скопировано' : 'Share'}
+                            </button>
+                            <div className="export-dropdown">
+                                <button className="toolbar-btn" onClick={() => setExportMenuOpen(!exportMenuOpen)}>
+                                    Export ▾
+                                </button>
+                                {exportMenuOpen && (
+                                    <div className="export-menu">
+                                        <button onClick={() => { navigator.clipboard.writeText(exportPwntools()); setExportMenuOpen(false); }}>
+                                            pwntools
+                                        </button>
+                                        {selectedStreamL7 === 'http1' && (
+                                            <>
+                                                <button onClick={() => { navigator.clipboard.writeText(exportRequests()); setExportMenuOpen(false); }}>
+                                                    requests
+                                                </button>
+                                                <button onClick={() => { navigator.clipboard.writeText(exportCurl()); setExportMenuOpen(false); }}>
+                                                    curl
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 )}
                 {mergedPackets.map(packet => (
