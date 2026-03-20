@@ -1,6 +1,15 @@
--- L7 protocol analysis tables (partitioned by timestamp)
+-- L7 protocol analysis tables
 
--- HTTP messages (request or response)
+-- Deduplicated header sets (small table, not partitioned)
+CREATE TABLE IF NOT EXISTS header_set (
+    id SERIAL PRIMARY KEY,
+    hash BIGINT UNIQUE NOT NULL,
+    headers JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_header_set_headers ON header_set USING GIN (headers);
+
+-- HTTP messages (partitioned by timestamp)
 CREATE TABLE IF NOT EXISTS http_message (
     id SERIAL,
     stream_id INTEGER NOT NULL,
@@ -14,6 +23,7 @@ CREATE TABLE IF NOT EXISTS http_message (
     content_length INTEGER,
     body_offset INTEGER,
     body_length INTEGER,
+    header_set_id INTEGER,
     timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
     PRIMARY KEY (id, timestamp)
 ) PARTITION BY RANGE (timestamp);
@@ -21,19 +31,7 @@ CREATE TABLE IF NOT EXISTS http_message (
 CREATE INDEX IF NOT EXISTS idx_http_message_stream ON http_message(stream_id);
 CREATE INDEX IF NOT EXISTS idx_http_message_method_path ON http_message(method, path);
 CREATE INDEX IF NOT EXISTS idx_http_message_status ON http_message(status_code);
-
--- HTTP headers (key-value pairs for each message)
-CREATE TABLE IF NOT EXISTS http_header (
-    id SERIAL,
-    message_id INTEGER NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    value TEXT NOT NULL,
-    timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
-    PRIMARY KEY (id, timestamp)
-) PARTITION BY RANGE (timestamp);
-
-CREATE INDEX IF NOT EXISTS idx_http_header_name ON http_header(name);
-CREATE INDEX IF NOT EXISTS idx_http_header_name_value ON http_header(name, value);
+CREATE INDEX IF NOT EXISTS idx_http_message_header_set ON http_message(header_set_id);
 
 -- Proto file storage for gRPC decoding
 CREATE TABLE IF NOT EXISTS proto_file (

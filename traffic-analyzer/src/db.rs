@@ -130,7 +130,48 @@ impl DB {
         .map(|_| ())
     }
 
-    /// Insert an HTTP message and return its ID
+    /// Get or create a deduplicated header set. Returns the header_set id.
+    pub async fn get_or_create_header_set(
+        &self,
+        headers: &[(String, String)],
+    ) -> Result<i32, Error> {
+        use std::collections::BTreeMap;
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        // Build sorted JSONB and compute hash
+        let map: BTreeMap<&str, &str> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let json = serde_json::json!(map);
+
+        let mut hasher = DefaultHasher::new();
+        json.to_string().hash(&mut hasher);
+        let hash = hasher.finish() as i64;
+
+        // Try to find existing
+        let existing = sqlx::query_scalar::<_, i32>(
+            "SELECT id FROM header_set WHERE hash = $1"
+        )
+        .bind(hash)
+        .fetch_optional(&self.pgpool)
+        .await?;
+
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+
+        // Insert new (ON CONFLICT for race conditions)
+        sqlx::query_scalar::<_, i32>(
+            "INSERT INTO header_set (hash, headers) VALUES ($1, $2)
+             ON CONFLICT (hash) DO UPDATE SET hash = header_set.hash
+             RETURNING id"
+        )
+        .bind(hash)
+        .bind(json)
+        .fetch_one(&self.pgpool)
+        .await
+    }
+
+    /// Insert an HTTP message with a reference to a deduplicated header set.
     pub async fn insert_http_message(
         &self,
         stream_id: usize,
@@ -144,11 +185,12 @@ impl DB {
         content_length: Option<i32>,
         body_offset: i32,
         body_length: i32,
+        header_set_id: Option<i32>,
         timestamp: i64,
     ) -> Result<i32, Error> {
         sqlx::query(
-            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, timestamp)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
              RETURNING id"
         )
         .bind(stream_id as i32)
@@ -162,30 +204,10 @@ impl DB {
         .bind(content_length)
         .bind(body_offset)
         .bind(body_length)
+        .bind(header_set_id)
         .bind(timestamp)
         .fetch_one(&self.pgpool)
         .await
         .map(|row| row.get::<i32, _>("id"))
-    }
-
-    /// Insert HTTP headers in batch
-    pub async fn insert_http_headers(
-        &self,
-        message_id: i32,
-        headers: &[(String, String)],
-        timestamp: i64,
-    ) -> Result<(), Error> {
-        for (name, value) in headers {
-            sqlx::query(
-                "INSERT INTO http_header (message_id, name, value, timestamp) VALUES ($1, $2, $3, $4)"
-            )
-            .bind(message_id)
-            .bind(name)
-            .bind(value)
-            .bind(timestamp)
-            .execute(&self.pgpool)
-            .await?;
-        }
-        Ok(())
     }
 }

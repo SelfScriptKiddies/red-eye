@@ -75,7 +75,6 @@ BEGIN
     total := total + create_time_partitions('packets', from_ts, to_ts, interval_secs);
     total := total + create_time_partitions('tag', from_ts, to_ts, interval_secs);
     total := total + create_time_partitions('http_message', from_ts, to_ts, interval_secs);
-    total := total + create_time_partitions('http_header', from_ts, to_ts, interval_secs);
     RETURN total;
 END;
 $$ LANGUAGE plpgsql;
@@ -89,10 +88,13 @@ DECLARE
     streams_removed BIGINT;
 BEGIN
     -- Drop old partitions (instant, no VACUUM needed)
-    dropped := dropped + drop_old_partitions('http_header', cutoff_ts);
     dropped := dropped + drop_old_partitions('http_message', cutoff_ts);
     dropped := dropped + drop_old_partitions('tag', cutoff_ts);
     dropped := dropped + drop_old_partitions('packets', cutoff_ts);
+
+    -- Cleanup orphaned header sets (no messages reference them)
+    DELETE FROM header_set
+    WHERE id NOT IN (SELECT DISTINCT header_set_id FROM http_message WHERE header_set_id IS NOT NULL);
 
     -- Delete streams with no remaining packets (excluding favorites)
     DELETE FROM stream

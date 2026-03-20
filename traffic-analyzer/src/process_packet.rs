@@ -164,15 +164,26 @@ impl PacketProcessor {
 
         if should_parse_http {
         if let Some(parsed) = http_parser::try_parse_http(&packet.payload) {
-            // Extract Content-Type and Content-Length from headers
             let content_type = parsed.headers.iter()
                 .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
                 .map(|(_, v)| v.clone());
             let content_length = parsed.headers.iter()
                 .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
                 .and_then(|(_, v)| v.parse::<i32>().ok());
-
             let body_length = (packet.payload.len() as i32 - parsed.body_offset as i32).max(0);
+
+            // Deduplicate headers
+            let header_set_id = if !parsed.headers.is_empty() {
+                match self.db.get_or_create_header_set(&parsed.headers).await {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        error!("Failed to store header set: {:?}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             match self.db.insert_http_message(
                 stream_id,
@@ -186,23 +197,14 @@ impl PacketProcessor {
                 content_length,
                 parsed.body_offset as i32,
                 body_length,
+                header_set_id,
                 packet.timestamp_seconds as i64,
             ).await {
-                Ok(message_id) => {
-                    if !parsed.headers.is_empty() {
-                        if let Err(e) = self.db.insert_http_headers(
-                            message_id,
-                            &parsed.headers,
-                            packet.timestamp_seconds as i64,
-                        ).await {
-                            error!("Failed to insert HTTP headers: {:?}", e);
-                        }
-                    }
-                    // Mark stream as HTTP
+                Ok(_) => {
                     let _ = self.db.update_stream_l7_protocol(stream_id, "http1").await;
-                    debug!("HTTP {} parsed: {} headers",
+                    debug!("HTTP {} parsed: {} headers (set_id={:?})",
                         if parsed.is_request { "request" } else { "response" },
-                        parsed.headers.len()
+                        parsed.headers.len(), header_set_id
                     );
                 }
                 Err(e) => {

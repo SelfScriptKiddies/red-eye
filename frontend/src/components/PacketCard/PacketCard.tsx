@@ -15,7 +15,6 @@ interface PacketProps {
 }
 
 interface HttpHeader {
-    id: number;
     name: string;
     value: string;
 }
@@ -100,7 +99,13 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                     if (msg) {
                         return fetch(`/api/http/headers/${msg.id}`)
                             .then(r => r.json())
-                            .then(headers => {
+                            .then(headersObj => {
+                                // Convert JSONB {"Name": "value"} to array
+                                const headersArr: HttpHeader[] = headersObj && typeof headersObj === 'object' && !Array.isArray(headersObj)
+                                    ? Object.entries(headersObj).map(([name, value]) => ({ name, value: String(value) }))
+                                    : Array.isArray(headersObj)
+                                        ? headersObj.map((h: any) => ({ name: h.name, value: h.value }))
+                                        : [];
                                 setHttpData({
                                     id: msg.id,
                                     is_request: msg.is_request,
@@ -108,7 +113,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                                     path: msg.path,
                                     status_code: msg.status_code,
                                     http_version: msg.http_version,
-                                    headers: Array.isArray(headers) ? headers : [],
+                                    headers: headersArr,
                                 });
                             });
                     }
@@ -162,8 +167,8 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
                 {/* Headers */}
                 <div className="http-headers">
-                    {httpData.headers.map(h => (
-                        <div key={h.id} className="http-header-line">
+                    {httpData.headers.map((h, idx) => (
+                        <div key={idx} className="http-header-line">
                             <span className="h-name">{h.name}:</span>
                             <span className="h-value">{h.value}</span>
                             {onHeaderSearch && (

@@ -15,23 +15,16 @@ pub struct HttpMessage {
     pub content_length: Option<i32>,
     pub body_offset: Option<i32>,
     pub body_length: Option<i32>,
+    pub header_set_id: Option<i32>,
     pub timestamp: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
-pub struct HttpHeader {
-    pub id: i32,
-    pub message_id: i32,
-    pub name: String,
-    pub value: String,
-}
-
-/// Full HTTP message with all headers
+/// Full HTTP message with headers from header_set
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HttpMessageFull {
     #[serde(flatten)]
     pub message: HttpMessage,
-    pub headers: Vec<HttpHeader>,
+    pub headers: serde_json::Value,
 }
 
 /// Search query for headers
@@ -48,7 +41,7 @@ fn default_limit() -> i64 {
     100
 }
 
-/// Search result — stream IDs matching header criteria
+/// Search result
 #[derive(Debug, Serialize, ToSchema)]
 pub struct HeaderSearchResult {
     pub stream_ids: Vec<i32>,

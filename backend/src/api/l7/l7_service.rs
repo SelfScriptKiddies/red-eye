@@ -1,6 +1,6 @@
 use sqlx::{Error, PgPool};
 
-use super::l7_dto::{HttpHeader, HttpMessage, HttpMessageFull};
+use super::l7_dto::{HttpMessage, HttpMessageFull};
 use super::l7_repository::L7Repository;
 
 pub struct L7Service {
@@ -14,7 +14,6 @@ impl L7Service {
         }
     }
 
-    /// Get all HTTP messages for a stream (without headers)
     pub async fn get_messages_by_stream(
         &self,
         stream_id: i32,
@@ -22,19 +21,16 @@ impl L7Service {
         self.repository.get_messages_by_stream(stream_id).await
     }
 
-    /// Get a specific message with all its headers
     pub async fn get_message_full(&self, message_id: i32) -> Result<HttpMessageFull, Error> {
         let message = self.repository.get_message_by_id(message_id).await?;
         let headers = self.repository.get_headers_by_message(message_id).await?;
         Ok(HttpMessageFull { message, headers })
     }
 
-    /// Get headers for a message
-    pub async fn get_headers(&self, message_id: i32) -> Result<Vec<HttpHeader>, Error> {
+    pub async fn get_headers(&self, message_id: i32) -> Result<serde_json::Value, Error> {
         self.repository.get_headers_by_message(message_id).await
     }
 
-    /// Search streams by a single header
     pub async fn search_by_header(
         &self,
         name: &str,
@@ -52,7 +48,6 @@ impl L7Service {
         Ok((stream_ids, total))
     }
 
-    /// Search streams by multiple headers (AND)
     pub async fn search_by_headers(
         &self,
         filters: &[(String, Option<String>)],

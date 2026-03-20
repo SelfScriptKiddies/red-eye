@@ -1,6 +1,6 @@
 use sqlx::{Error, PgPool, Row};
 
-use super::l7_dto::{HttpHeader, HttpMessage};
+use super::l7_dto::HttpMessage;
 
 pub struct L7Repository {
     pgpool: PgPool,
@@ -11,14 +11,14 @@ impl L7Repository {
         Self { pgpool }
     }
 
-    /// Get all HTTP messages for a stream
     pub async fn get_messages_by_stream(
         &self,
         stream_id: i32,
     ) -> Result<Vec<HttpMessage>, Error> {
         sqlx::query_as::<_, HttpMessage>(
             "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
-                    http_version, content_type, content_length, body_offset, body_length, timestamp
+                    http_version, content_type, content_length, body_offset, body_length,
+                    header_set_id, timestamp
              FROM http_message
              WHERE stream_id = $1
              ORDER BY timestamp ASC, id ASC",
@@ -28,11 +28,11 @@ impl L7Repository {
         .await
     }
 
-    /// Get a specific HTTP message by ID
     pub async fn get_message_by_id(&self, id: i32) -> Result<HttpMessage, Error> {
         sqlx::query_as::<_, HttpMessage>(
             "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
-                    http_version, content_type, content_length, body_offset, body_length, timestamp
+                    http_version, content_type, content_length, body_offset, body_length,
+                    header_set_id, timestamp
              FROM http_message
              WHERE id = $1",
         )
@@ -41,23 +41,25 @@ impl L7Repository {
         .await
     }
 
-    /// Get headers for a specific message
+    /// Get headers JSONB from header_set by message's header_set_id
     pub async fn get_headers_by_message(
         &self,
         message_id: i32,
-    ) -> Result<Vec<HttpHeader>, Error> {
-        sqlx::query_as::<_, HttpHeader>(
-            "SELECT id, message_id, name, value
-             FROM http_header
-             WHERE message_id = $1
-             ORDER BY id ASC",
+    ) -> Result<serde_json::Value, Error> {
+        let result = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT hs.headers
+             FROM http_message m
+             JOIN header_set hs ON hs.id = m.header_set_id
+             WHERE m.id = $1",
         )
         .bind(message_id)
-        .fetch_all(&self.pgpool)
-        .await
+        .fetch_optional(&self.pgpool)
+        .await?;
+
+        Ok(result.unwrap_or(serde_json::json!({})))
     }
 
-    /// Search streams by header name and optional value (AND logic for multiple calls)
+    /// Search streams by header name/value using JSONB
     pub async fn search_streams_by_header(
         &self,
         name: &str,
@@ -67,9 +69,9 @@ impl L7Repository {
         if let Some(val) = value {
             sqlx::query_scalar::<_, i32>(
                 "SELECT DISTINCT m.stream_id
-                 FROM http_header h
-                 JOIN http_message m ON m.id = h.message_id AND m.timestamp = h.timestamp
-                 WHERE LOWER(h.name) = LOWER($1) AND h.value = $2
+                 FROM http_message m
+                 JOIN header_set hs ON hs.id = m.header_set_id
+                 WHERE hs.headers->>$1 = $2
                  ORDER BY m.stream_id DESC
                  LIMIT $3",
             )
@@ -81,9 +83,9 @@ impl L7Repository {
         } else {
             sqlx::query_scalar::<_, i32>(
                 "SELECT DISTINCT m.stream_id
-                 FROM http_header h
-                 JOIN http_message m ON m.id = h.message_id AND m.timestamp = h.timestamp
-                 WHERE LOWER(h.name) = LOWER($1)
+                 FROM http_message m
+                 JOIN header_set hs ON hs.id = m.header_set_id
+                 WHERE hs.headers ? $1
                  ORDER BY m.stream_id DESC
                  LIMIT $2",
             )
@@ -94,7 +96,6 @@ impl L7Repository {
         }
     }
 
-    /// Search streams by multiple headers (AND logic)
     pub async fn search_streams_by_headers(
         &self,
         filters: &[(String, Option<String>)],
@@ -104,7 +105,6 @@ impl L7Repository {
             return Ok(vec![]);
         }
 
-        // Build intersected query: each filter narrows the result set
         let mut result: Option<Vec<i32>> = None;
 
         for (name, value) in filters {
@@ -121,7 +121,6 @@ impl L7Repository {
         Ok(result.unwrap_or_default())
     }
 
-    /// Count total headers matching criteria (for stats)
     pub async fn count_header_matches(
         &self,
         name: &str,
@@ -130,9 +129,9 @@ impl L7Repository {
         if let Some(val) = value {
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(DISTINCT m.stream_id)
-                 FROM http_header h
-                 JOIN http_message m ON m.id = h.message_id AND m.timestamp = h.timestamp
-                 WHERE LOWER(h.name) = LOWER($1) AND h.value = $2",
+                 FROM http_message m
+                 JOIN header_set hs ON hs.id = m.header_set_id
+                 WHERE hs.headers->>$1 = $2",
             )
             .bind(name)
             .bind(val)
@@ -141,9 +140,9 @@ impl L7Repository {
         } else {
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(DISTINCT m.stream_id)
-                 FROM http_header h
-                 JOIN http_message m ON m.id = h.message_id AND m.timestamp = h.timestamp
-                 WHERE LOWER(h.name) = LOWER($1)",
+                 FROM http_message m
+                 JOIN header_set hs ON hs.id = m.header_set_id
+                 WHERE hs.headers ? $1",
             )
             .bind(name)
             .fetch_one(&self.pgpool)
