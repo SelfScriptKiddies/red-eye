@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS service (
     merge_adjacent_packets BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически склеивать соседние пакеты в одном направлении
     inflate_websockets BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически разархивировать сжатые WebSocket-пакеты
     decrypt_tls BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически расшифровывать TLS-трафик
+    http_parse BOOLEAN NOT NULL DEFAULT FALSE, -- HTTP L7 парсинг и автосклейка пакетов
     CONSTRAINT unique_service_port UNIQUE (name, port) -- Уникальность сочетания имени сервиса и порта
 );
 

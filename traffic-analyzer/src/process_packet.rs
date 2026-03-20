@@ -156,7 +156,13 @@ impl PacketProcessor {
             }
         }
 
-        // Try L7 HTTP parsing
+        // Try L7 HTTP parsing (only if service has http_parse enabled)
+        let should_parse_http = {
+            let services = self.cache.services.read().unwrap();
+            services.get(&service_id).map(|s| s.http_parse).unwrap_or(false)
+        };
+
+        if should_parse_http {
         if let Some(parsed) = http_parser::try_parse_http(&packet.payload) {
             // Extract Content-Type and Content-Length from headers
             let content_type = parsed.headers.iter()
@@ -204,6 +210,7 @@ impl PacketProcessor {
                 }
             }
         }
+        } // should_parse_http
 
         // Send event to NATS for real-time updates
         if let Some(ref client) = self.nats_client {

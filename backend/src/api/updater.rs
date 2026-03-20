@@ -76,6 +76,7 @@ mod dto {
         pub inflate_websockets: bool,
         pub merge_adjacent_packets: bool,
         pub urldecode: bool,
+        pub http_parse: bool,
     }
 
     impl From<service_dto::Service> for Service {
@@ -88,6 +89,7 @@ mod dto {
                 inflate_websockets: service.inflate_websockets,
                 merge_adjacent_packets: service.merge_adjacent_packets,
                 urldecode: service.urldecode,
+                http_parse: service.http_parse,
             }
         }
     }

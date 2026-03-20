@@ -37,6 +37,7 @@ pub struct ServiceDto {
     pub inflate_websockets: bool,
     pub merge_adjacent_packets: bool,
     pub urldecode: bool,
+    pub http_parse: bool,
 }
 
 #[derive(Debug, Decode, Clone)]

@@ -32,6 +32,7 @@ export function PacketsPage() {
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
+    const [mergeOverride, setMergeOverride] = useState<boolean | null>(null); // null = auto
     const wsRef = useRef<WebSocket | null>(null);
     const selectedStreamIdRef = useRef<number | null>(null);
     const streamsContainerRef = useRef<HTMLDivElement | null>(null);
@@ -211,14 +212,31 @@ export function PacketsPage() {
         };
     }, [isRedEyeActive]);
 
-    // Merge adjacent packets with the same direction
+    // Determine if merge should be active
+    const shouldMerge = (() => {
+        if (mergeOverride !== null) return mergeOverride;
+        // Auto: merge for HTTP services, or if service has merge_adjacent_packets
+        if (selectedStreamL7 === 'http1') return true;
+        // Check service flags from the selected stream
+        if (selectedStreamId) {
+            const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
+            const stream = streamsArray.find((s: any) => s.id === numId);
+            if (stream) {
+                const svc = servicesArray.find((s: any) => s.id === stream.service_id);
+                if (svc?.merge_adjacent_packets) return true;
+            }
+        }
+        return false;
+    })();
+
+    // Merge adjacent packets with the same direction (when enabled)
     const mergedPackets = (() => {
         if (!packetData || packetData.length === 0) return [];
+        if (!shouldMerge) return packetData.map(p => ({ ...p, _merged_count: 1 }));
         const groups: any[] = [];
         for (const pkt of packetData) {
             const last = groups[groups.length - 1];
             if (last && last.direction === pkt.direction) {
-                // Concatenate base64: decode both, merge, re-encode
                 const a = atob(last.packet_data);
                 const b = atob(pkt.packet_data);
                 const merged = new Uint8Array(a.length + b.length);
@@ -277,7 +295,7 @@ export function PacketsPage() {
     const handleStreamClick = async (streamId) => {
         selectedStreamIdRef.current = streamId;
         setSelectedStreamId(streamId);
-        console.log('Stream selected:', streamId);
+        setMergeOverride(null); // Reset to auto on stream change
 
         // Check stream's L7 protocol (streamId comes as string from dataset)
         const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
@@ -433,6 +451,22 @@ export function PacketsPage() {
                 )}
             </div>
             <div className="packetData">
+                {packetData.length > 0 && (
+                    <div className="merge-toggle">
+                        <button
+                            className={`merge-toggle-btn ${shouldMerge ? 'active' : ''}`}
+                            onClick={() => setMergeOverride(shouldMerge ? false : true)}
+                            title={shouldMerge ? 'Показать отдельные TCP-сегменты' : 'Склеить соседние пакеты'}
+                        >
+                            {shouldMerge ? 'Склейка вкл' : 'Склейка выкл'}
+                        </button>
+                        {mergeOverride !== null && (
+                            <button className="merge-reset-btn" onClick={() => setMergeOverride(null)} title="Авто">
+                                авто
+                            </button>
+                        )}
+                    </div>
+                )}
                 {mergedPackets.map(packet => (
                     <PacketCard
                         key={packet.id}
