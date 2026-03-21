@@ -1,10 +1,13 @@
 pub mod agent;
 pub mod auth;
+pub mod block_sync;
 pub mod l7;
 pub(crate) mod packet;
 pub mod realtime;
 pub mod service;
 pub(crate) mod stream;
+pub mod settings;
+pub mod special_triggers;
 pub mod tag;
 pub mod updater;
 use actix_web::web;
@@ -26,6 +29,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(realtime::config)
             .configure(agent::config)
             .configure(l7::config)
+            .configure(settings::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }

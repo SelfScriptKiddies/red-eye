@@ -1,10 +1,14 @@
 use actix_identity::Identity;
 use actix_web::{get, put, post, delete, web, Responder, HttpResponse};
 use serde_json::json;
+use std::sync::Arc;
+use sqlx::PgPool;
 use crate::api::tag::tag_service::TagService;
 use crate::api::tag::tag_dto::Tag;
 use crate::api::tag::tag_dto::TagName;
 use crate::api::updater::UpdateAgent;
+use crate::api::agent::agent_service::AgentService;
+use crate::api::block_sync::sync_block_filters;
 
 pub(crate) mod tag_dto;
 pub(crate) mod tag_repository;
@@ -135,13 +139,19 @@ async fn create_tag_name(
     _identity: Identity,
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
-    updater: web::Data<UpdateAgent>
+    updater: web::Data<UpdateAgent>,
+    agent_service: web::Data<Arc<AgentService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
+    let is_block = tag_name.special_type.as_deref() == Some("block");
     match tag_service.create_tag_name(tag_name.into_inner()).await {
         Ok(created_tag) => {
             let id = created_tag.id.try_into().unwrap();
             if let Err(e) = updater.add_filter(created_tag.clone().into(), id).await {
                 log::error!("Failed to send update: {}", e);
+            }
+            if is_block {
+                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::Ok().json(created_tag))
         }
@@ -166,14 +176,20 @@ async fn update_tag_name(
     path: web::Path<(i32,)>,
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
-    updater: web::Data<UpdateAgent>
+    updater: web::Data<UpdateAgent>,
+    agent_service: web::Data<Arc<AgentService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
+    let involves_block = tag_name.special_type.as_deref() == Some("block");
     match tag_service.update_tag_name(id, tag_name.into_inner()).await {
         Ok(updated_tag) => {
             let id = updated_tag.id.try_into().unwrap();
             if let Err(e) = updater.update_filter(id, updated_tag.clone().into()).await {
                 log::error!("Failed to send update: {}", e);
+            }
+            if involves_block || updated_tag.special_type.as_deref() == Some("block") {
+                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::Ok().json(updated_tag))
         }
@@ -197,13 +213,21 @@ async fn delete_tag_name(
     _identity: Identity,
     path: web::Path<(i32,)>,
     tag_service: web::Data<TagService>,
-    updater: web::Data<UpdateAgent>
+    updater: web::Data<UpdateAgent>,
+    agent_service: web::Data<Arc<AgentService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
+    // Check if deleted tag was block type (need to re-sync after delete)
+    let was_block = tag_service.get_tag_name_by_id(id).await
+        .map(|t| t.special_type.as_deref() == Some("block")).unwrap_or(false);
     match tag_service.delete_tag_name(id).await {
         Ok(_) => {
             if let Err(e) = updater.remove_filter(id.try_into().unwrap()).await {
                 log::error!("Failed to send update: {}", e);
+            }
+            if was_block {
+                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::NoContent().finish())
         }

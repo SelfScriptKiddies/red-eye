@@ -152,6 +152,12 @@ pub async fn run() -> std::io::Result<()> {
     let broadcaster_tx = Arc::new(tx);
     let broadcaster = web::Data::new(broadcaster_tx.clone());
 
+    // Spawn special trigger handler (flag farm + alert notifications)
+    api::special_triggers::spawn_special_trigger_handler(
+        pool.clone(),
+        broadcaster_tx.clone(),
+    );
+
     // Subscribe to NATS events and broadcast to WebSocket clients
     let broadcaster_tx_clone = broadcaster_tx.clone();
     let config_clone = config.clone();

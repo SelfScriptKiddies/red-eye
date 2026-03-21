@@ -25,6 +25,11 @@ interface Filter {
 }
 
 export function SettingsPage() {
+    // Settings state
+    const [farmUrl, setFarmUrl] = useState('');
+    const [farmEnabled, setFarmEnabled] = useState(false);
+    const [settingsLoaded, setSettingsLoaded] = useState(false);
+
     // Services state
     const [services, setServices] = useState<Service[]>([]);
     const [serviceModalOpen, setServiceModalOpen] = useState(false);
@@ -55,10 +60,33 @@ export function SettingsPage() {
 
     const API_URL = '/api';
 
-    // Fetch services on component mount
+    const fetchSettings = async () => {
+        try {
+            const resp = await fetch(`${API_URL}/settings`);
+            if (resp.ok) {
+                const data = await resp.json();
+                setFarmUrl(data.farm_url || '');
+                setFarmEnabled(data.farm_enabled === 'true');
+                setSettingsLoaded(true);
+            }
+        } catch (e) { console.error('Error fetching settings:', e); }
+    };
+
+    const saveSetting = async (key: string, value: string) => {
+        try {
+            await fetch(`${API_URL}/settings/${key}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value })
+            });
+        } catch (e) { console.error('Error saving setting:', e); }
+    };
+
+    // Fetch on mount
     useEffect(() => {
         fetchServices();
         fetchFilters();
+        fetchSettings();
     }, []);
 
     // Services CRUD operations
@@ -307,8 +335,38 @@ export function SettingsPage() {
                     <div className="column-header">
                         <h2>Общие</h2>
                     </div>
-                    <div className="placeholder-content">
-                        <p>Здесь будут общие настройки приложения</p>
+                    <div className="items-list">
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Flag Farm</h4>
+                                <div className="setting-row">
+                                    <label className="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={farmEnabled}
+                                            onChange={(e) => {
+                                                setFarmEnabled(e.target.checked);
+                                                saveSetting('farm_enabled', e.target.checked ? 'true' : 'false');
+                                            }}
+                                        />
+                                        Отправка флагов включена
+                                    </label>
+                                </div>
+                                <input
+                                    type="text"
+                                    placeholder="Farm URL (http://farm:8080/submit)"
+                                    value={farmUrl}
+                                    onChange={(e) => setFarmUrl(e.target.value)}
+                                    onBlur={() => saveSetting('farm_url', farmUrl)}
+                                    style={{ width: 'calc(100% - 24px)', padding: '10px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px', marginTop: '8px' }}
+                                />
+                                <p style={{ color: '#888', fontSize: '12px', margin: '8px 0 0' }}>
+                                    {farmEnabled
+                                        ? farmUrl ? `Флаги отправляются на ${farmUrl}` : 'Укажите URL фермы'
+                                        : 'Отправка выключена'}
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
