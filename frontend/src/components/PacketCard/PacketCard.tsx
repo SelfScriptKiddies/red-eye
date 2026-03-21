@@ -82,6 +82,58 @@ const toHexDump = (bytes: Uint8Array): string => {
     return lines.join('\n');
 };
 
+function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
+    const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+    const rows: JSX.Element[] = [];
+    for (let row = 0; row < bytes.length; row += 16) {
+        const offset = row.toString(16).padStart(4, '0');
+        const hexCells: JSX.Element[] = [];
+        const asciiCells: JSX.Element[] = [];
+
+        for (let col = 0; col < 16; col++) {
+            const idx = row + col;
+            if (idx < bytes.length) {
+                const b = bytes[idx];
+                const isHover = hoverIdx === idx;
+                const ch = b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.';
+
+                hexCells.push(
+                    <span
+                        key={idx}
+                        className={`hx-byte ${isHover ? 'hx-hover' : ''}`}
+                        onMouseEnter={() => setHoverIdx(idx)}
+                        onMouseLeave={() => setHoverIdx(null)}
+                    >{b.toString(16).padStart(2, '0')}</span>
+                );
+                asciiCells.push(
+                    <span
+                        key={idx}
+                        className={`hx-ascii-char ${isHover ? 'hx-hover' : ''} ${b < 0x20 || b > 0x7e ? 'hx-nonprint' : ''}`}
+                        onMouseEnter={() => setHoverIdx(idx)}
+                        onMouseLeave={() => setHoverIdx(null)}
+                    >{ch}</span>
+                );
+            } else {
+                hexCells.push(<span key={idx} className="hx-pad">  </span>);
+            }
+            if (col < 15 && col === 7) {
+                hexCells.push(<span key={`s${idx}`} className="hx-gap"> </span>);
+            }
+        }
+
+        rows.push(
+            <div key={row} className="hx-row">
+                <span className="hx-offset">{offset}</span>
+                <span className="hx-hex">{hexCells}</span>
+                <span className="hx-ascii">{asciiCells}</span>
+            </div>
+        );
+    }
+
+    return <div className="interactive-hexdump">{rows}</div>;
+}
+
 const toPythonBytesLiteral = (bytes: Uint8Array): string => {
     const body = Array.from(bytes)
         .map((b) => `\\x${b.toString(16).padStart(2, '0')}`)
@@ -308,8 +360,12 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             </div>
 
             <div className="packet-content">
-                {viewMode === 'http' ? renderHttpView() : (
-                    <pre className={`packet-body ${viewMode !== 'text' ? 'monospace' : ''}`}>
+                {viewMode === 'http' ? renderHttpView() : viewMode === 'hex' ? (
+                    <div className="packet-body monospace">
+                        <InteractiveHexDump bytes={bytes} />
+                    </div>
+                ) : (
+                    <pre className={`packet-body ${viewMode === 'python' ? 'monospace' : ''}`}>
                         {viewMode === 'text' && triggers.length > 0
                             ? renderHighlightedText(toUtf8Preview(bytes), triggers)
                             : getContent()

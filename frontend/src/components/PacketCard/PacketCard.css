@@ -277,6 +277,65 @@
     padding: 10px;
 }
 
+/* Interactive Hexdump */
+.interactive-hexdump {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    user-select: text;
+}
+
+.hx-row {
+    white-space: pre;
+}
+
+.hx-offset {
+    color: #555;
+    margin-right: 8px;
+}
+
+.hx-hex {
+    margin-right: 12px;
+}
+
+.hx-byte {
+    cursor: default;
+    padding: 0 1px;
+    border-radius: 2px;
+    transition: background 0.08s;
+}
+
+.hx-byte + .hx-byte::before {
+    content: ' ';
+}
+
+.hx-gap {
+    margin: 0 2px;
+}
+
+.hx-ascii {
+    color: #999;
+}
+
+.hx-ascii-char {
+    cursor: default;
+    border-radius: 1px;
+    transition: background 0.08s;
+}
+
+.hx-nonprint {
+    color: #555;
+}
+
+.hx-hover {
+    background: rgba(100, 108, 255, 0.3);
+    color: #fff;
+}
+
+.hx-pad {
+    color: transparent;
+}
+
 /* Pattern highlight */
 .highlight-match {
     border-radius: 2px;
