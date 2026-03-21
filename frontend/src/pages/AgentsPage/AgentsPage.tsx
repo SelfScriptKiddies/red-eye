@@ -292,9 +292,11 @@ export default function AgentsPage() {
                   </div>
                   {selectedAgent.harpoon_rules.map(rule => (
                     <div key={rule} className="settings-card">
-                      <div className="card-content"><span className="rule-name">{rule}</span></div>
-                      <div className="card-actions">
-                        <button onClick={() => removeProxy(rule)}>✕</button>
+                      <div className="card-row">
+                        <span className="rule-name">{rule}</span>
+                        <div className="card-actions">
+                          <button onClick={() => removeProxy(rule)}>✕</button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -332,32 +334,30 @@ export default function AgentsPage() {
                     const isProtected = status !== 'off';
                     return (
                       <div key={svc.id} className="settings-card">
-                        <div className="card-content">
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span className="rule-name">{svc.name} :{svc.port}</span>
-                            <span className={`badge ${isProtected ? 'option-badge' : 'info-badge'}`}>
-                              {isProtected ? 'Защищён' : 'Без защиты'}
+                        <div className="card-row">
+                          <span className="rule-name">{svc.name}</span>
+                          <div className="card-right">
+                            <span className="port-label">:{svc.port}</span>
+                            <span className={`badge ${isProtected ? 'option-badge' : ''}`} style={!isProtected ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
+                              {isProtected ? 'Proxy' : 'Off'}
                             </span>
                           </div>
-                          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                            {!isProtected ? (
-                              <>
-                                <button className="small-btn" onClick={() => toggleProtection(svc, true)}>
-                                  Proxy
-                                </button>
-                                {svc.decrypt_tls && (
-                                  <button className="small-btn" onClick={() => toggleProtection(svc, true, true)}>
-                                    Proxy + TLS MITM
-                                  </button>
-                                )}
-                              </>
-                            ) : (
-                              <button className="small-btn" style={{ borderColor: '#ff4444', color: '#ff4444' }}
-                                onClick={() => toggleProtection(svc, false)}>
-                                Отключить
+                        </div>
+                        <div className="card-buttons">
+                          {!isProtected ? (
+                            <>
+                              <button className="small-btn" onClick={() => toggleProtection(svc, true)}>
+                                Включить Proxy
                               </button>
-                            )}
-                          </div>
+                              <button className="small-btn" onClick={() => toggleProtection(svc, true, true)}>
+                                Proxy + TLS
+                              </button>
+                            </>
+                          ) : (
+                            <button className="small-btn btn-danger" onClick={() => toggleProtection(svc, false)}>
+                              Отключить
+                            </button>
+                          )}
                         </div>
                       </div>
                     );

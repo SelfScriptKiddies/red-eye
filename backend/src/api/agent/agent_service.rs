@@ -130,10 +130,17 @@ pub fn spawn_heartbeat_listener(
                     let agent_id = status.agent_id.clone();
                     agent_service.update_status(status).await;
 
-                    // New agent connected — send current block filters
+                    // New agent connected — send current block filters after brief delay
+                    // (agent needs time to set up command subscriber)
                     if is_new {
-                        info!("New agent '{}' connected, syncing block filters", agent_id);
-                        crate::api::block_sync::sync_block_filters(&pool, &agent_service).await;
+                        let pool2 = pool.clone();
+                        let agent_svc2 = agent_service.clone();
+                        let aid = agent_id.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                            info!("New agent '{}' connected, syncing block filters", aid);
+                            crate::api::block_sync::sync_block_filters(&pool2, &agent_svc2).await;
+                        });
                     }
                 }
                 Err(e) => {

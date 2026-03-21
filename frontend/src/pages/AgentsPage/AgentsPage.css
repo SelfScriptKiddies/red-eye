@@ -4,6 +4,7 @@
   margin-top: 130px;
   display: flex;
   flex-direction: column;
+  border-top: 2px solid #353535;
 }
 
 .agents-columns {
@@ -151,13 +152,21 @@
 
 /* Detail Sections */
 .detail-section {
-  margin-bottom: 20px;
+  margin-bottom: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #333;
+}
+
+.detail-section:last-child {
+  border-bottom: none;
 }
 
 .detail-section h3 {
   margin: 0 0 10px 0;
-  font-size: 15px;
-  color: #ccc;
+  font-size: 14px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .section-header {
@@ -176,12 +185,15 @@
   font-size: 13px;
 }
 
-/* Settings Cards (for proxy rules) */
+/* Settings Cards (for proxy rules, services) */
 .settings-card {
   background: #2a2a2a;
   border-radius: 8px;
-  padding: 10px 15px;
+  padding: 12px 15px;
   margin-bottom: 8px;
+}
+
+.settings-card .card-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -190,6 +202,13 @@
 .rule-name {
   font-size: 14px;
   font-weight: 500;
+  text-align: left;
+}
+
+.card-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .card-actions button {
@@ -205,6 +224,35 @@
 .card-actions button:hover {
   color: #ff4444;
   border-color: #ff4444;
+}
+
+.card-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.port-label {
+  color: #888;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+.card-buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.btn-danger {
+  border-color: #ff4444 !important;
+  color: #ff4444 !important;
+}
+
+.btn-danger:hover {
+  background: #ff4444 !important;
+  color: white !important;
 }
 
 /* Action Buttons */
