@@ -29,25 +29,41 @@ interface DiffLine {
     type: 'same' | 'changed' | 'added' | 'removed';
 }
 
+// LCS-based line diff (like git)
 function computeLineDiff(leftText: string, rightText: string): DiffLine[] {
-    const leftLines = leftText.split('\n');
-    const rightLines = rightText.split('\n');
-    const maxLen = Math.max(leftLines.length, rightLines.length);
-    const result: DiffLine[] = [];
+    const a = leftText.split('\n');
+    const b = rightText.split('\n');
+    const n = a.length, m = b.length;
 
-    for (let i = 0; i < maxLen; i++) {
-        const l = i < leftLines.length ? leftLines[i] : '';
-        const r = i < rightLines.length ? rightLines[i] : '';
-
-        if (i >= leftLines.length) {
-            result.push({ left: '', right: r, type: 'added' });
-        } else if (i >= rightLines.length) {
-            result.push({ left: l, right: '', type: 'removed' });
-        } else if (l === r) {
-            result.push({ left: l, right: r, type: 'same' });
-        } else {
-            result.push({ left: l, right: r, type: 'changed' });
+    // Build LCS table
+    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = 1; i <= n; i++) {
+        for (let j = 1; j <= m; j++) {
+            dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
         }
+    }
+
+    // Backtrack to produce diff
+    const result: DiffLine[] = [];
+    let i = n, j = m;
+    const stack: DiffLine[] = [];
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+            stack.push({ left: a[i - 1], right: b[j - 1], type: 'same' });
+            i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            stack.push({ left: '', right: b[j - 1], type: 'added' });
+            j--;
+        } else {
+            stack.push({ left: a[i - 1], right: '', type: 'removed' });
+            i--;
+        }
+    }
+
+    // Reverse (backtrack produces reversed order)
+    for (let k = stack.length - 1; k >= 0; k--) {
+        result.push(stack[k]);
     }
     return result;
 }
@@ -153,14 +169,14 @@ export default function DiffView({ leftData, rightData, leftLabel, rightLabel, o
                             <pre className="diff-text-panel diff-left">
                                 {lineDiff.map((d, i) => (
                                     <div key={i} className={`diff-line diff-${d.type}`}>
-                                        {d.left || '\u00A0'}
+                                        {d.type === 'added' ? '\u00A0' : (d.left || '\u00A0')}
                                     </div>
                                 ))}
                             </pre>
                             <pre className="diff-text-panel diff-right">
                                 {lineDiff.map((d, i) => (
                                     <div key={i} className={`diff-line diff-${d.type}`}>
-                                        {d.right || '\u00A0'}
+                                        {d.type === 'removed' ? '\u00A0' : (d.right || '\u00A0')}
                                     </div>
                                 ))}
                             </pre>

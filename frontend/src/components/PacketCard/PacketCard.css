@@ -134,14 +134,16 @@
     gap: 4px;
 }
 
-.copy-btn, .block-btn {
+.copy-btn, .block-btn, .diff-select-btn {
     background: #444 !important;
     color: #bbb;
     border: 1px solid #555 !important;
     border-radius: 4px;
-    font-size: 0.75rem;
-    padding: 4px 10px !important;
+    font-size: 11px;
+    padding: 3px 8px !important;
     cursor: pointer;
+    line-height: 1.2;
+    font-family: inherit;
 }
 
 .diff-select-btn {
