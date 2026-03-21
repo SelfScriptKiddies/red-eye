@@ -29,6 +29,21 @@ interface HttpMessageData {
     headers: HttpHeader[];
 }
 
+function copyText(text: string) {
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text);
+    } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    }
+}
+
 const base64ToBytes = (b64: string): Uint8Array => {
     const binary = atob(b64);
     const len = binary.length;
@@ -136,18 +151,14 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
         }
     };
 
-    const copy = async () => {
+    const copy = () => {
         let text: string;
         if (viewMode === 'http' && httpData) {
             text = generateCurl(httpData);
         } else {
             text = getContent();
         }
-        try {
-            await navigator.clipboard.writeText(text);
-        } catch (e) {
-            console.error('Failed to copy:', e);
-        }
+        copyText(text);
     };
 
     const renderHttpView = () => {
@@ -193,7 +204,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
                 {/* CURL button for requests */}
                 {httpData.is_request && (
-                    <button className="curl-copy-btn" onClick={() => navigator.clipboard.writeText(generateCurl(httpData))}>
+                    <button className="curl-copy-btn" onClick={() => copyText(generateCurl(httpData))}>
                         CURL
                     </button>
                 )}

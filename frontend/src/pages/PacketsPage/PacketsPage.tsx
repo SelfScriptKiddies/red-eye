@@ -13,6 +13,21 @@ interface PacketEvent {
     direction: string;
 }
 
+function copyText(text: string) {
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text);
+    } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    }
+}
+
 export function PacketsPage() {
     const [streamsArray, setStreams] = useState([]);
     const [servicesArray, setServices] = useState([]);
@@ -355,7 +370,7 @@ export function PacketsPage() {
     const shareStream = async () => {
         if (!selectedStreamId) return;
         const url = `${window.location.origin}/packets?stream=${selectedStreamId}`;
-        await navigator.clipboard.writeText(url);
+        copyText(url);
         // Auto-favorite so it survives cleanup
         const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
         const stream = streamsArray.find((s: any) => s.id === numId);
@@ -589,15 +604,15 @@ export function PacketsPage() {
                                 </button>
                                 {exportMenuOpen && (
                                     <div className="export-menu">
-                                        <button onClick={() => { navigator.clipboard.writeText(exportPwntools()); setExportMenuOpen(false); }}>
+                                        <button onClick={() => { copyText(exportPwntools()); setExportMenuOpen(false); }}>
                                             pwntools
                                         </button>
                                         {selectedStreamL7 === 'http1' && (
                                             <>
-                                                <button onClick={() => { navigator.clipboard.writeText(exportRequests()); setExportMenuOpen(false); }}>
+                                                <button onClick={() => { copyText(exportRequests()); setExportMenuOpen(false); }}>
                                                     requests
                                                 </button>
-                                                <button onClick={() => { navigator.clipboard.writeText(exportCurl()); setExportMenuOpen(false); }}>
+                                                <button onClick={() => { copyText(exportCurl()); setExportMenuOpen(false); }}>
                                                     curl
                                                 </button>
                                             </>
