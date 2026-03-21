@@ -35,6 +35,7 @@ pub struct StreamResponse {
     pub active: bool,
     pub packet_count: i32,
     pub favorite: bool,
+    pub l7_protocol: String,
     pub packets: Vec<PacketResponse>
 }
 
@@ -63,6 +64,7 @@ impl Stream {
             active: self.active,
             packet_count: self.packet_count,
             favorite: self.favorite,
+            l7_protocol: self.l7_protocol.clone(),
             packets: service.get_packets_by_stream_id(self.id).await
                             .unwrap_or(vec![])
                             .iter()
