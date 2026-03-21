@@ -2,6 +2,7 @@
 // import { createRoot } from 'react-dom/client';
 import './index.css';
 import { RedEye } from './components/RedEye';
+import { AlertToast } from './components/AlertToast';
 import { Transit, PagesProvider, RenderPage } from "./PagesProvider";
 
 export function App() {
@@ -23,6 +24,7 @@ export function App() {
         </main>
       </div>
 
+      {window.location.pathname !== '/login' && <AlertToast />}
     </PagesProvider>
   )
 }
