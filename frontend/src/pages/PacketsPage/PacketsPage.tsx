@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
+import { DiffView } from '../../components/DiffView';
 
 interface PacketEvent {
     packet_id: number;
@@ -48,6 +49,9 @@ export function PacketsPage() {
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
     const [mergeOverride, setMergeOverride] = useState<boolean | null>(null); // null = auto
+    const [diffLeft, setDiffLeft] = useState<any | null>(null);
+    const [diffRight, setDiffRight] = useState<any | null>(null);
+    const [diffOpen, setDiffOpen] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const selectedStreamIdRef = useRef<number | null>(null);
     const streamsContainerRef = useRef<HTMLDivElement | null>(null);
@@ -629,6 +633,17 @@ export function PacketsPage() {
                         {...packet}
                         isHttp={selectedStreamL7 === 'http1'}
                         onHeaderSearch={addHeaderFilter}
+                        diffSelected={diffLeft?.id === packet.id}
+                        onDiffSelect={(pkt) => {
+                            if (!diffLeft) {
+                                setDiffLeft(pkt);
+                            } else if (diffLeft.id === pkt.id) {
+                                setDiffLeft(null);
+                            } else {
+                                setDiffRight(pkt);
+                                setDiffOpen(true);
+                            }
+                        }}
                         onQuickBlock={(pattern: string) => {
                             if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
                             fetch('/api/tag/names', {
@@ -647,6 +662,16 @@ export function PacketsPage() {
                     />
                 ))}
             </div>
+
+            {diffOpen && diffLeft && diffRight && (
+                <DiffView
+                    leftData={diffLeft.packet_data}
+                    rightData={diffRight.packet_data}
+                    leftLabel={`Пакет #${diffLeft.id} (${diffLeft.direction === 'orig' ? 'исх' : 'вх'})`}
+                    rightLabel={`Пакет #${diffRight.id} (${diffRight.direction === 'orig' ? 'исх' : 'вх'})`}
+                    onClose={() => { setDiffOpen(false); setDiffLeft(null); setDiffRight(null); }}
+                />
+            )}
         </div>
     );
 }

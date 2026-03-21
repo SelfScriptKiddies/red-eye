@@ -144,6 +144,16 @@
     cursor: pointer;
 }
 
+.diff-select-btn {
+    border-color: #646cff !important;
+    color: #646cff;
+}
+
+.diff-select-btn.selected {
+    background: #646cff !important;
+    color: white;
+}
+
 .block-btn {
     border-color: #ff4444 !important;
     color: #ff4444;

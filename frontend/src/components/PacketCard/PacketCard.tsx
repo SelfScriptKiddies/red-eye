@@ -12,6 +12,8 @@ interface PacketProps {
     isHttp?: boolean;
     onHeaderSearch?: (name: string, value: string) => void;
     onQuickBlock?: (pattern: string) => void;
+    onDiffSelect?: (packet: { id: number; packet_data: string; direction: string }) => void;
+    diffSelected?: boolean;
     _merged_count?: number;
 }
 
@@ -136,7 +138,7 @@ interface TagTrigger {
     color: number;
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, onQuickBlock, _merged_count }: PacketProps) {
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, onQuickBlock, onDiffSelect, diffSelected, _merged_count }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isHttp ? 'http' : 'text');
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
     const [httpLoading, setHttpLoading] = useState(false);
@@ -317,6 +319,13 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 {viewMode !== 'http' && (
                     <div className="packet-btn-group">
                         <button className="copy-btn" onClick={copy} title="Copy to clipboard">Copy</button>
+                        {onDiffSelect && (
+                            <button className={`diff-select-btn ${diffSelected ? 'selected' : ''}`}
+                                onClick={() => onDiffSelect({ id, packet_data, direction })}
+                                title={diffSelected ? 'Выбран для сравнения' : 'Сравнить'}>
+                                Diff
+                            </button>
+                        )}
                         {onQuickBlock && (
                             <button className="block-btn" onClick={() => {
                                 const sel = window.getSelection()?.toString();
