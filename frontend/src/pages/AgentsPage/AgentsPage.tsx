@@ -103,15 +103,32 @@ export default function AgentsPage() {
       .catch(() => {});
   };
 
-  // Check if a service is protected on the selected agent
-  const getProtectionStatus = (service: Service): 'off' | 'proxy' | 'mitm' => {
+  // Check protection status for a service on selected agent
+  const getProtectionStatus = (service: Service): 'off' | 'sniffing' | 'proxy' | 'proxy-nft' => {
     if (!selectedAgent) return 'off';
     const ruleName = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
-    if (!selectedAgent.harpoon_rules.includes(ruleName)) return 'off';
-    // Check if nft redirect exists for this port
+    const hasProxy = selectedAgent.harpoon_rules.includes(ruleName);
     const hasNft = selectedAgent.nft_redirects.some(r => r.from_port === service.port);
-    if (!hasNft) return 'proxy';
-    return 'proxy'; // Can't distinguish mitm from heartbeat data alone
+    const isSniffed = selectedAgent.sniffer_ports.includes(service.port);
+
+    if (hasProxy && hasNft) return 'proxy-nft';
+    if (hasProxy) return 'proxy';
+    if (isSniffed) return 'sniffing';
+    return 'off';
+  };
+
+  const statusLabel: Record<string, string> = {
+    'off': 'Off',
+    'sniffing': 'Sniffing',
+    'proxy': 'Proxy',
+    'proxy-nft': 'Protected',
+  };
+
+  const statusStyle: Record<string, string> = {
+    'off': '',
+    'sniffing': 'info-badge',
+    'proxy': 'info-badge',
+    'proxy-nft': 'option-badge',
   };
 
   const toggleProtection = async (service: Service, enable: boolean, tlsMitm: boolean = false) => {
@@ -331,23 +348,24 @@ export default function AgentsPage() {
                   </div>
                   {services.map(svc => {
                     const status = getProtectionStatus(svc);
-                    const isProtected = status !== 'off';
+                    const hasProxy = status === 'proxy' || status === 'proxy-nft';
                     return (
                       <div key={svc.id} className="settings-card">
                         <div className="card-row">
                           <span className="rule-name">{svc.name}</span>
                           <div className="card-right">
                             <span className="port-label">:{svc.port}</span>
-                            <span className={`badge ${isProtected ? 'option-badge' : ''}`} style={!isProtected ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
-                              {isProtected ? 'Proxy' : 'Off'}
+                            <span className={`badge ${statusStyle[status]}`}
+                              style={status === 'off' ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
+                              {statusLabel[status]}
                             </span>
                           </div>
                         </div>
                         <div className="card-buttons">
-                          {!isProtected ? (
+                          {!hasProxy ? (
                             <>
                               <button className="small-btn" onClick={() => toggleProtection(svc, true)}>
-                                Включить Proxy
+                                Proxy
                               </button>
                               <button className="small-btn" onClick={() => toggleProtection(svc, true, true)}>
                                 Proxy + TLS

@@ -11,6 +11,7 @@ interface PacketProps {
     timestamp: number;
     isHttp?: boolean;
     onHeaderSearch?: (name: string, value: string) => void;
+    onQuickBlock?: (pattern: string) => void;
     _merged_count?: number;
 }
 
@@ -94,7 +95,7 @@ function generateCurl(msg: HttpMessageData): string {
     return parts.join(' \\\n');
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, _merged_count }: PacketProps) {
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, onQuickBlock, _merged_count }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isHttp ? 'http' : 'text');
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
     const [httpLoading, setHttpLoading] = useState(false);
@@ -251,7 +252,19 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                     </pre>
                 )}
                 {viewMode !== 'http' && (
-                    <button className="copy-btn" onClick={copy} title="Copy to clipboard">Copy</button>
+                    <div className="packet-btn-group">
+                        <button className="copy-btn" onClick={copy} title="Copy to clipboard">Copy</button>
+                        {onQuickBlock && (
+                            <button className="block-btn" onClick={() => {
+                                const sel = window.getSelection()?.toString();
+                                if (sel && sel.length > 0) {
+                                    onQuickBlock(sel);
+                                } else {
+                                    alert('Выделите текст для блокировки');
+                                }
+                            }} title="Заблокировать выделенный текст">Block</button>
+                        )}
+                    </div>
                 )}
             </div>
         </div>

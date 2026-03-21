@@ -126,17 +126,32 @@
     font-size: 0.8rem;
 }
 
-.copy-btn {
+.packet-btn-group {
     position: absolute;
     top: 8px;
     right: 8px;
-    background: #444;
+    display: flex;
+    gap: 4px;
+}
+
+.copy-btn, .block-btn {
+    background: #444 !important;
     color: #bbb;
-    border: 1px solid #555;
+    border: 1px solid #555 !important;
     border-radius: 4px;
     font-size: 0.75rem;
-    padding: 4px 10px;
+    padding: 4px 10px !important;
     cursor: pointer;
+}
+
+.block-btn {
+    border-color: #ff4444 !important;
+    color: #ff4444;
+}
+
+.block-btn:hover {
+    background: #ff4444 !important;
+    color: white;
 }
 
 /* HTTP parsed view */

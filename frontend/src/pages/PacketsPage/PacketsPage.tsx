@@ -629,6 +629,21 @@ export function PacketsPage() {
                         {...packet}
                         isHttp={selectedStreamL7 === 'http1'}
                         onHeaderSearch={addHeaderFilter}
+                        onQuickBlock={(pattern: string) => {
+                            if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
+                            fetch('/api/tag/names', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    name: `block-${pattern.slice(0, 20)}`,
+                                    color: 0,
+                                    template_type: 'substr',
+                                    template: pattern,
+                                    direction: 'both',
+                                    special_type: 'block'
+                                })
+                            });
+                        }}
                     />
                 ))}
             </div>
