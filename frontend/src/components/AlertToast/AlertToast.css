@@ -20,6 +20,12 @@
     padding: 10px 14px;
     animation: toast-in 0.3s ease-out;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.alert-toast:hover {
+    background: #252540;
 }
 
 .alert-toast-icon {

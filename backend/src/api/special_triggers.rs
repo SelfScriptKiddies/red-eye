@@ -27,15 +27,17 @@ pub fn spawn_special_trigger_handler(
                 .unwrap()
                 .as_secs() as i64;
 
-            // Find triggers with special_type since last check
-            let triggers = match sqlx::query_as::<_, (i32, i32, i32, i32, String, String)>(
-                "SELECT t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
-                        tn.name as tag_name, tn.special_type
+            // Find triggers with special_type since last check (deduplicated per packet+tag)
+            let triggers = match sqlx::query_as::<_, (i32, i32, i32, i32, String, String, i32)>(
+                "SELECT DISTINCT ON (t.packet_id, tn.id)
+                        t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
+                        tn.name as tag_name, tn.special_type, p.stream_id
                  FROM tag t
                  JOIN tag_name tn ON tn.id = t.tag_id
+                 JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
                  WHERE tn.special_type IS NOT NULL
                    AND t.timestamp >= $1
-                 ORDER BY t.timestamp ASC"
+                 ORDER BY t.packet_id, tn.id, t.timestamp ASC"
             )
             .bind(last_check_ts)
             .fetch_all(&pool)
@@ -53,13 +55,13 @@ pub fn spawn_special_trigger_handler(
                 continue;
             }
 
-            for (packet_id, start_idx, end_idx, _tag_id, tag_name, special_type) in &triggers {
+            for (packet_id, start_idx, end_idx, _tag_id, tag_name, special_type, stream_id) in &triggers {
                 match special_type.as_str() {
                     "flag" => {
                         handle_flag(&pool, *packet_id, *start_idx, *end_idx, tag_name).await;
                     }
                     "alert" => {
-                        handle_alert(&broadcaster, *packet_id, tag_name, *start_idx, *end_idx);
+                        handle_alert(&broadcaster, *packet_id, *stream_id, tag_name);
                     }
                     _ => {}
                 }
@@ -121,16 +123,14 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
 fn handle_alert(
     broadcaster: &broadcast::Sender<String>,
     packet_id: i32,
+    stream_id: i32,
     tag_name: &str,
-    start_idx: i32,
-    end_idx: i32,
 ) {
     let alert_event = serde_json::json!({
         "type": "alert",
         "tag_name": tag_name,
         "packet_id": packet_id,
-        "start_index": start_idx,
-        "end_index": end_idx,
+        "stream_id": stream_id,
     });
 
     match broadcaster.send(alert_event.to_string()) {

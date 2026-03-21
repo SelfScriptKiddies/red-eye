@@ -5,14 +5,14 @@ interface AlertEvent {
     type: string;
     tag_name: string;
     packet_id: number;
-    start_index: number;
-    end_index: number;
+    stream_id: number;
 }
 
 interface Toast {
     id: number;
     tag_name: string;
     packet_id: number;
+    stream_id: number;
     timestamp: number;
 }
 
@@ -38,6 +38,7 @@ export default function AlertToast() {
                             id: nextId.current++,
                             tag_name: alert.tag_name,
                             packet_id: alert.packet_id,
+                            stream_id: alert.stream_id,
                             timestamp: Date.now(),
                         };
                         setToasts(prev => [...prev.slice(-9), toast]); // Keep max 10
@@ -70,13 +71,15 @@ export default function AlertToast() {
     return (
         <div className="alert-toast-container">
             {toasts.map(t => (
-                <div key={t.id} className="alert-toast">
+                <div key={t.id} className="alert-toast" onClick={() => {
+                    window.location.href = `/packets?stream=${t.stream_id}`;
+                }}>
                     <div className="alert-toast-icon">!</div>
                     <div className="alert-toast-content">
                         <span className="alert-toast-tag">{t.tag_name}</span>
-                        <span className="alert-toast-detail">пакет #{t.packet_id}</span>
+                        <span className="alert-toast-detail">стрим #{t.stream_id} — пакет #{t.packet_id}</span>
                     </div>
-                    <button className="alert-toast-close" onClick={() => removeToast(t.id)}>✕</button>
+                    <button className="alert-toast-close" onClick={(e) => { e.stopPropagation(); removeToast(t.id); }}>✕</button>
                 </div>
             ))}
         </div>
