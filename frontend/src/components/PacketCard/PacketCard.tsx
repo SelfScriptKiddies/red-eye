@@ -87,6 +87,40 @@ const toPythonBytesLiteral = (bytes: Uint8Array): string => {
     return `b'${body}'`;
 };
 
+function renderHighlightedText(text: string, triggers: TagTrigger[]): (string | JSX.Element)[] {
+    if (triggers.length === 0) return [text];
+
+    // Sort by start_index
+    const sorted = [...triggers].sort((a, b) => a.start_index - b.start_index);
+    const parts: (string | JSX.Element)[] = [];
+    let lastEnd = 0;
+
+    for (const t of sorted) {
+        if (t.start_index > lastEnd) {
+            parts.push(text.slice(lastEnd, t.start_index));
+        }
+        if (t.start_index < text.length) {
+            const end = Math.min(t.end_index, text.length);
+            const hue = t.color || 330;
+            parts.push(
+                <span
+                    key={`${t.start_index}-${t.end_index}`}
+                    className="highlight-match"
+                    style={{ backgroundColor: `hsla(${hue}, 100%, 50%, 0.25)`, borderBottom: `2px solid hsl(${hue}, 100%, 50%)` }}
+                    title={t.name}
+                >
+                    {text.slice(t.start_index, end)}
+                </span>
+            );
+            lastEnd = end;
+        }
+    }
+    if (lastEnd < text.length) {
+        parts.push(text.slice(lastEnd));
+    }
+    return parts;
+}
+
 function generateCurl(msg: HttpMessageData): string {
     const parts = [`curl -X ${msg.method} '<HOST>${msg.path}'`];
     for (const h of msg.headers) {
@@ -95,13 +129,39 @@ function generateCurl(msg: HttpMessageData): string {
     return parts.join(' \\\n');
 }
 
+interface TagTrigger {
+    start_index: number;
+    end_index: number;
+    name: string;
+    color: number;
+}
+
 export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, onQuickBlock, _merged_count }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isHttp ? 'http' : 'text');
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
     const [httpLoading, setHttpLoading] = useState(false);
+    const [triggers, setTriggers] = useState<TagTrigger[]>([]);
 
     const bytes = base64ToBytes(packet_data);
     const formattedTime = new Date(timestamp).toLocaleTimeString();
+
+    // Load triggers for highlight
+    useEffect(() => {
+        fetch(`/api/tag/stream/${stream_id}`)
+            .then(r => r.json())
+            .then((tags: any[]) => {
+                const mine = tags
+                    .filter((t: any) => t.packet_id === id)
+                    .map((t: any) => ({
+                        start_index: t.start_index,
+                        end_index: t.end_index,
+                        name: t.name || '',
+                        color: t.color || 0,
+                    }));
+                setTriggers(mine);
+            })
+            .catch(() => {});
+    }, [id, stream_id]);
 
     // Load HTTP data when switching to http mode or on mount if isHttp
     useEffect(() => {
@@ -248,7 +308,10 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             <div className="packet-content">
                 {viewMode === 'http' ? renderHttpView() : (
                     <pre className={`packet-body ${viewMode !== 'text' ? 'monospace' : ''}`}>
-                        {getContent()}
+                        {viewMode === 'text' && triggers.length > 0
+                            ? renderHighlightedText(toUtf8Preview(bytes), triggers)
+                            : getContent()
+                        }
                     </pre>
                 )}
                 {viewMode !== 'http' && (

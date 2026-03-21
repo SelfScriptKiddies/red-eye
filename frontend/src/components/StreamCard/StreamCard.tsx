@@ -64,21 +64,26 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColo
                 </button>
                 <p>
                     <StreamSign incoming={streamObj.incoming} containsFlag={containsFlag} />
-                    {streamObj.tags.map((tagName, index) => {
-                        const tagColor = getTagColor(tagName);
-                        return (
-                            <span 
-                                key={index}
-                                className="tag noselect" 
-                                style={{
-                                    color: 'white',
-                                    textShadow: `0 0 5px ${tagColor}, 0 0 5px ${tagColor}, 0 0 5px ${tagColor}`
-                                }}
-                            >
-                                {tagName}
-                            </span>
-                        );
-                    })}
+                    {(() => {
+                        // Aggregate tag counts
+                        const counts: Record<string, number> = {};
+                        for (const t of streamObj.tags) counts[t] = (counts[t] || 0) + 1;
+                        return Object.entries(counts).map(([tagName, count]) => {
+                            const tagColor = getTagColor(tagName);
+                            return (
+                                <span
+                                    key={tagName}
+                                    className="tag noselect"
+                                    style={{
+                                        color: 'white',
+                                        textShadow: `0 0 5px ${tagColor}, 0 0 5px ${tagColor}, 0 0 5px ${tagColor}`
+                                    }}
+                                >
+                                    {tagName}{count > 1 ? ` ×${count}` : ''}
+                                </span>
+                            );
+                        });
+                    })()}
                 </p>
             </div>
             <div className="info-block column">

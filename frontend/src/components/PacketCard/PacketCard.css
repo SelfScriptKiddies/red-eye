@@ -265,6 +265,12 @@
     padding: 10px;
 }
 
+/* Pattern highlight */
+.highlight-match {
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
 .merged-badge {
     font-size: 0.7rem;
     color: #888;
