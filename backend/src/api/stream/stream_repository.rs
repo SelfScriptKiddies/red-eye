@@ -56,7 +56,7 @@ impl StreamRepository {
                 MIN(p.timestamp) as first_time,
                 MAX(p.timestamp) as last_time,
                 COUNT(DISTINCT p.id) as packet_count,
-                COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
+                COALESCE(array_agg(tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
                 s.name as service_name,
                 s.id as service_id,
                 str.favorite as favorite,

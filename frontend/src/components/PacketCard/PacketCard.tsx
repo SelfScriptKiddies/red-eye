@@ -147,7 +147,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
     // Load triggers for highlight
     useEffect(() => {
-        fetch(`/api/tag/stream/${stream_id}`)
+        fetch(`/api/tag/stream_id/${stream_id}`)
             .then(r => r.json())
             .then((tags: any[]) => {
                 const mine = tags
