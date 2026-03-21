@@ -4,7 +4,7 @@
   margin-top: 130px;
   display: flex;
   flex-direction: column;
-  border-top: 2px solid #353535;
+  border-top: 3px solid #646cff;
 }
 
 .agents-columns {
@@ -31,11 +31,12 @@
   justify-content: space-between;
   align-items: center;
   padding: 15px 20px;
-  border-bottom: 2px solid #353535;
+  border-bottom: 2px solid #646cff;
   position: sticky;
   top: 0;
   background: #242424;
   z-index: 10;
+  transition: border-color 0.3s;
 }
 
 .column-header h2 {
@@ -517,6 +518,14 @@
 }
 
 /* Focus mode (Red Eye) */
+body:has(.eye__apple__focus) .AgentsPage {
+  border-top-color: #a51900;
+}
+
+body:has(.eye__apple__focus) .column-header {
+  border-bottom-color: #a51900;
+}
+
 body:has(.eye__apple__focus) .agents-column {
   border-right-color: #a51900;
 }
