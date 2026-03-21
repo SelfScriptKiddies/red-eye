@@ -144,8 +144,8 @@ pub async fn run() -> std::io::Result<()> {
     let agent_service = Arc::new(AgentService::new(agent_nats_client.clone()));
     let agent_service_data = web::Data::new(agent_service.clone());
 
-    // Subscribe to agent heartbeats
-    spawn_heartbeat_listener(agent_nats_client, agent_service.clone());
+    // Subscribe to agent heartbeats (syncs block filters on new agent connect)
+    spawn_heartbeat_listener(agent_nats_client, agent_service.clone(), pool.clone());
 
     // Create broadcaster for WebSocket connections
     let (tx, _) = broadcast::channel::<String>(1000);

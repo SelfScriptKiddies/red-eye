@@ -106,7 +106,11 @@ impl AgentService {
 }
 
 /// Spawn NATS subscriber for agent heartbeats
-pub fn spawn_heartbeat_listener(nats_client: Client, agent_service: Arc<AgentService>) {
+pub fn spawn_heartbeat_listener(
+    nats_client: Client,
+    agent_service: Arc<AgentService>,
+    pool: sqlx::PgPool,
+) {
     tokio::spawn(async move {
         let mut subscriber = match nats_client.subscribe("agent_status.*").await {
             Ok(sub) => sub,
@@ -122,7 +126,15 @@ pub fn spawn_heartbeat_listener(nats_client: Client, agent_service: Arc<AgentSer
         while let Some(msg) = subscriber.next().await {
             match serde_json::from_slice::<AgentInfo>(&msg.payload) {
                 Ok(status) => {
+                    let is_new = !agent_service.agents_store().read().await.contains_key(&status.agent_id);
+                    let agent_id = status.agent_id.clone();
                     agent_service.update_status(status).await;
+
+                    // New agent connected — send current block filters
+                    if is_new {
+                        info!("New agent '{}' connected, syncing block filters", agent_id);
+                        crate::api::block_sync::sync_block_filters(&pool, &agent_service).await;
+                    }
                 }
                 Err(e) => {
                     debug!("Failed to parse agent heartbeat: {}", e);
