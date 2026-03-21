@@ -1,0 +1,254 @@
+.MainPage {
+    width: 100vw;
+    margin-top: 130px;
+    border-top: 3px solid #646cff;
+    padding: 20px 30px;
+    box-sizing: border-box;
+}
+
+/* Stats Row */
+.stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-card {
+    flex: 1;
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 16px 20px;
+    border-left: 3px solid #646cff;
+}
+
+.stat-value {
+    font-size: 28px;
+    font-weight: bold;
+    color: #fff;
+}
+
+.stat-total {
+    font-size: 16px;
+    color: #666;
+    font-weight: normal;
+}
+
+.stat-active {
+    color: #0a8a0a;
+}
+
+.stat-inactive {
+    color: #666;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Dashboard Columns */
+.dashboard-columns {
+    display: flex;
+    gap: 20px;
+}
+
+.dashboard-column {
+    flex: 1;
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 16px;
+    max-height: calc(100vh - 330px);
+    overflow-y: auto;
+}
+
+.dashboard-section-title {
+    margin: 0 0 14px 0;
+    font-size: 13px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #646cff;
+}
+
+/* Tag Metrics */
+.tag-metric-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid #333;
+}
+
+.tag-metric-row:last-child {
+    border-bottom: none;
+}
+
+.tag-metric-name {
+    flex: 1;
+    font-size: 13px;
+    color: #ccc;
+}
+
+.sparkline {
+    flex-shrink: 0;
+}
+
+.tag-metric-count {
+    font-size: 14px;
+    font-weight: bold;
+    color: #646cff;
+    min-width: 30px;
+    text-align: right;
+}
+
+/* Recent Streams */
+.recent-stream-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #333;
+}
+
+.recent-stream-row:last-child {
+    border-bottom: none;
+}
+
+.recent-stream-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    overflow: hidden;
+}
+
+.recent-stream-service {
+    font-size: 13px;
+    color: #ccc;
+}
+
+.recent-stream-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
+    color: #888;
+    flex-shrink: 0;
+}
+
+.recent-stream-time {
+    color: #666;
+}
+
+/* Agent Summary */
+.agent-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #333;
+}
+
+.agent-summary-row:last-child {
+    border-bottom: none;
+}
+
+.agent-summary-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-summary-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #ccc;
+}
+
+.agent-summary-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-summary-ports {
+    font-size: 12px;
+    color: #666;
+    font-family: monospace;
+}
+
+.empty-state {
+    color: #555;
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+}
+
+/* Status dots (reused from AgentsPage) */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.online {
+    background: #0a8a0a;
+    box-shadow: 0 0 4px #0a8a0a;
+}
+
+.status-dot.offline {
+    background: #666;
+}
+
+/* Badge (reused) */
+.badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+
+.info-badge {
+    border: 1px solid #646cff;
+    color: #646cff;
+}
+
+.option-badge {
+    background-color: #0a8a0a;
+    color: white;
+}
+
+/* Scrollbar */
+.dashboard-column::-webkit-scrollbar {
+    width: 4px;
+}
+
+.dashboard-column::-webkit-scrollbar-thumb {
+    background: #646cff;
+    border-radius: 2px;
+}
+
+/* Focus mode */
+body:has(.eye__apple__focus) .MainPage {
+    border-top-color: #a51900;
+}
+
+body:has(.eye__apple__focus) .stat-card {
+    border-left-color: #a51900;
+}
+
+body:has(.eye__apple__focus) .dashboard-section-title {
+    border-bottom-color: #a51900;
+}
+
+body:has(.eye__apple__focus) .tag-metric-count {
+    color: #a51900;
+}
+
+body:has(.eye__apple__focus) .sparkline polyline {
+    stroke: #a51900;
+}

@@ -95,6 +95,7 @@ main.content {
 }
 
 /* Full-width page overrides */
+main.content:has(.MainPage),
 main.content:has(.SettingsPage),
 main.content:has(.AgentsPage),
 main.content:has(.packetsPage) {
