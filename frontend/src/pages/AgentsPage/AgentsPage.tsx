@@ -7,6 +7,14 @@ interface NftRedirect {
   to_port: number;
 }
 
+interface Service {
+  id: number;
+  name: string;
+  port: number;
+  http_parse: boolean;
+  decrypt_tls: boolean;
+}
+
 interface Agent {
   agent_id: string;
   uptime_secs: number;
@@ -79,6 +87,7 @@ export default function AgentsPage() {
 
   const [snifferModal, setSnifferModal] = useState(false);
   const [snifferPorts, setSnifferPorts] = useState('');
+  const [services, setServices] = useState<Service[]>([]);
 
   const fetchAgents = () => {
     fetch('/api/agent')
@@ -87,8 +96,42 @@ export default function AgentsPage() {
       .catch(() => {});
   };
 
+  const fetchServices = () => {
+    fetch('/api/service')
+      .then(r => r.json())
+      .then(data => setServices(Array.isArray(data) ? data : Object.values(data)))
+      .catch(() => {});
+  };
+
+  // Check if a service is protected on the selected agent
+  const getProtectionStatus = (service: Service): 'off' | 'proxy' | 'mitm' => {
+    if (!selectedAgent) return 'off';
+    const ruleName = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
+    if (!selectedAgent.harpoon_rules.includes(ruleName)) return 'off';
+    // Check if nft redirect exists for this port
+    const hasNft = selectedAgent.nft_redirects.some(r => r.from_port === service.port);
+    if (!hasNft) return 'proxy';
+    return 'proxy'; // Can't distinguish mitm from heartbeat data alone
+  };
+
+  const toggleProtection = async (service: Service, enable: boolean, tlsMitm: boolean = false) => {
+    if (!selected) return;
+    await fetch('/api/protect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        service_id: service.id,
+        agent_id: selected,
+        enable,
+        tls_mitm: tlsMitm,
+      }),
+    });
+    setTimeout(fetchAgents, 2000);
+  };
+
   useEffect(() => {
     fetchAgents();
+    fetchServices();
     const interval = setInterval(fetchAgents, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -277,6 +320,49 @@ export default function AgentsPage() {
                     <h3>Firewall Filters</h3>
                     <span className="badge info-badge">{selectedAgent.active_filters} active</span>
                   </div>
+                </div>
+
+                {/* Service Protection */}
+                <div className="detail-section">
+                  <div className="section-header">
+                    <h3>Защита сервисов</h3>
+                  </div>
+                  {services.map(svc => {
+                    const status = getProtectionStatus(svc);
+                    const isProtected = status !== 'off';
+                    return (
+                      <div key={svc.id} className="settings-card">
+                        <div className="card-content">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span className="rule-name">{svc.name} :{svc.port}</span>
+                            <span className={`badge ${isProtected ? 'option-badge' : 'info-badge'}`}>
+                              {isProtected ? 'Защищён' : 'Без защиты'}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                            {!isProtected ? (
+                              <>
+                                <button className="small-btn" onClick={() => toggleProtection(svc, true)}>
+                                  Proxy
+                                </button>
+                                {svc.decrypt_tls && (
+                                  <button className="small-btn" onClick={() => toggleProtection(svc, true, true)}>
+                                    Proxy + TLS MITM
+                                  </button>
+                                )}
+                              </>
+                            ) : (
+                              <button className="small-btn" style={{ borderColor: '#ff4444', color: '#ff4444' }}
+                                onClick={() => toggleProtection(svc, false)}>
+                                Отключить
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {services.length === 0 && <span className="text-muted">Нет сервисов</span>}
                 </div>
               </div>
             </>
