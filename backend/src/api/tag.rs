@@ -213,6 +213,41 @@ async fn delete_tag_name(
 }
 
 
+#[utoipa::path(
+    get,
+    path = "/api/tag/metrics",
+    responses(
+        (status = 200, description = "Tag trigger metrics per minute"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "tag"
+)]
+#[get("/tag/metrics")]
+async fn get_tag_metrics(
+    _identity: Identity,
+    tag_service: web::Data<TagService>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let minutes = query.get("minutes")
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(30);
+
+    match tag_service.get_tag_metrics(minutes).await {
+        Ok(data) => {
+            let metrics: Vec<serde_json::Value> = data.iter().map(|(tag_id, tag_name, minute_ts, count)| {
+                json!({
+                    "tag_id": tag_id,
+                    "tag_name": tag_name,
+                    "timestamp": minute_ts,
+                    "count": count
+                })
+            }).collect();
+            HttpResponse::Ok().json(metrics)
+        }
+        Err(_) => HttpResponse::InternalServerError().finish()
+    }
+}
+
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
     cfg
         .service(get_tags_by_stream_id)
@@ -220,5 +255,6 @@ pub fn tag_config(cfg: &mut web::ServiceConfig) {
         .service(get_tag_name_by_id)
         .service(create_tag_name)
         .service(update_tag_name)
-        .service(delete_tag_name);
+        .service(delete_tag_name)
+        .service(get_tag_metrics);
 }

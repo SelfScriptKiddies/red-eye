@@ -21,6 +21,7 @@ interface Filter {
     template_type: string;
     template: string;
     direction: string;
+    special_type: string | null;
 }
 
 export function SettingsPage() {
@@ -48,7 +49,8 @@ export function SettingsPage() {
         color: 0,
         template_type: 'regex',
         template: '',
-        direction: 'both'
+        direction: 'both',
+        special_type: null
     });
 
     const API_URL = '/api';
@@ -197,7 +199,8 @@ export function SettingsPage() {
                     color: filterForm.color,
                     template_type: filterForm.template_type,
                     template: filterForm.template,
-                    direction: filterForm.direction
+                    direction: filterForm.direction,
+                    special_type: filterForm.special_type || null
                 })
             });
             
@@ -285,6 +288,9 @@ export function SettingsPage() {
                                         <span className="info-badge">
                                             {filter.direction === 'in' ? 'In' : filter.direction === 'out' ? 'Out' : 'Both'}
                                         </span>
+                                        {filter.special_type && (
+                                            <span className="option-badge">{filter.special_type}</span>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="card-actions">
@@ -425,6 +431,16 @@ export function SettingsPage() {
                                 <option value="in">Входящие</option>
                                 <option value="out">Исходящие</option>
                                 <option value="both">Оба направления</option>
+                            </select>
+                            <select
+                                value={filterForm.special_type || ''}
+                                onChange={(e) => setFilterForm({ ...filterForm, special_type: e.target.value || null })}
+                                className="select-input"
+                            >
+                                <option value="">Без спец.типа</option>
+                                <option value="flag">Flag (отправка в ферму)</option>
+                                <option value="alert">Alert (уведомление)</option>
+                                <option value="block">Block (авто-drop на агентах)</option>
                             </select>
                             <div className="color-picker-wrapper">
                                 <label>Цвет (Hue): {filterForm.color}°</label>
