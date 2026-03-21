@@ -321,17 +321,26 @@ export function PacketsPage() {
     const handleStreamClick = async (streamId) => {
         selectedStreamIdRef.current = streamId;
         setSelectedStreamId(streamId);
-        setMergeOverride(null); // Reset to auto on stream change
+        setMergeOverride(null);
 
-        // Check stream's L7 protocol (streamId comes as string from dataset)
+        // Get l7_protocol: try local array first, fallback to API
         const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
-        const stream = streamsArray.find((s: any) => s.id === numericId);
-        setSelectedStreamL7(stream?.l7_protocol || 'unknown');
+        const localStream = streamsArray.find((s: any) => s.id === numericId);
+        if (localStream?.l7_protocol) {
+            setSelectedStreamL7(localStream.l7_protocol);
+        } else {
+            // Fetch from API for shared/external links
+            try {
+                const streamData = await getUrl(`/api/stream/${numericId}`);
+                setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
+            } catch {
+                setSelectedStreamL7('unknown');
+            }
+        }
 
         try {
             const data = await getUrl(`/api/packet/stream_id/${streamId}`);
             const packets = Object.values(data);
-            console.log('Loaded packets for stream:', packets.length);
             setPacketData(packets);
         } catch (error) {
             console.error('Ошибка при получении данных пакета:', error);

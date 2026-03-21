@@ -21,6 +21,7 @@ pub struct Stream {
     pub active: bool,
     pub packet_count: i32,
     pub favorite: bool,
+    pub l7_protocol: String,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]

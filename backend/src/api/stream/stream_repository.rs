@@ -15,7 +15,7 @@ impl StreamRepository {
     pub async fn get_packet_by_id(&self, stream_id: i32) -> Result<Stream, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
             FROM stream
             WHERE id = $1
             "#)
@@ -27,7 +27,7 @@ impl StreamRepository {
     pub async fn get_all_streams(&self) -> Result<Vec<Stream>, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
             FROM stream
             "#)
             .fetch_all(&self.pgpool)
