@@ -122,8 +122,9 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
     };
 
     const handleContextMenu = (e: React.MouseEvent) => {
-        if (selMin !== null && selMax !== null && selMax > selMin) {
+        if (selMin !== null && selMax !== null && selMax >= selMin) {
             e.preventDefault();
+            e.stopPropagation();
             setCtxMenu({ x: e.clientX, y: e.clientY });
         }
     };
@@ -145,15 +146,17 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
                 hexCells.push(
                     <span key={idx}
                         className={`hx-byte ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''}`}
-                        onMouseDown={() => handleMouseDown(idx)}
+                        onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx); }}
                         onMouseEnter={() => handleMouseEnter(idx)}
+                        onContextMenu={handleContextMenu}
                     >{b.toString(16).padStart(2, '0')}</span>
                 );
                 asciiCells.push(
                     <span key={idx}
                         className={`hx-ascii-char ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''} ${b < 0x20 || b > 0x7e ? 'hx-nonprint' : ''}`}
-                        onMouseDown={() => handleMouseDown(idx)}
+                        onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx); }}
                         onMouseEnter={() => handleMouseEnter(idx)}
+                        onContextMenu={handleContextMenu}
                     >{ch}</span>
                 );
             } else {
