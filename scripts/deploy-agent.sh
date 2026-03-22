@@ -38,6 +38,7 @@ usage() {
     echo "  --ports PORTS          Comma-separated ports to sniff"
     echo "  --binary PATH          Path to agent binary (default: ./agent/target/release/red-eye-agent)"
     echo "  --env-file FILE        Read settings from .env file"
+    echo "  --install-nftables     Install and enable nftables on target host"
     echo "  --uninstall            Remove agent from target host"
     echo ""
     echo "Example:"
@@ -54,6 +55,7 @@ if [ -z "$TARGET_HOST" ]; then
 fi
 
 UNINSTALL=false
+INSTALL_NFTABLES=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -70,6 +72,7 @@ while [[ $# -gt 0 ]]; do
                 NATS_HOST="${NATS_HOST:-$NATS_BROKER}"
             fi
             shift 2 ;;
+        --install-nftables) INSTALL_NFTABLES=true; shift ;;
         --uninstall) UNINSTALL=true; shift ;;
         *) echo -e "${RED}Unknown option: $1${NC}"; usage ;;
     esac
@@ -113,8 +116,35 @@ ssh "$TARGET_HOST" "mkdir -p $REMOTE_DIR"
 scp -q "$AGENT_BINARY" "${TARGET_HOST}:${REMOTE_DIR}/red-eye-agent"
 ssh "$TARGET_HOST" "chmod +x ${REMOTE_DIR}/red-eye-agent"
 
-# 2. Create environment file
-echo -e "${YELLOW}[2/4] Creating configuration...${NC}"
+# 2. Install nftables (optional)
+if [ "$INSTALL_NFTABLES" = true ]; then
+    echo -e "${YELLOW}[2/5] Installing nftables...${NC}"
+    ssh "$TARGET_HOST" bash -s << 'NFTEOF'
+        if command -v nft &>/dev/null; then
+            echo "nftables already installed"
+        else
+            if command -v apt-get &>/dev/null; then
+                apt-get update -qq && apt-get install -y -qq nftables
+            elif command -v yum &>/dev/null; then
+                yum install -y nftables
+            elif command -v apk &>/dev/null; then
+                apk add nftables
+            else
+                echo "ERROR: Unknown package manager, install nftables manually"
+                exit 1
+            fi
+        fi
+        systemctl enable nftables 2>/dev/null || true
+        systemctl start nftables 2>/dev/null || true
+        echo "nftables ready: $(nft --version)"
+NFTEOF
+    STEPS=5
+else
+    STEPS=4
+fi
+
+# 3. Create environment file
+echo -e "${YELLOW}[3/${STEPS}] Creating configuration...${NC}"
 ENV_CONTENT="NATS_HOST=${NATS_HOST}
 NATS_LOGIN=${NATS_LOGIN}
 NATS_PASSWORD=${NATS_PASSWORD}
@@ -132,8 +162,8 @@ ssh "$TARGET_HOST" "cat > ${REMOTE_DIR}/agent.env << 'ENVEOF'
 ${ENV_CONTENT}
 ENVEOF"
 
-# 3. Create systemd unit
-echo -e "${YELLOW}[3/4] Installing systemd service...${NC}"
+# 4. Create systemd unit
+echo -e "${YELLOW}[4/${STEPS}] Installing systemd service...${NC}"
 UNIT_CONTENT="[Unit]
 Description=Red Eye Traffic Capture Agent
 After=network.target
@@ -153,8 +183,8 @@ ssh "$TARGET_HOST" "cat > /etc/systemd/system/${SERVICE_NAME}.service << 'UNITEO
 ${UNIT_CONTENT}
 UNITEOF"
 
-# 4. Start service
-echo -e "${YELLOW}[4/4] Starting agent...${NC}"
+# 5. Start service
+echo -e "${YELLOW}[${STEPS}/${STEPS}] Starting agent...${NC}"
 ssh "$TARGET_HOST" "systemctl daemon-reload && systemctl enable $SERVICE_NAME && systemctl restart $SERVICE_NAME"
 
 # Verify
