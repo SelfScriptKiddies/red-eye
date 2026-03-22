@@ -67,19 +67,38 @@ impl L7Repository {
         limit: i64,
     ) -> Result<Vec<i32>, Error> {
         if let Some(val) = value {
-            sqlx::query_scalar::<_, i32>(
-                "SELECT DISTINCT m.stream_id
-                 FROM http_message m
-                 JOIN header_set hs ON hs.id = m.header_set_id
-                 WHERE hs.headers->>$1 = $2
-                 ORDER BY m.stream_id DESC
-                 LIMIT $3",
-            )
-            .bind(name)
-            .bind(val)
-            .bind(limit)
-            .fetch_all(&self.pgpool)
-            .await
+            // Use LIKE for partial matches (e.g. individual cookies within Cookie header)
+            let use_like = name.eq_ignore_ascii_case("Cookie") || val.contains('=');
+            if use_like {
+                let pattern = format!("%{}%", val);
+                sqlx::query_scalar::<_, i32>(
+                    "SELECT DISTINCT m.stream_id
+                     FROM http_message m
+                     JOIN header_set hs ON hs.id = m.header_set_id
+                     WHERE hs.headers->>$1 LIKE $2
+                     ORDER BY m.stream_id DESC
+                     LIMIT $3",
+                )
+                .bind(name)
+                .bind(pattern)
+                .bind(limit)
+                .fetch_all(&self.pgpool)
+                .await
+            } else {
+                sqlx::query_scalar::<_, i32>(
+                    "SELECT DISTINCT m.stream_id
+                     FROM http_message m
+                     JOIN header_set hs ON hs.id = m.header_set_id
+                     WHERE hs.headers->>$1 = $2
+                     ORDER BY m.stream_id DESC
+                     LIMIT $3",
+                )
+                .bind(name)
+                .bind(val)
+                .bind(limit)
+                .fetch_all(&self.pgpool)
+                .await
+            }
         } else {
             sqlx::query_scalar::<_, i32>(
                 "SELECT DISTINCT m.stream_id
@@ -94,6 +113,24 @@ impl L7Repository {
             .fetch_all(&self.pgpool)
             .await
         }
+    }
+
+    /// Search streams by IP address
+    pub async fn search_streams_by_ip(
+        &self,
+        ip: &str,
+        limit: i64,
+    ) -> Result<Vec<i32>, Error> {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT id FROM stream
+             WHERE src_ip::text = $1 OR dst_ip::text = $1
+             ORDER BY id DESC
+             LIMIT $2",
+        )
+        .bind(ip)
+        .bind(limit)
+        .fetch_all(&self.pgpool)
+        .await
     }
 
     /// Search streams by HTTP path
@@ -129,6 +166,8 @@ impl L7Repository {
         for (name, value) in filters {
             let ids = if name == "_path" {
                 self.search_streams_by_path(value.as_deref().unwrap_or(""), limit).await?
+            } else if name == "_ip" {
+                self.search_streams_by_ip(value.as_deref().unwrap_or(""), limit).await?
             } else {
                 self.search_streams_by_header(name, value.as_deref(), limit).await?
             };

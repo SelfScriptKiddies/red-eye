@@ -573,6 +573,7 @@ export function PacketsPage() {
                         streamObj={stream}
                         onStreamClick={handleStreamClick}
                         onFavoriteToggle={handleFavoriteToggle}
+                        onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
                         tagColors={tagColors}
                     />
                 })}

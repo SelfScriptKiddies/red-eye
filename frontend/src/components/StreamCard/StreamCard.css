@@ -66,6 +66,13 @@
     font-size: 0.75rem;
     color: #646cff;
     font-family: monospace;
+    border-radius: 3px;
+    padding: 0 3px;
+    transition: background 0.15s;
+}
+
+.stream-ip:hover {
+    background: rgba(100, 108, 255, 0.2);
 }
 
 .stream-packet-count {

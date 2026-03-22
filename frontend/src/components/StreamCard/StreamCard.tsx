@@ -1,7 +1,7 @@
 import "./StreamCard.css"
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColors = {} }) {
+export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFilter, tagColors = {} }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {
@@ -87,7 +87,12 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColo
                 </p>
             </div>
             <div className="info-block column">
-                {streamObj.dst_ip && <span className="stream-ip">{streamObj.dst_ip}</span>}
+                {streamObj.dst_ip && (
+                    <span className="stream-ip" onClick={(e) => { e.stopPropagation(); onIpFilter?.(streamObj.dst_ip); }}
+                        title={`Фильтр по IP ${streamObj.dst_ip}`} style={{ cursor: onIpFilter ? 'pointer' : 'default' }}>
+                        {streamObj.dst_ip}
+                    </span>
+                )}
                 <span className="stream-time">{moment.unix(streamObj.first_packet_time).format("HH:mm:ss")}-{moment.unix(streamObj.last_packet_time).format("HH:mm:ss")}</span>
                 <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
             </div>
