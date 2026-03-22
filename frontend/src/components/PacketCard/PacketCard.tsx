@@ -82,7 +82,7 @@ const toHexDump = (bytes: Uint8Array): string => {
     return lines.join('\n');
 };
 
-function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
+function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuickBlock?: (pattern: string) => void }) {
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
     const [selStart, setSelStart] = useState<number | null>(null);
     const [selEnd, setSelEnd] = useState<number | null>(null);
@@ -109,7 +109,9 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
         setCtxMenu(null);
     };
 
-    const handleMouseDown = (idx: number) => {
+    const handleMouseDown = (idx: number, e: React.MouseEvent) => {
+        // Ignore right-click — don't reset selection
+        if (e.button === 2) return;
         setSelStart(idx);
         setSelEnd(idx);
         setSelecting(true);
@@ -146,7 +148,7 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
                 hexCells.push(
                     <span key={idx}
                         className={`hx-byte ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''}`}
-                        onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx); }}
+                        onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx, e); }}
                         onMouseEnter={() => handleMouseEnter(idx)}
                         onContextMenu={handleContextMenu}
                     >{b.toString(16).padStart(2, '0')}</span>
@@ -154,7 +156,7 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
                 asciiCells.push(
                     <span key={idx}
                         className={`hx-ascii-char ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''} ${b < 0x20 || b > 0x7e ? 'hx-nonprint' : ''}`}
-                        onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx); }}
+                        onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx, e); }}
                         onMouseEnter={() => handleMouseEnter(idx)}
                         onContextMenu={handleContextMenu}
                     >{ch}</span>
@@ -192,6 +194,14 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
                         <button onClick={() => copyAs('ascii')}>Copy as ASCII</button>
                         <button onClick={() => copyAs('python')}>Copy as Python</button>
                         <button onClick={() => copyAs('carray')}>Copy as C array</button>
+                        {onQuickBlock && (
+                            <button className="hx-ctx-block" onClick={() => {
+                                const sel = getSelectedBytes();
+                                const hex = Array.from(sel).map(b => b.toString(16).padStart(2, '0')).join('');
+                                onQuickBlock(hex);
+                                setCtxMenu(null);
+                            }}>Block pattern</button>
+                        )}
                     </div>
                 </>
             )}
@@ -468,7 +478,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             <div className="packet-content">
                 {viewMode === 'http' ? renderHttpView() : viewMode === 'hex' ? (
                     <div className="packet-body monospace">
-                        <InteractiveHexDump bytes={bytes} />
+                        <InteractiveHexDump bytes={bytes} onQuickBlock={onQuickBlock} />
                     </div>
                 ) : (
                     <pre className={`packet-body ${viewMode === 'python' ? 'monospace' : ''}`}>

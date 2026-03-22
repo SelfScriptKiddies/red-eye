@@ -656,13 +656,15 @@ export function PacketsPage() {
                         }}
                         onQuickBlock={(pattern: string) => {
                             if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
+                            // Detect if hex pattern (from hex dump context menu)
+                            const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
                             fetch('/api/tag/names', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
                                     name: `block-${pattern.slice(0, 20)}`,
                                     color: 0,
-                                    template_type: 'substr',
+                                    template_type: isHex ? 'bsubstr' : 'substr',
                                     template: pattern,
                                     direction: 'both',
                                     special_type: 'block'

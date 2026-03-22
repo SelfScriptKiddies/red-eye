@@ -404,6 +404,16 @@
     color: #646cff;
 }
 
+.hx-ctx-block {
+    color: #ff4444 !important;
+    border-top: 1px solid #333 !important;
+}
+
+.hx-ctx-block:hover {
+    color: #ff6666 !important;
+    background: #2a1a1a !important;
+}
+
 /* Pattern highlight */
 .highlight-match {
     border-radius: 2px;
