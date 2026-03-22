@@ -75,6 +75,7 @@ BEGIN
     total := total + create_time_partitions('packets', from_ts, to_ts, interval_secs);
     total := total + create_time_partitions('tag', from_ts, to_ts, interval_secs);
     total := total + create_time_partitions('http_message', from_ts, to_ts, interval_secs);
+    total := total + create_time_partitions('grpc_message', from_ts, to_ts, interval_secs);
     RETURN total;
 END;
 $$ LANGUAGE plpgsql;
@@ -88,6 +89,7 @@ DECLARE
     streams_removed BIGINT;
 BEGIN
     -- Drop old partitions (instant, no VACUUM needed)
+    dropped := dropped + drop_old_partitions('grpc_message', cutoff_ts);
     dropped := dropped + drop_old_partitions('http_message', cutoff_ts);
     dropped := dropped + drop_old_partitions('tag', cutoff_ts);
     dropped := dropped + drop_old_partitions('packets', cutoff_ts);

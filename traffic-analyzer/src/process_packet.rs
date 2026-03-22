@@ -2,6 +2,7 @@ use std::io::Error;
 use crate::ethernet::PacketInfo;
 use crate::filters::apply_filters;
 use crate::http_parser;
+use crate::grpc_parser;
 use log::{debug, error};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -200,8 +201,40 @@ impl PacketProcessor {
                 header_set_id,
                 packet.timestamp_seconds as i64,
             ).await {
-                Ok(_) => {
-                    let _ = self.db.update_stream_l7_protocol(stream_id, "http1").await;
+                Ok(msg_id) => {
+                    // Detect gRPC and parse protobuf body
+                    let is_grpc = content_type.as_deref()
+                        .map(|ct| ct.starts_with("application/grpc"))
+                        .unwrap_or(false);
+
+                    if is_grpc {
+                        let body = &packet.payload[parsed.body_offset..];
+                        if let Some(grpc) = grpc_parser::try_parse_grpc_body(
+                            body,
+                            parsed.path.as_deref(),
+                            parsed.is_request,
+                        ) {
+                            // Store decoded gRPC in grpc_message table
+                            let _ = self.db.insert_grpc_message(
+                                stream_id,
+                                msg_id,
+                                grpc.service_name.as_deref(),
+                                grpc.method_name.as_deref(),
+                                grpc.is_request,
+                                &grpc.decoded_json,
+                                packet.timestamp_seconds as i64,
+                            ).await;
+                            let _ = self.db.update_stream_l7_protocol(stream_id, "grpc").await;
+                            debug!("gRPC parsed: {}/{}",
+                                grpc.service_name.as_deref().unwrap_or("?"),
+                                grpc.method_name.as_deref().unwrap_or("?"));
+                        } else {
+                            let _ = self.db.update_stream_l7_protocol(stream_id, "http2").await;
+                        }
+                    } else {
+                        let _ = self.db.update_stream_l7_protocol(stream_id, "http1").await;
+                    }
+
                     debug!("HTTP {} parsed: {} headers (set_id={:?})",
                         if parsed.is_request { "request" } else { "response" },
                         parsed.headers.len(), header_set_id

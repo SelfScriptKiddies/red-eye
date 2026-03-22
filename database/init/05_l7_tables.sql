@@ -33,6 +33,22 @@ CREATE INDEX IF NOT EXISTS idx_http_message_method_path ON http_message(method, 
 CREATE INDEX IF NOT EXISTS idx_http_message_status ON http_message(status_code);
 CREATE INDEX IF NOT EXISTS idx_http_message_header_set ON http_message(header_set_id);
 
+-- gRPC messages (partitioned by timestamp)
+CREATE TABLE IF NOT EXISTS grpc_message (
+    id SERIAL,
+    stream_id INTEGER NOT NULL,
+    http_message_id INTEGER NOT NULL,
+    service_name VARCHAR(255),
+    method_name VARCHAR(255),
+    is_request BOOLEAN NOT NULL,
+    decoded_json TEXT,
+    timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+    PRIMARY KEY (id, timestamp)
+) PARTITION BY RANGE (timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_grpc_message_stream ON grpc_message(stream_id);
+CREATE INDEX IF NOT EXISTS idx_grpc_message_method ON grpc_message(service_name, method_name);
+
 -- Proto file storage for gRPC decoding
 CREATE TABLE IF NOT EXISTS proto_file (
     id SERIAL PRIMARY KEY,

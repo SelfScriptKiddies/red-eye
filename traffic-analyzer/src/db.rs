@@ -210,4 +210,32 @@ impl DB {
         .await
         .map(|row| row.get::<i32, _>("id"))
     }
+
+    /// Insert a gRPC message
+    pub async fn insert_grpc_message(
+        &self,
+        stream_id: usize,
+        http_message_id: i32,
+        service_name: Option<&str>,
+        method_name: Option<&str>,
+        is_request: bool,
+        decoded_json: &str,
+        timestamp: i64,
+    ) -> Result<i32, Error> {
+        sqlx::query(
+            "INSERT INTO grpc_message (stream_id, http_message_id, service_name, method_name, is_request, decoded_json, timestamp)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING id"
+        )
+        .bind(stream_id as i32)
+        .bind(http_message_id)
+        .bind(service_name)
+        .bind(method_name)
+        .bind(is_request)
+        .bind(decoded_json)
+        .bind(timestamp)
+        .fetch_one(&self.pgpool)
+        .await
+        .map(|row| row.get::<i32, _>("id"))
+    }
 }

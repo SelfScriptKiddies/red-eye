@@ -3,6 +3,7 @@ pub mod auth;
 pub mod block_sync;
 pub mod l7;
 pub mod protect;
+pub mod proto;
 pub(crate) mod packet;
 pub mod realtime;
 pub mod service;
@@ -32,6 +33,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(l7::config)
             .configure(settings::config)
             .configure(protect::config)
+            .configure(proto::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }
