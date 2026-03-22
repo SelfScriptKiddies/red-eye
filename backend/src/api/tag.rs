@@ -181,14 +181,17 @@ async fn update_tag_name(
     pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
-    let involves_block = tag_name.special_type.as_deref() == Some("block");
+    // Check if old tag was block (need to re-sync if changing away from block)
+    let was_block = tag_service.get_tag_name_by_id(id).await
+        .map(|t| t.special_type.as_deref() == Some("block")).unwrap_or(false);
+    let will_be_block = tag_name.special_type.as_deref() == Some("block");
     match tag_service.update_tag_name(id, tag_name.into_inner()).await {
         Ok(updated_tag) => {
             let id = updated_tag.id.try_into().unwrap();
             if let Err(e) = updater.update_filter(id, updated_tag.clone().into()).await {
                 log::error!("Failed to send update: {}", e);
             }
-            if involves_block || updated_tag.special_type.as_deref() == Some("block") {
+            if was_block || will_be_block {
                 sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::Ok().json(updated_tag))

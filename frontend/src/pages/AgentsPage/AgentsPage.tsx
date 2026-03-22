@@ -385,7 +385,12 @@ export default function AgentsPage() {
               </div>
             </>
           ) : (
-            <div className="placeholder-content"><p>Выберите агента</p></div>
+            <>
+              <div className="column-header">
+                <h2>Детали</h2>
+              </div>
+              <div className="placeholder-content"><p>Выберите агента</p></div>
+            </>
           )}
         </div>
 
