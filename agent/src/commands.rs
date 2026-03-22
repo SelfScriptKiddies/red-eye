@@ -51,8 +51,9 @@ pub enum AgentCommand {
         protocol: String,
         tls_mode: Option<String>,
         nft_redirect_port: Option<u16>,
-        /// Copy traffic to another endpoint (e.g. another team's server)
         duplicate_to: Option<String>,
+        #[serde(default)]
+        http2: bool,
     },
     ProxyUpdate {
         name: String,
@@ -62,6 +63,8 @@ pub enum AgentCommand {
         tls_mode: Option<String>,
         nft_redirect_port: Option<u16>,
         duplicate_to: Option<String>,
+        #[serde(default)]
+        http2: bool,
     },
     ProxyRemove {
         name: String,
@@ -152,6 +155,7 @@ async fn handle_command(
             tls_mode,
             nft_redirect_port,
             duplicate_to,
+            http2,
         } => {
             let spec = match parse_proxy_spec(
                 &name,
@@ -161,6 +165,7 @@ async fn handle_command(
                 tls_mode,
                 nft_redirect_port,
                 duplicate_to,
+                http2,
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -181,6 +186,7 @@ async fn handle_command(
             tls_mode,
             nft_redirect_port,
             duplicate_to,
+            http2,
         } => {
             let spec = match parse_proxy_spec(
                 &name,
@@ -190,6 +196,7 @@ async fn handle_command(
                 tls_mode,
                 nft_redirect_port,
                 duplicate_to,
+                http2,
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -273,6 +280,7 @@ async fn handle_command(
                 tls_mode: None,
                 nft_redirect_port: None,
                 duplicate_to: None,
+                http2: false,
             };
             info!(
                 "Starting replay forward '{}': :{} -> {}",
@@ -301,6 +309,7 @@ fn parse_proxy_spec(
     tls_mode: Option<String>,
     nft_redirect_port: Option<u16>,
     duplicate_to: Option<String>,
+    http2: bool,
 ) -> anyhow::Result<ProxyRuleSpec> {
     let protocol = match protocol.to_lowercase().as_str() {
         "tcp" => Protocol::Tcp,
@@ -320,5 +329,6 @@ fn parse_proxy_spec(
         tls_mode,
         nft_redirect_port,
         duplicate_to,
+        http2,
     })
 }

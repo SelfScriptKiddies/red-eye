@@ -60,7 +60,8 @@ async fn toggle_protection(
             "listen": format!("0.0.0.0:{}", harpoon_port),
             "target": format!("127.0.0.1:{}", service.port),
             "protocol": "tcp",
-            "nft_redirect_port": service.port
+            "nft_redirect_port": service.port,
+            "http2": service.http2_parse
         });
 
         if body.tls_mitm {

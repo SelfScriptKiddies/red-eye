@@ -12,6 +12,7 @@ interface Service {
     inflate_websockets: boolean;
     decrypt_tls: boolean;
     http_parse: boolean;
+    http2_parse: boolean;
 }
 
 interface Filter {
@@ -42,7 +43,8 @@ export function SettingsPage() {
         merge_adjacent_packets: false,
         inflate_websockets: false,
         decrypt_tls: false,
-        http_parse: false
+        http_parse: false,
+        http2_parse: false
     });
     
     // Filters state
@@ -146,7 +148,8 @@ export function SettingsPage() {
                     merge_adjacent_packets: serviceForm.merge_adjacent_packets,
                     inflate_websockets: serviceForm.inflate_websockets,
                     decrypt_tls: serviceForm.decrypt_tls,
-                    http_parse: serviceForm.http_parse
+                    http_parse: serviceForm.http_parse,
+                    http2_parse: serviceForm.http2_parse
                 })
             });
             
@@ -279,6 +282,7 @@ export function SettingsPage() {
                                         {service.inflate_websockets && <span className="option-badge">WS</span>}
                                         {service.decrypt_tls && <span className="option-badge">TLS</span>}
                                         {service.http_parse && <span className="option-badge">HTTP</span>}
+                                        {service.http2_parse && <span className="option-badge">HTTP/2</span>}
                                     </div>
                                 </div>
                                 <div className="card-actions">
@@ -440,6 +444,14 @@ export function SettingsPage() {
                                         onChange={(e) => setServiceForm({ ...serviceForm, http_parse: e.target.checked })}
                                     />
                                     HTTP Parse
+                                </label>
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={serviceForm.http2_parse}
+                                        onChange={(e) => setServiceForm({ ...serviceForm, http2_parse: e.target.checked })}
+                                    />
+                                    HTTP/2 Parse
                                 </label>
                             </div>
                         </div>

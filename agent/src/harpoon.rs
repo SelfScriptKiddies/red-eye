@@ -37,6 +37,8 @@ pub struct ProxyRuleSpec {
     pub nft_redirect_port: Option<u16>,
     /// If set, duplicate all traffic to this endpoint (e.g. another team)
     pub duplicate_to: Option<SocketAddr>,
+    /// Enable HTTP/2 proxy mode
+    pub http2: bool,
 }
 
 impl ProxyRuleSpec {
@@ -76,6 +78,7 @@ impl ProxyRuleSpec {
             tls,
             udp_source_mode: UdpSourceMode::Proxy,
             idle_timeout_secs: Rule::default_idle_timeout(),
+            http2: self.http2,
         }
     }
 

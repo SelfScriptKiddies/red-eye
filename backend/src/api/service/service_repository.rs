@@ -16,7 +16,7 @@ impl ServiceRepository {
         sqlx::query_as::<_, Service>(
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
-                   merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse
+                   merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse
             FROM service
             WHERE id = $1
             "#)
@@ -29,7 +29,7 @@ impl ServiceRepository {
         sqlx::query_as::<_, Service>(
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
-                   merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse
+                   merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse
             FROM service
             "#)
             .fetch_all(&self.pgpool)
@@ -40,10 +40,10 @@ impl ServiceRepository {
         sqlx::query_as::<_, Service>(
             r#"
             INSERT INTO service (name, port, chunked_transfer_encoding, urldecode,
-                               merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                               merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id, name, port, chunked_transfer_encoding, urldecode,
-                      merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse
+                      merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse
             "#)
             .bind(&service.name)
             .bind(service.port)
@@ -53,6 +53,7 @@ impl ServiceRepository {
             .bind(service.inflate_websockets)
             .bind(service.decrypt_tls)
             .bind(service.http_parse)
+            .bind(service.http2_parse)
             .fetch_one(&self.pgpool)
             .await
     }
@@ -62,10 +63,10 @@ impl ServiceRepository {
             r#"
             UPDATE service
             SET name = $2, port = $3, chunked_transfer_encoding = $4, urldecode = $5,
-                merge_adjacent_packets = $6, inflate_websockets = $7, decrypt_tls = $8, http_parse = $9
+                merge_adjacent_packets = $6, inflate_websockets = $7, decrypt_tls = $8, http_parse = $9, http2_parse = $10
             WHERE id = $1
             RETURNING id, name, port, chunked_transfer_encoding, urldecode,
-                      merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse
+                      merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse
             "#)
             .bind(service.id)
             .bind(&service.name)
@@ -76,6 +77,7 @@ impl ServiceRepository {
             .bind(service.inflate_websockets)
             .bind(service.decrypt_tls)
             .bind(service.http_parse)
+            .bind(service.http2_parse)
             .fetch_one(&self.pgpool)
             .await
     }
