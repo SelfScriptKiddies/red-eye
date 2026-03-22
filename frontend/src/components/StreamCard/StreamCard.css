@@ -62,6 +62,12 @@
     gap: 4px;
 }
 
+.stream-ip {
+    font-size: 0.75rem;
+    color: #646cff;
+    font-family: monospace;
+}
+
 .stream-packet-count {
     font-size: 0.85rem;
     color: #999;

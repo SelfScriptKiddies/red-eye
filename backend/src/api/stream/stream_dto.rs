@@ -50,6 +50,8 @@ pub struct StreamListResponse {
     pub packet_count: i32,
     pub favorite: bool,
     pub l7_protocol: String,
+    pub src_ip: String,
+    pub dst_ip: String,
 }
 
 impl Stream {

@@ -87,6 +87,7 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColo
                 </p>
             </div>
             <div className="info-block column">
+                {streamObj.dst_ip && <span className="stream-ip">{streamObj.dst_ip}</span>}
                 <span className="stream-time">{moment.unix(streamObj.first_packet_time).format("HH:mm:ss")}-{moment.unix(streamObj.last_packet_time).format("HH:mm:ss")}</span>
                 <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
             </div>

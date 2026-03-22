@@ -96,6 +96,25 @@ impl L7Repository {
         }
     }
 
+    /// Search streams by HTTP path
+    pub async fn search_streams_by_path(
+        &self,
+        path: &str,
+        limit: i64,
+    ) -> Result<Vec<i32>, Error> {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT DISTINCT stream_id
+             FROM http_message
+             WHERE path = $1
+             ORDER BY stream_id DESC
+             LIMIT $2",
+        )
+        .bind(path)
+        .bind(limit)
+        .fetch_all(&self.pgpool)
+        .await
+    }
+
     pub async fn search_streams_by_headers(
         &self,
         filters: &[(String, Option<String>)],
@@ -108,9 +127,11 @@ impl L7Repository {
         let mut result: Option<Vec<i32>> = None;
 
         for (name, value) in filters {
-            let ids = self
-                .search_streams_by_header(name, value.as_deref(), limit)
-                .await?;
+            let ids = if name == "_path" {
+                self.search_streams_by_path(value.as_deref().unwrap_or(""), limit).await?
+            } else {
+                self.search_streams_by_header(name, value.as_deref(), limit).await?
+            };
 
             result = Some(match result {
                 None => ids,

@@ -245,6 +245,26 @@
     border-color: #646cff !important;
 }
 
+.path-search {
+    opacity: 0.5;
+    display: inline-flex;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.path-search:hover {
+    opacity: 1 !important;
+}
+
+.cookie-line {
+    padding-left: 16px;
+}
+
+.cookie-name {
+    color: #a080ff !important;
+    font-size: 0.8rem;
+}
+
 .http-body {
     margin: 0;
     padding: 8px 0 0;

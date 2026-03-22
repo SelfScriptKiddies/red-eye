@@ -46,7 +46,7 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String)>, sqlx::Error> {
+    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
         let mut query_parts = Vec::new();
         let mut params = Vec::new();
 
@@ -60,7 +60,9 @@ impl StreamRepository {
                 s.name as service_name,
                 s.id as service_id,
                 str.favorite as favorite,
-                str.l7_protocol as l7_protocol
+                str.l7_protocol as l7_protocol,
+                str.src_ip::text as src_ip,
+                str.dst_ip::text as dst_ip
             FROM packets p
             LEFT JOIN tag t ON t.packet_id = p.id
             LEFT JOIN tag_name tn ON tn.id = t.tag_id
@@ -102,7 +104,7 @@ impl StreamRepository {
 
         // Добавление GROUP BY и других частей запроса
         query_parts.push(r#"
-            GROUP BY p.stream_id, s.name, s.id, str.favorite, str.l7_protocol
+            GROUP BY p.stream_id, s.name, s.id, str.favorite, str.l7_protocol, str.src_ip, str.dst_ip
             ORDER BY last_time DESC"#.to_string());
 
         // Добавление LIMIT и OFFSET
@@ -118,7 +120,7 @@ impl StreamRepository {
         log::debug!("Params: tags={:?}, services={:?}, limit={}, offset={}", tags, services, limit, offset);
         
         // Выполнение запроса с параметрами
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String)>(&query_string);
+        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>(&query_string);
         
         // Биндинг параметров tags и services
         for param in &params {

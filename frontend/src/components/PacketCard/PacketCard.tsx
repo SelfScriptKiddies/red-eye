@@ -285,7 +285,21 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 {/* Status line */}
                 <div className="http-status-line">
                     {httpData.is_request ? (
-                        <><span className="http-method">{httpData.method}</span> <span className="http-path">{httpData.path}</span> <span className="http-ver">HTTP/{httpData.http_version}</span></>
+                        <>
+                            <span className="http-method">{httpData.method}</span>
+                            {' '}
+                            <span className="http-path">{httpData.path}</span>
+                            {onHeaderSearch && httpData.path && (
+                                <button className="header-search-btn path-search" title={`Все запросы на ${httpData.path}`}
+                                    onClick={() => onHeaderSearch('_path', httpData.path!)}>
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                </button>
+                            )}
+                            {' '}
+                            <span className="http-ver">HTTP/{httpData.http_version}</span>
+                        </>
                     ) : (
                         <><span className="http-ver">HTTP/{httpData.http_version}</span> <span className={`http-code http-code-${Math.floor((httpData.status_code || 0) / 100)}`}>{httpData.status_code}</span></>
                     )}
@@ -293,23 +307,50 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
                 {/* Headers */}
                 <div className="http-headers">
-                    {httpData.headers.map((h, idx) => (
-                        <div key={idx} className="http-header-line">
-                            <span className="h-name">{h.name}:</span>
-                            <span className="h-value">{h.value}</span>
-                            {onHeaderSearch && (
-                                <button
-                                    className="header-search-btn"
-                                    title={`Найти: ${h.name}: ${h.value}`}
-                                    onClick={() => onHeaderSearch(h.name, h.value)}
-                                >
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                                    </svg>
-                                </button>
-                            )}
-                        </div>
-                    ))}
+                    {httpData.headers.flatMap((h, idx) => {
+                        // Parse Cookie header into individual cookies
+                        if (h.name.toLowerCase() === 'cookie' && h.value.includes('=')) {
+                            const cookies = h.value.split(';').map(c => c.trim()).filter(c => c.includes('='));
+                            return [
+                                <div key={`cookie-label-${idx}`} className="http-header-line">
+                                    <span className="h-name">Cookie:</span>
+                                    <span className="h-value" style={{ color: '#666', fontSize: '11px' }}>{cookies.length} cookies</span>
+                                </div>,
+                                ...cookies.map((cookie, ci) => {
+                                    const [cName, ...cRest] = cookie.split('=');
+                                    const cValue = cRest.join('=');
+                                    return (
+                                        <div key={`cookie-${idx}-${ci}`} className="http-header-line cookie-line">
+                                            <span className="h-name cookie-name">{cName.trim()}=</span>
+                                            <span className="h-value">{cValue}</span>
+                                            {onHeaderSearch && (
+                                                <button className="header-search-btn" title={`Найти: cookie ${cName.trim()}`}
+                                                    onClick={() => onHeaderSearch('Cookie', `${cName.trim()}=${cValue}`)}>
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                                    </svg>
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })
+                            ];
+                        }
+                        return [(
+                            <div key={idx} className="http-header-line">
+                                <span className="h-name">{h.name}:</span>
+                                <span className="h-value">{h.value}</span>
+                                {onHeaderSearch && (
+                                    <button className="header-search-btn" title={`Найти: ${h.name}: ${h.value}`}
+                                        onClick={() => onHeaderSearch(h.name, h.value)}>
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                        </svg>
+                                    </button>
+                                )}
+                            </div>
+                        )];
+                    })}
                 </div>
 
                 {/* Body separator + raw body */}
