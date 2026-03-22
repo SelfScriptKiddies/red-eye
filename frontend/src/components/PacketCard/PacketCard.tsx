@@ -84,6 +84,49 @@ const toHexDump = (bytes: Uint8Array): string => {
 
 function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+    const [selStart, setSelStart] = useState<number | null>(null);
+    const [selEnd, setSelEnd] = useState<number | null>(null);
+    const [selecting, setSelecting] = useState(false);
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+
+    const selMin = selStart !== null && selEnd !== null ? Math.min(selStart, selEnd) : null;
+    const selMax = selStart !== null && selEnd !== null ? Math.max(selStart, selEnd) : null;
+    const isSelected = (idx: number) => selMin !== null && selMax !== null && idx >= selMin && idx <= selMax;
+
+    const getSelectedBytes = (): Uint8Array => {
+        if (selMin === null || selMax === null) return new Uint8Array(0);
+        return bytes.slice(selMin, selMax + 1);
+    };
+
+    const copyAs = (fmt: 'hex' | 'ascii' | 'python' | 'carray') => {
+        const sel = getSelectedBytes();
+        let text = '';
+        if (fmt === 'hex') text = Array.from(sel).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        else if (fmt === 'ascii') text = Array.from(sel).map(b => b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.').join('');
+        else if (fmt === 'python') text = `b'${Array.from(sel).map(b => `\\x${b.toString(16).padStart(2, '0')}`).join('')}'`;
+        else if (fmt === 'carray') text = `{${Array.from(sel).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(', ')}}`;
+        copyText(text);
+        setCtxMenu(null);
+    };
+
+    const handleMouseDown = (idx: number) => {
+        setSelStart(idx);
+        setSelEnd(idx);
+        setSelecting(true);
+        setCtxMenu(null);
+    };
+
+    const handleMouseEnter = (idx: number) => {
+        setHoverIdx(idx);
+        if (selecting) setSelEnd(idx);
+    };
+
+    const handleContextMenu = (e: React.MouseEvent) => {
+        if (selMin !== null && selMax !== null && selMax > selMin) {
+            e.preventDefault();
+            setCtxMenu({ x: e.clientX, y: e.clientY });
+        }
+    };
 
     const rows: JSX.Element[] = [];
     for (let row = 0; row < bytes.length; row += 16) {
@@ -95,23 +138,22 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
             const idx = row + col;
             if (idx < bytes.length) {
                 const b = bytes[idx];
-                const isHover = hoverIdx === idx;
+                const hover = hoverIdx === idx;
+                const sel = isSelected(idx);
                 const ch = b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.';
 
                 hexCells.push(
-                    <span
-                        key={idx}
-                        className={`hx-byte ${isHover ? 'hx-hover' : ''}`}
-                        onMouseEnter={() => setHoverIdx(idx)}
-                        onMouseLeave={() => setHoverIdx(null)}
+                    <span key={idx}
+                        className={`hx-byte ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''}`}
+                        onMouseDown={() => handleMouseDown(idx)}
+                        onMouseEnter={() => handleMouseEnter(idx)}
                     >{b.toString(16).padStart(2, '0')}</span>
                 );
                 asciiCells.push(
-                    <span
-                        key={idx}
-                        className={`hx-ascii-char ${isHover ? 'hx-hover' : ''} ${b < 0x20 || b > 0x7e ? 'hx-nonprint' : ''}`}
-                        onMouseEnter={() => setHoverIdx(idx)}
-                        onMouseLeave={() => setHoverIdx(null)}
+                    <span key={idx}
+                        className={`hx-ascii-char ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''} ${b < 0x20 || b > 0x7e ? 'hx-nonprint' : ''}`}
+                        onMouseDown={() => handleMouseDown(idx)}
+                        onMouseEnter={() => handleMouseEnter(idx)}
                     >{ch}</span>
                 );
             } else {
@@ -131,7 +173,27 @@ function InteractiveHexDump({ bytes }: { bytes: Uint8Array }) {
         );
     }
 
-    return <div className="interactive-hexdump">{rows}</div>;
+    return (
+        <div className="interactive-hexdump"
+            onMouseUp={() => setSelecting(false)}
+            onMouseLeave={() => { setHoverIdx(null); setSelecting(false); }}
+            onContextMenu={handleContextMenu}
+        >
+            {rows}
+            {ctxMenu && (
+                <>
+                    <div className="hx-ctx-overlay" onClick={() => setCtxMenu(null)} />
+                    <div className="hx-ctx-menu" style={{ top: ctxMenu.y, left: ctxMenu.x }}>
+                        <div className="hx-ctx-header">{(selMax! - selMin! + 1)} bytes selected</div>
+                        <button onClick={() => copyAs('hex')}>Copy as Hex</button>
+                        <button onClick={() => copyAs('ascii')}>Copy as ASCII</button>
+                        <button onClick={() => copyAs('python')}>Copy as Python</button>
+                        <button onClick={() => copyAs('carray')}>Copy as C array</button>
+                    </div>
+                </>
+            )}
+        </div>
+    );
 }
 
 const toPythonBytesLiteral = (bytes: Uint8Array): string => {

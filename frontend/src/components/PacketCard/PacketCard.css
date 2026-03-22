@@ -352,8 +352,56 @@
     color: #fff;
 }
 
+.hx-selected {
+    background: rgba(100, 108, 255, 0.5);
+    color: #fff;
+}
+
 .hx-pad {
     color: transparent;
+}
+
+/* Context menu */
+.hx-ctx-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 999;
+}
+
+.hx-ctx-menu {
+    position: fixed;
+    z-index: 1000;
+    background: #1e1e1e;
+    border: 1px solid #646cff;
+    border-radius: 6px;
+    overflow: hidden;
+    min-width: 160px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.hx-ctx-header {
+    padding: 6px 12px;
+    font-size: 11px;
+    color: #888;
+    border-bottom: 1px solid #333;
+}
+
+.hx-ctx-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent !important;
+    border: none !important;
+    color: #ccc;
+    padding: 7px 12px !important;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: monospace;
+}
+
+.hx-ctx-menu button:hover {
+    background: #2a2a4a !important;
+    color: #646cff;
 }
 
 /* Pattern highlight */
