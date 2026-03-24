@@ -1,17 +1,20 @@
 .AgentsPage {
-  width: 100vw;
+  width: 100%;
+  max-width: 100vw;
   height: calc(100vh - 130px);
   margin-top: 130px;
   display: flex;
   flex-direction: column;
   border-top: 3px solid #646cff;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .agents-columns {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .agents-column {
