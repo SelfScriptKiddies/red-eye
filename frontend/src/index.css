@@ -82,9 +82,75 @@ button:focus-visible {
   color: #f00;
 }
 .header a{
-  font-size: 18px;
-  margin: 10px;
-  color: #07b;
+  text-decoration: none;
+  color: inherit;
+}
+
+/* Nav cards */
+.navMenu {
+  display: flex;
+  gap: 10px;
+}
+
+.nav-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 64px;
+  height: 58px;
+  justify-content: center;
+  border: 1.5px solid #444;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.nav-card:hover {
+  border-color: #646cff;
+  background: rgba(100, 108, 255, 0.08);
+}
+
+.nav-card--active {
+  border-color: #646cff;
+  background: rgba(100, 108, 255, 0.12);
+}
+
+.nav-card-icon {
+  color: #888;
+  display: flex;
+  transition: color 0.2s;
+}
+
+.nav-card:hover .nav-card-icon,
+.nav-card--active .nav-card-icon {
+  color: #646cff;
+}
+
+.nav-card-label {
+  font-size: 9px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: color 0.2s;
+}
+
+.nav-card:hover .nav-card-label,
+.nav-card--active .nav-card-label {
+  color: #aaa;
+}
+
+/* Focus mode nav */
+body:has(.eye__apple__focus) .nav-card:hover,
+body:has(.eye__apple__focus) .nav-card--active {
+  border-color: #a51900;
+  background: rgba(165, 25, 0, 0.12);
+}
+
+body:has(.eye__apple__focus) .nav-card:hover .nav-card-icon,
+body:has(.eye__apple__focus) .nav-card--active .nav-card-icon {
+  color: #a51900;
 }
 main.content {
   width: 100vw;
