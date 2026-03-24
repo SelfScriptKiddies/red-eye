@@ -60,6 +60,12 @@ export function SettingsPage() {
         special_type: null
     });
 
+    // Proto files state
+    const [protoFiles, setProtoFiles] = useState<{id: number, service_id: number, filename: string}[]>([]);
+    const [protoServiceId, setProtoServiceId] = useState('');
+    const [protoFilename, setProtoFilename] = useState('');
+    const [protoContent, setProtoContent] = useState('');
+
     const API_URL = '/api';
 
     const fetchSettings = async () => {
@@ -84,11 +90,37 @@ export function SettingsPage() {
         } catch (e) { console.error('Error saving setting:', e); }
     };
 
+    const fetchProtoFiles = async () => {
+        try {
+            const resp = await fetch(`${API_URL}/proto`);
+            if (resp.ok) setProtoFiles(await resp.json());
+        } catch {}
+    };
+
+    const uploadProto = async () => {
+        if (!protoServiceId || !protoFilename.trim() || !protoContent.trim()) return;
+        await fetch(`${API_URL}/proto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ service_id: parseInt(protoServiceId), filename: protoFilename, content: protoContent })
+        });
+        setProtoFilename('');
+        setProtoContent('');
+        fetchProtoFiles();
+    };
+
+    const deleteProto = async (id: number) => {
+        if (!confirm('Удалить .proto файл?')) return;
+        await fetch(`${API_URL}/proto/${id}`, { method: 'DELETE' });
+        fetchProtoFiles();
+    };
+
     // Fetch on mount
     useEffect(() => {
         fetchServices();
         fetchFilters();
         fetchSettings();
+        fetchProtoFiles();
     }, []);
 
     // Services CRUD operations
@@ -369,6 +401,53 @@ export function SettingsPage() {
                                         ? farmUrl ? `Флаги отправляются на ${farmUrl}` : 'Укажите URL фермы'
                                         : 'Отправка выключена'}
                                 </p>
+                            </div>
+                        </div>
+
+                        {/* Proto Files */}
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Proto Files (gRPC)</h4>
+                                {protoFiles.map(pf => {
+                                    const svc = services.find(s => s.id === pf.service_id);
+                                    return (
+                                        <div key={pf.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #333' }}>
+                                            <span style={{ fontSize: '13px' }}>
+                                                <span style={{ color: '#888' }}>{svc?.name || `#${pf.service_id}`}</span>
+                                                {' / '}
+                                                <span style={{ color: '#ccc' }}>{pf.filename}</span>
+                                            </span>
+                                            <button style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px', padding: '0' }} onClick={() => deleteProto(pf.id)}>✕</button>
+                                        </div>
+                                    );
+                                })}
+                                {protoFiles.length === 0 && <p style={{ color: '#666', fontSize: '12px' }}>Нет загруженных .proto файлов</p>}
+                                <div style={{ marginTop: '10px', borderTop: '1px solid #333', paddingTop: '10px' }}>
+                                    <select
+                                        value={protoServiceId}
+                                        onChange={(e) => setProtoServiceId(e.target.value)}
+                                        className="select-input"
+                                        style={{ marginBottom: '8px' }}
+                                    >
+                                        <option value="">Выберите сервис</option>
+                                        {services.map(s => <option key={s.id} value={s.id}>{s.name} :{s.port}</option>)}
+                                    </select>
+                                    <input
+                                        type="text"
+                                        placeholder="Имя файла (service.proto)"
+                                        value={protoFilename}
+                                        onChange={(e) => setProtoFilename(e.target.value)}
+                                        style={{ width: 'calc(100% - 24px)', padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px', marginBottom: '8px' }}
+                                    />
+                                    <textarea
+                                        placeholder="Содержимое .proto файла"
+                                        value={protoContent}
+                                        onChange={(e) => setProtoContent(e.target.value)}
+                                        rows={4}
+                                        style={{ width: 'calc(100% - 24px)', padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '12px', fontFamily: 'monospace', resize: 'vertical', marginBottom: '8px' }}
+                                    />
+                                    <button className="add-btn" onClick={uploadProto} style={{ fontSize: '12px', padding: '6px 14px' }}>Загрузить</button>
+                                </div>
                             </div>
                         </div>
                     </div>
