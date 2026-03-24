@@ -510,7 +510,8 @@ export function SettingsPage() {
                                 <option value="">Без спец.типа</option>
                                 <option value="flag">Flag (отправка в ферму)</option>
                                 <option value="alert">Alert (уведомление)</option>
-                                <option value="block">Block (авто-drop на агентах)</option>
+                                <option value="block">Block (drop data)</option>
+                                <option value="block_conn">Block (kill connection)</option>
                             </select>
                             <div className="color-picker-wrapper">
                                 <label>Цвет (Hue): {filterForm.color}°</label>

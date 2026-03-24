@@ -10,6 +10,10 @@ use crate::api::updater::UpdateAgent;
 use crate::api::agent::agent_service::AgentService;
 use crate::api::block_sync::sync_block_filters;
 
+fn is_block_type(st: Option<&str>) -> bool {
+    matches!(st, Some("block") | Some("block_conn"))
+}
+
 pub(crate) mod tag_dto;
 pub(crate) mod tag_repository;
 pub(crate) mod tag_service;
@@ -143,7 +147,7 @@ async fn create_tag_name(
     agent_service: web::Data<Arc<AgentService>>,
     pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
-    let is_block = tag_name.special_type.as_deref() == Some("block");
+    let is_block = is_block_type(tag_name.special_type.as_deref());
     match tag_service.create_tag_name(tag_name.into_inner()).await {
         Ok(created_tag) => {
             let id = created_tag.id.try_into().unwrap();
@@ -183,8 +187,8 @@ async fn update_tag_name(
     let id = path.into_inner().0;
     // Check if old tag was block (need to re-sync if changing away from block)
     let was_block = tag_service.get_tag_name_by_id(id).await
-        .map(|t| t.special_type.as_deref() == Some("block")).unwrap_or(false);
-    let will_be_block = tag_name.special_type.as_deref() == Some("block");
+        .map(|t| is_block_type(t.special_type.as_deref())).unwrap_or(false);
+    let will_be_block = is_block_type(tag_name.special_type.as_deref());
     match tag_service.update_tag_name(id, tag_name.into_inner()).await {
         Ok(updated_tag) => {
             let id = updated_tag.id.try_into().unwrap();
@@ -223,7 +227,7 @@ async fn delete_tag_name(
     let id = path.into_inner().0;
     // Check if deleted tag was block type (need to re-sync after delete)
     let was_block = tag_service.get_tag_name_by_id(id).await
-        .map(|t| t.special_type.as_deref() == Some("block")).unwrap_or(false);
+        .map(|t| is_block_type(t.special_type.as_deref())).unwrap_or(false);
     match tag_service.delete_tag_name(id).await {
         Ok(_) => {
             if let Err(e) = updater.remove_filter(id.try_into().unwrap()).await {

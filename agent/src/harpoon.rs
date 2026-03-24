@@ -362,6 +362,7 @@ pub fn parse_filter(
 
     let action = match action {
         "drop" => FilterAction::Drop,
+        "drop_connection" => FilterAction::DropConnection,
         "alert" | "tap" => FilterAction::TapOnly,
         "pass" | "" => FilterAction::Pass,
         other => anyhow::bail!("Unknown action: {}", other),
