@@ -181,11 +181,16 @@ def test_http_service(api, target_host, target_port, result):
     s = requests.Session()
     base = f"http://{target_host}:{target_port}"
 
-    s.get(f"{base}/", headers={
-        "X-Test-Header": "integration-test-value",
-        "X-Forwarded-For": "10.80.99.1",
-    })
-    s.post(f"{base}/", json={"action": "test", "flag": "FLAG{test123}"})
+    try:
+        s.get(f"{base}/", headers={
+            "X-Test-Header": "integration-test-value",
+            "X-Forwarded-For": "10.80.99.1",
+        })
+        s.post(f"{base}/", json={"action": "test", "flag": "FLAG{test123}"})
+    except requests.ConnectionError:
+        result.fail("HTTP connect", f"Connection refused on {base} — is target server running?")
+        return
+
     time.sleep(3)  # Wait for processing
 
     # Check streams appeared
