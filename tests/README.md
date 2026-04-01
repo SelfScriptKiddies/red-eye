@@ -139,23 +139,48 @@ cd ~/programming/traffic-analyzer-stack/red-eye
 docker compose up -d
 ```
 
-### Step 2: Start HTTP server on build.lan
+### Step 2: Start target servers on build.lan
 
-SSH into build.lan:
+SSH into build.lan and start both HTTP and TCP echo servers:
+
 ```bash
 ssh build.lan
+
+# Terminal 1: HTTP server
 cd /some/dir
 python3 -m http.server 31337
+
+# Terminal 2: TCP echo server (pick one)
+socat TCP-LISTEN:31338,reuseaddr,fork EXEC:cat
+# or
+ncat -l -k -p 31338 -e /bin/cat
+# or with python:
+python3 -c "
+import socket, threading
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', 31338)); s.listen(100)
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=lambda c=c: (c.sendall(c.recv(4096)), c.close()), daemon=True).start()
+"
 ```
 
-Or use harpoon to forward from build.lan:31337 → dev.lan:31337.
+Or use harpoon on build.lan to forward both ports to dev.lan.
 
-### Step 3: Create service in Red Eye UI
+### Step 3: Create services in Red Eye UI
 
-Go to `http://dev.lan:3000/settings`, create service:
+Go to `http://dev.lan:3000/settings`, create two services:
+
+**HTTP service:**
 - Name: `http-test`
 - Port: `31337`
-- HTTP Parse: checked
+- HTTP Parse: **checked** (required for header search)
+
+**TCP service:**
+- Name: `tcp-test`
+- Port: `31338`
+- HTTP Parse: unchecked
+- Merge Adjacent Packets: unchecked (binary protocol)
 
 ### Step 4: Start agent on dev.lan
 
@@ -165,7 +190,7 @@ sudo /home/tonysd/programming/traffic-analyzer-stack/red-eye/agent/target/releas
   --nats-login red-eye-client \
   --nats-password 6781261b9d9f2d24 \
   --interface eth1 \
-  --ports 31337 \
+  --ports 31337,31338 \
   --data-dir /tmp/red-eye-agent
 ```
 
@@ -180,25 +205,34 @@ curl http://10.77.0.97:31337/
 ```bash
 python3 tests/integration_test.py \
   --target-host 10.77.0.97 \
-  --http-port 31337
+  --http-port 31337 \
+  --tcp-port 31338
 ```
 
 ### Step 6: Run stress tests
 
+**Important:** Use `--http-ratio 1.0` if no TCP echo server is running,
+otherwise 20% of requests go to TCP port and fail.
+
 ```bash
-# Baseline
+# HTTP-only (no TCP echo server)
 python3 tests/stress_test.py \
   --target-host 10.77.0.97 --http-port 31337 \
+  --rps 100 --duration 300 --http-ratio 1.0 --output tests/stress_100.json
+
+# Mixed HTTP + TCP (both servers running on build.lan)
+python3 tests/stress_test.py \
+  --target-host 10.77.0.97 --http-port 31337 --tcp-port 31338 \
   --rps 100 --duration 300 --output tests/stress_100.json
 
-# Medium
+# Medium (500 rps)
 python3 tests/stress_test.py \
-  --target-host 10.77.0.97 --http-port 31337 \
+  --target-host 10.77.0.97 --http-port 31337 --tcp-port 31338 \
   --rps 500 --duration 300 --workers 100 --output tests/stress_500.json
 
-# High
+# High (1000 rps)
 python3 tests/stress_test.py \
-  --target-host 10.77.0.97 --http-port 31337 \
+  --target-host 10.77.0.97 --http-port 31337 --tcp-port 31338 \
   --rps 1000 --duration 300 --workers 200 --output tests/stress_1000.json
 ```
 
