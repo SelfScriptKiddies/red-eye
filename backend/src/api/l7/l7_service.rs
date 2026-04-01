@@ -37,14 +37,20 @@ impl L7Service {
         value: Option<&str>,
         limit: i64,
     ) -> Result<(Vec<i32>, i64), Error> {
-        let stream_ids = self
-            .repository
-            .search_streams_by_header(name, value, limit)
-            .await?;
-        let total = self
-            .repository
-            .count_header_matches(name, value)
-            .await?;
+        let stream_ids = if name == "_path" {
+            self.repository
+                .search_streams_by_path(value.unwrap_or(""), limit)
+                .await?
+        } else if name == "_ip" {
+            self.repository
+                .search_streams_by_ip(value.unwrap_or(""), limit)
+                .await?
+        } else {
+            self.repository
+                .search_streams_by_header(name, value, limit)
+                .await?
+        };
+        let total = stream_ids.len() as i64;
         Ok((stream_ids, total))
     }
 

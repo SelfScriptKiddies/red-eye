@@ -133,20 +133,26 @@ impl L7Repository {
         .await
     }
 
-    /// Search streams by HTTP path
+    /// Search streams by HTTP path (supports prefix match with LIKE)
     pub async fn search_streams_by_path(
         &self,
         path: &str,
         limit: i64,
     ) -> Result<Vec<i32>, Error> {
+        // Use LIKE if path contains %, otherwise exact or prefix match
+        let pattern = if path.contains('%') {
+            path.to_string()
+        } else {
+            format!("{}%", path) // prefix match by default
+        };
         sqlx::query_scalar::<_, i32>(
             "SELECT DISTINCT stream_id
              FROM http_message
-             WHERE path = $1
+             WHERE path LIKE $1
              ORDER BY stream_id DESC
              LIMIT $2",
         )
-        .bind(path)
+        .bind(&pattern)
         .bind(limit)
         .fetch_all(&self.pgpool)
         .await
