@@ -7,7 +7,7 @@
 .packetsPage > div{
     overflow-x: hidden;
     transition: 0.3s;
-    scrollbar-color: #646cff #353535;
+    scrollbar-color: var(--re-accent) var(--re-bg-card);
     scrollbar-width: bold;
     height: 100%;
 }
@@ -51,41 +51,41 @@
 
 #root:has( div.packetsPage) .header {
     transition: 0.3s;
-    border-bottom: solid 3px #646cff;
+    border-bottom: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .header{
-    border-bottom: solid 3px #a51900;
+    border-bottom: solid 3px var(--re-danger);
 }
 
 #root:has( div.packetsPage) .tag-filter {
     transition: 0.3s;
-    border-bottom: solid 3px #646cff;
+    border-bottom: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .tag-filter{
-    border-bottom: solid 3px #a51900;
+    border-bottom: solid 3px var(--re-danger);
 }
 
 #root:has( div.packetsPage) .filterTape {
     transition: 0.3s;
-    border-right: solid 3px #646cff;
+    border-right: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .filterTape{
-    border-right: solid 3px #a51900;
+    border-right: solid 3px var(--re-danger);
 }
 
 #root:has( div.packetsPage) .packetData {
     transition: 0.3s;
-    border-left: solid 3px #646cff;
+    border-left: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .packetData{
-    border-left: solid 3px #a51900;
+    border-left: solid 3px var(--re-danger);
 }
 
 .side-btn {
     width: 50%;
     position: absolute;
     border-radius: 100% 100% 0 0;
-    background-color: #353535;
+    background-color: var(--re-bg-card);
     font-size: 16px;
 }
 .bottom-side-btn {
@@ -107,13 +107,13 @@
 }
 
 #root:has( div.eye__apple__focus) .packetsPage > div{
-    scrollbar-color: #a51900 #353535;
+    scrollbar-color: var(--re-danger) var(--re-bg-card);
 }
 .packetsPage button:hover {
-    border: solid 3px #646cff;
+    border: solid 3px var(--re-accent);
 }
 #root:has( div.eye__apple__focus) .packetsPage button:hover {
-    border: solid 3px #a51900;
+    border: solid 3px var(--re-danger);
 }
 .filterTape > div {
     text-align: center;
@@ -127,8 +127,8 @@
 
 /* Filter indicator in streams column */
 .filter-indicator {
-    background: #1a1a2e;
-    border: 1px solid #646cff;
+    background: var(--re-bg-highlight);
+    border: 1px solid var(--re-accent);
     border-radius: 8px;
     margin: 10px;
     padding: 10px 14px;
@@ -136,7 +136,7 @@
 }
 
 .filter-indicator > span {
-    color: #646cff;
+    color: var(--re-accent);
     font-weight: 600;
     font-size: 13px;
 }
@@ -152,12 +152,12 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    background: #2a2a4a;
-    border: 1px solid #444;
+    background: var(--re-bg-highlight);
+    border: 1px solid var(--re-border);
     border-radius: 12px;
     padding: 2px 8px;
     font-size: 11px;
-    color: #ccc;
+    color: var(--re-text-secondary);
     max-width: 250px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -167,37 +167,37 @@
 .filter-indicator-chip button {
     background: none !important;
     border: none !important;
-    color: #888;
+    color: var(--re-text-muted);
     cursor: pointer;
     font-size: 11px;
     padding: 0 !important;
 }
 
 .filter-indicator-chip button:hover {
-    color: #ff4444;
+    color: var(--re-error);
 }
 
 .filter-clear-btn {
     display: block;
     margin-top: 8px;
     background: transparent !important;
-    border: 1px solid #646cff !important;
+    border: 1px solid var(--re-accent) !important;
     border-radius: 4px;
-    color: #646cff;
+    color: var(--re-accent);
     cursor: pointer;
     font-size: 11px;
     padding: 3px 10px !important;
 }
 
 .filter-clear-btn:hover {
-    background: #646cff !important;
+    background: var(--re-accent) !important;
     color: white;
 }
 
 /* Header search bar */
 .header-search-bar {
-    background: #1a1a2e;
-    border-bottom: 2px solid #646cff;
+    background: var(--re-bg-highlight);
+    border-bottom: 2px solid var(--re-accent);
     padding: 10px 15px;
     flex-shrink: 0;
 }
@@ -213,8 +213,8 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    background: #2a2a4a;
-    border: 1px solid #646cff;
+    background: var(--re-bg-highlight);
+    border: 1px solid var(--re-accent);
     border-radius: 16px;
     padding: 3px 10px;
     font-size: 12px;
@@ -223,12 +223,12 @@
 }
 
 .header-chip-name {
-    color: #646cff;
+    color: var(--re-accent);
     flex-shrink: 0;
 }
 
 .header-chip-value {
-    color: #ccc;
+    color: var(--re-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -237,19 +237,19 @@
 .header-chip button {
     background: none !important;
     border: none !important;
-    color: #888;
+    color: var(--re-text-muted);
     cursor: pointer;
     font-size: 12px;
     padding: 0 !important;
 }
 
 .header-chip button:hover {
-    color: #ff4444;
+    color: var(--re-error);
 }
 
 .header-search-info {
     font-size: 12px;
-    color: #888;
+    color: var(--re-text-muted);
     margin-bottom: 4px;
 }
 
@@ -260,17 +260,17 @@
 }
 
 .stream-link-btn {
-    background: #353535 !important;
+    background: var(--re-bg-card) !important;
     border: 1px solid transparent !important;
     border-radius: 4px;
-    color: #646cff;
+    color: var(--re-accent);
     cursor: pointer;
     font-size: 12px;
     padding: 2px 8px !important;
 }
 
 .stream-link-btn:hover {
-    border-color: #646cff !important;
+    border-color: var(--re-accent) !important;
 }
 
 /* Packet toolbar */
@@ -279,7 +279,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 6px 10px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--re-border-light);
     flex-shrink: 0;
 }
 
@@ -290,10 +290,10 @@
 }
 
 .merge-toggle-btn, .toolbar-btn {
-    background: #2a2a2a !important;
-    border: 1px solid #444 !important;
+    background: var(--re-bg-deep) !important;
+    border: 1px solid var(--re-border) !important;
     border-radius: 4px;
-    color: #888;
+    color: var(--re-text-muted);
     cursor: pointer;
     font-size: 11px;
     padding: 3px 10px !important;
@@ -301,26 +301,26 @@
 }
 
 .merge-toggle-btn.active {
-    border-color: #646cff !important;
-    color: #646cff;
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
 }
 
 .toolbar-btn:hover {
-    border-color: #646cff !important;
-    color: #646cff;
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
 }
 
 .merge-reset-btn {
     background: transparent !important;
     border: none !important;
-    color: #666;
+    color: var(--re-text-dim);
     cursor: pointer;
     font-size: 11px;
     padding: 3px 6px !important;
 }
 
 .merge-reset-btn:hover {
-    color: #646cff;
+    color: var(--re-accent);
 }
 
 /* Export dropdown */
@@ -333,8 +333,8 @@
     top: 100%;
     right: 0;
     margin-top: 4px;
-    background: #2a2a2a;
-    border: 1px solid #646cff;
+    background: var(--re-bg-deep);
+    border: 1px solid var(--re-accent);
     border-radius: 6px;
     overflow: hidden;
     z-index: 100;
@@ -347,7 +347,7 @@
     text-align: left;
     background: transparent !important;
     border: none !important;
-    color: #ccc;
+    color: var(--re-text-secondary);
     padding: 8px 14px !important;
     font-size: 12px;
     cursor: pointer;
@@ -355,8 +355,8 @@
 }
 
 .export-menu button:hover {
-    background: #353535 !important;
-    color: #646cff;
+    background: var(--re-bg-card) !important;
+    color: var(--re-accent);
 }
 
 /* Merge toggle */
@@ -368,10 +368,10 @@
 }
 
 .merge-toggle-btn {
-    background: #2a2a2a !important;
-    border: 1px solid #444 !important;
+    background: var(--re-bg-deep) !important;
+    border: 1px solid var(--re-border) !important;
     border-radius: 4px;
-    color: #888;
+    color: var(--re-text-muted);
     cursor: pointer;
     font-size: 11px;
     padding: 3px 10px !important;
@@ -379,19 +379,19 @@
 }
 
 .merge-toggle-btn.active {
-    border-color: #646cff !important;
-    color: #646cff;
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
 }
 
 .merge-reset-btn {
     background: transparent !important;
     border: none !important;
-    color: #666;
+    color: var(--re-text-dim);
     cursor: pointer;
     font-size: 11px;
     padding: 3px 6px !important;
 }
 
 .merge-reset-btn:hover {
-    color: #646cff;
+    color: var(--re-accent);
 }

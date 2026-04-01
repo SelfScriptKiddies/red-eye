@@ -16,8 +16,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background-color: #242424;
-    border-right: solid 3px #646cff;
+    background-color: var(--re-bg);
+    border-right: solid 3px var(--re-accent);
     transition: 0.3s;
 }
 
@@ -26,7 +26,7 @@
 }
 
 #root:has(div.eye__apple__focus) .settings-column {
-    border-right-color: #a51900;
+    border-right-color: var(--re-danger);
 }
 
 #root:has(div.eye__apple__focus) .settings-column:last-child {
@@ -51,50 +51,50 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px;
-    border-bottom: solid 3px #646cff;
+    border-bottom: solid 3px var(--re-accent);
     transition: 0.3s;
     min-height: 70px;
     flex-shrink: 0;
 }
 
 #root:has(div.eye__apple__focus) .column-header {
-    border-bottom: solid 3px #a51900;
+    border-bottom: solid 3px var(--re-danger);
 }
 
 /* Header border for settings page */
 #root:has(div.SettingsPage) .header {
     transition: 0.3s;
-    border-bottom: solid 3px #646cff;
+    border-bottom: solid 3px var(--re-accent);
 }
 
 #root:has(div.SettingsPage):has(.eye__apple__focus) .header {
-    border-bottom: solid 3px #a51900;
+    border-bottom: solid 3px var(--re-danger);
 }
 
 .column-header h2 {
     font-size: 1.8em;
     margin: 0;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
 }
 
 .add-btn {
     padding: 8px 16px;
     font-size: 14px;
     border-radius: 20px;
-    background-color: #353535;
+    background-color: var(--re-bg-card);
     border: 1px solid transparent;
     cursor: pointer;
     transition: all 0.3s;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
 }
 
 .add-btn:hover {
     border-radius: 10px;
-    border-color: #646cff;
+    border-color: var(--re-accent);
 }
 
 #root:has(div.eye__apple__focus) .add-btn:hover {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 .service-options {
@@ -109,7 +109,7 @@
     padding: 3px 8px;
     border-radius: 10px;
     font-size: 11px;
-    background-color: #0a8a0a;
+    background-color: var(--re-success);
     color: white;
 }
 
@@ -140,13 +140,13 @@
     padding: 3px 8px;
     border-radius: 10px;
     font-size: 11px;
-    background-color: #353535;
-    border: 1px solid #646cff;
-    color: rgba(255, 255, 255, 0.87);
+    background-color: var(--re-bg-card);
+    border: 1px solid var(--re-accent);
+    color: var(--re-text);
 }
 
 #root:has(div.eye__apple__focus) .info-badge {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 .port-info {
@@ -159,16 +159,16 @@
     flex: 1;
     overflow-y: auto;
     padding: 15px;
-    scrollbar-color: #646cff #353535;
+    scrollbar-color: var(--re-accent) var(--re-bg-card);
     scrollbar-width: thin;
 }
 
 #root:has(div.eye__apple__focus) .items-list {
-    scrollbar-color: #a51900 #353535;
+    scrollbar-color: var(--re-danger) var(--re-bg-card);
 }
 
 .settings-card {
-    background-color: #353535;
+    background-color: var(--re-bg-card);
     border-radius: 15px;
     padding: 15px;
     margin-bottom: 12px;
@@ -179,7 +179,7 @@
 
 .settings-card:hover {
     border-radius: 8px;
-    background-color: #424242;
+    background-color: var(--re-bg-card-hover);
 }
 
 .settings-card .card-content {
@@ -191,18 +191,18 @@
 .settings-card h4 {
     font-size: 1.1em;
     margin: 0 0 5px 0;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
 }
 
 .settings-card p {
-    color: #ccc;
+    color: var(--re-text-secondary);
     margin: 3px 0;
     font-size: 13px;
 }
 
 .settings-card .pattern-text {
     font-family: monospace;
-    background-color: #1a1a1a;
+    background-color: var(--re-bg-input);
     padding: 6px 10px;
     border-radius: 5px;
     display: block;
@@ -222,19 +222,19 @@
     padding: 8px 12px;
     border-radius: 8px;
     border: 1px solid transparent;
-    background-color: #1a1a1a;
-    color: rgba(255, 255, 255, 0.87);
+    background-color: var(--re-bg-input);
+    color: var(--re-text);
     cursor: pointer;
     transition: all 0.25s;
     font-size: 13px;
 }
 
 .card-actions button:hover {
-    border-color: #646cff;
+    border-color: var(--re-accent);
 }
 
 #root:has(div.eye__apple__focus) .card-actions button:hover {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 .placeholder-content {
@@ -255,7 +255,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: var(--re-bg-overlay);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -273,19 +273,19 @@
 }
 
 .modal-content {
-    background-color: #2a2a2a;
+    background-color: var(--re-bg-deep);
     border-radius: 15px;
     width: 90%;
     max-width: 500px;
     max-height: 90vh;
     overflow-y: auto;
     animation: slideIn 0.3s ease-out;
-    scrollbar-color: #646cff #353535;
+    scrollbar-color: var(--re-accent) var(--re-bg-card);
     scrollbar-width: thin;
 }
 
 #root:has(div.eye__apple__focus) .modal-content {
-    scrollbar-color: #a51900 #353535;
+    scrollbar-color: var(--re-danger) var(--re-bg-card);
 }
 
 @keyframes slideIn {
@@ -304,24 +304,24 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px;
-    border-bottom: 2px solid #646cff;
+    border-bottom: 2px solid var(--re-accent);
 }
 
 #root:has(div.eye__apple__focus) .modal-header {
-    border-bottom-color: #a51900;
+    border-bottom-color: var(--re-danger);
 }
 
 .modal-header h3 {
     margin: 0;
     font-size: 1.5em;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
 }
 
 .close-btn {
     background: none;
     border: none;
     font-size: 24px;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
     cursor: pointer;
     padding: 0;
     width: 30px;
@@ -349,8 +349,8 @@
     margin-bottom: 15px;
     border-radius: 8px;
     border: 1px solid transparent;
-    background-color: #1a1a1a;
-    color: rgba(255, 255, 255, 0.87);
+    background-color: var(--re-bg-input);
+    color: var(--re-text);
     font-size: 16px;
     transition: border-color 0.25s;
 }
@@ -359,13 +359,13 @@
 .modal-body input[type="number"]:focus,
 .modal-body select.select-input:focus {
     outline: none;
-    border-color: #646cff;
+    border-color: var(--re-accent);
 }
 
 #root:has(div.eye__apple__focus) .modal-body input[type="text"]:focus,
 #root:has(div.eye__apple__focus) .modal-body input[type="number"]:focus,
 #root:has(div.eye__apple__focus) .modal-body select.select-input:focus {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 .modal-body select.select-input {
@@ -379,7 +379,7 @@
     margin-bottom: 12px;
     font-size: 14px;
     cursor: pointer;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
 }
 
 .checkbox-label input[type="checkbox"] {
@@ -403,7 +403,7 @@
     display: block;
     margin-bottom: 10px;
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.87);
+    color: var(--re-text);
 }
 
 .color-slider {
@@ -431,7 +431,7 @@
     height: 20px;
     border-radius: 50%;
     background: white;
-    border: 2px solid #646cff;
+    border: 2px solid var(--re-accent);
     cursor: pointer;
 }
 
@@ -440,16 +440,16 @@
     height: 20px;
     border-radius: 50%;
     background: white;
-    border: 2px solid #646cff;
+    border: 2px solid var(--re-accent);
     cursor: pointer;
 }
 
 #root:has(div.eye__apple__focus) .color-slider::-webkit-slider-thumb {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 #root:has(div.eye__apple__focus) .color-slider::-moz-range-thumb {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 .color-preview {
@@ -463,7 +463,7 @@
     display: flex;
     gap: 10px;
     padding: 20px;
-    border-top: 2px solid #353535;
+    border-top: 2px solid var(--re-bg-card);
 }
 
 .modal-footer button {
@@ -471,35 +471,35 @@
     padding: 12px 24px;
     border-radius: 8px;
     border: 1px solid transparent;
-    background-color: #1a1a1a;
-    color: rgba(255, 255, 255, 0.87);
+    background-color: var(--re-bg-input);
+    color: var(--re-text);
     cursor: pointer;
     transition: all 0.25s;
     font-size: 16px;
 }
 
 .modal-footer button:hover {
-    border-color: #646cff;
+    border-color: var(--re-accent);
 }
 
 #root:has(div.eye__apple__focus) .modal-footer button:hover {
-    border-color: #a51900;
+    border-color: var(--re-danger);
 }
 
 .modal-footer button:last-child {
-    background-color: #646cff;
+    background-color: var(--re-accent);
 }
 
 .modal-footer button:last-child:hover {
-    background-color: #535bf2;
+    background-color: var(--re-accent-hover);
 }
 
 #root:has(div.eye__apple__focus) .modal-footer button:last-child {
-    background-color: #a51900;
+    background-color: var(--re-danger);
 }
 
 #root:has(div.eye__apple__focus) .modal-footer button:last-child:hover {
-    background-color: #8a1500;
+    background-color: var(--re-danger-hover);
 }
 
 @media (prefers-color-scheme: light) {

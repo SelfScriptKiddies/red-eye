@@ -13,7 +13,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    background: #1a1a2e;
+    background: var(--re-bg-highlight);
     border: 1px solid #ff6b6b;
     border-left: 4px solid #ff6b6b;
     border-radius: 8px;
@@ -57,13 +57,13 @@
 
 .alert-toast-detail {
     font-size: 11px;
-    color: #888;
+    color: var(--re-text-muted);
 }
 
 .alert-toast-close {
     background: none !important;
     border: none !important;
-    color: #666;
+    color: var(--re-text-dim);
     cursor: pointer;
     font-size: 14px;
     padding: 0 !important;

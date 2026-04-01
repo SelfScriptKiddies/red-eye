@@ -5,7 +5,7 @@
   margin-top: 130px;
   display: flex;
   flex-direction: column;
-  border-top: 3px solid #646cff;
+  border-top: 3px solid var(--re-accent);
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -21,7 +21,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  border-right: 3px solid #646cff;
+  border-right: 3px solid var(--re-accent);
   overflow-y: auto;
   transition: border-color 0.3s;
 }
@@ -35,10 +35,10 @@
   justify-content: space-between;
   align-items: center;
   padding: 15px 20px;
-  border-bottom: 2px solid #646cff;
+  border-bottom: 2px solid var(--re-accent);
   position: sticky;
   top: 0;
-  background: #242424;
+  background: var(--re-bg);
   z-index: 10;
   transition: border-color 0.3s;
 }
@@ -50,7 +50,7 @@
 
 .agent-count {
   font-size: 14px;
-  color: #888;
+  color: var(--re-text-muted);
 }
 
 .items-list {
@@ -60,7 +60,7 @@
 
 /* Agent Cards */
 .agent-card {
-  background: #353535;
+  background: var(--re-bg-card);
   border-radius: 15px;
   padding: 15px;
   margin-bottom: 12px;
@@ -71,12 +71,12 @@
 
 .agent-card:hover {
   border-radius: 8px;
-  border-color: #646cff;
+  border-color: var(--re-accent);
 }
 
 .agent-card.selected {
-  border-color: #646cff;
-  background: #2a2a4a;
+  border-color: var(--re-accent);
+  background: var(--re-bg-highlight);
 }
 
 .agent-card.offline {
@@ -98,12 +98,12 @@
 }
 
 .status-dot.online {
-  background: #0a8a0a;
-  box-shadow: 0 0 6px #0a8a0a;
+  background: var(--re-success);
+  box-shadow: 0 0 6px var(--re-success);
 }
 
 .status-dot.offline {
-  background: #666;
+  background: var(--re-text-dim);
 }
 
 .agent-name {
@@ -123,11 +123,11 @@
 }
 
 .status-text.online {
-  color: #0a8a0a;
+  color: var(--re-success);
 }
 
 .status-text.offline {
-  color: #666;
+  color: var(--re-text-dim);
 }
 
 /* Badges */
@@ -139,12 +139,12 @@
 }
 
 .info-badge {
-  border: 1px solid #646cff;
-  color: #646cff;
+  border: 1px solid var(--re-accent);
+  color: var(--re-accent);
 }
 
 .option-badge {
-  background-color: #0a8a0a;
+  background-color: var(--re-success);
   color: white;
 }
 
@@ -159,7 +159,7 @@
 .detail-section {
   margin-bottom: 8px;
   padding-bottom: 12px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--re-border-light);
 }
 
 .detail-section:last-child {
@@ -169,7 +169,7 @@
 .detail-section h3 {
   margin: 0 0 10px 0;
   font-size: 14px;
-  color: #888;
+  color: var(--re-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -186,13 +186,13 @@
 }
 
 .text-muted {
-  color: #666;
+  color: var(--re-text-dim);
   font-size: 13px;
 }
 
 /* Settings Cards (for proxy rules, services) */
 .settings-card {
-  background: #2a2a2a;
+  background: var(--re-bg-deep);
   border-radius: 8px;
   padding: 12px 15px;
   margin-bottom: 8px;
@@ -219,7 +219,7 @@
 .card-actions button {
   background: none;
   border: 1px solid transparent;
-  color: #888;
+  color: var(--re-text-muted);
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
@@ -227,8 +227,8 @@
 }
 
 .card-actions button:hover {
-  color: #ff4444;
-  border-color: #ff4444;
+  color: var(--re-error);
+  border-color: var(--re-error);
 }
 
 .card-right {
@@ -239,7 +239,7 @@
 }
 
 .port-label {
-  color: #888;
+  color: var(--re-text-muted);
   font-size: 13px;
   font-family: monospace;
 }
@@ -251,12 +251,12 @@
 }
 
 .btn-danger {
-  border-color: #ff4444 !important;
-  color: #ff4444 !important;
+  border-color: var(--re-error) !important;
+  color: var(--re-error) !important;
 }
 
 .btn-danger:hover {
-  background: #ff4444 !important;
+  background: var(--re-error) !important;
   color: white !important;
 }
 
@@ -268,7 +268,7 @@
 .action-group h3 {
   margin: 0 0 12px 0;
   font-size: 14px;
-  color: #888;
+  color: var(--re-text-muted);
   text-transform: uppercase;
   letter-spacing: 1px;
 }
@@ -278,7 +278,7 @@
   width: 100%;
   padding: 12px 16px;
   margin-bottom: 8px;
-  background: #353535;
+  background: var(--re-bg-card);
   border: 1px solid transparent;
   border-radius: 8px;
   color: white;
@@ -289,8 +289,8 @@
 }
 
 .action-btn:hover:not(:disabled) {
-  border-color: #646cff;
-  background: #2a2a4a;
+  border-color: var(--re-accent);
+  background: var(--re-bg-highlight);
 }
 
 .action-btn:disabled {
@@ -299,7 +299,7 @@
 }
 
 .action-btn.broadcast {
-  border-color: #0a8a0a;
+  border-color: var(--re-success);
 }
 
 .action-btn.broadcast:hover {
@@ -310,16 +310,16 @@
 .small-btn {
   padding: 4px 12px;
   font-size: 12px;
-  background: #353535;
-  border: 1px solid #646cff;
+  background: var(--re-bg-card);
+  border: 1px solid var(--re-accent);
   border-radius: 6px;
-  color: #646cff;
+  color: var(--re-accent);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .small-btn:hover {
-  background: #646cff;
+  background: var(--re-accent);
   color: white;
 }
 
@@ -330,7 +330,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--re-bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -339,7 +339,7 @@
 }
 
 .modal-content {
-  background: #242424;
+  background: var(--re-bg);
   border-radius: 12px;
   width: 90%;
   max-width: 500px;
@@ -357,7 +357,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 15px 20px;
-  border-bottom: 2px solid #646cff;
+  border-bottom: 2px solid var(--re-accent);
 }
 
 .modal-header h3 {
@@ -367,7 +367,7 @@
 .close-btn {
   background: none;
   border: none;
-  color: #888;
+  color: var(--re-text-muted);
   font-size: 20px;
   cursor: pointer;
 }
@@ -385,7 +385,7 @@
   width: calc(100% - 24px);
   padding: 12px;
   margin-bottom: 12px;
-  background: #1a1a1a;
+  background: var(--re-bg-input);
   border: 1px solid transparent;
   border-radius: 8px;
   color: white;
@@ -395,7 +395,7 @@
 
 .modal-body input:focus,
 .modal-body .select-input:focus {
-  border-color: #646cff;
+  border-color: var(--re-accent);
   outline: none;
 }
 
@@ -409,7 +409,7 @@
   justify-content: flex-end;
   gap: 10px;
   padding: 15px 20px;
-  border-top: 2px solid #353535;
+  border-top: 2px solid var(--re-bg-card);
 }
 
 .modal-footer button {
@@ -419,20 +419,20 @@
   cursor: pointer;
   font-size: 14px;
   transition: all 0.2s;
-  background: #353535;
+  background: var(--re-bg-card);
   color: white;
 }
 
 .modal-footer button:hover {
-  border-color: #646cff;
+  border-color: var(--re-accent);
 }
 
 .modal-footer button:last-child {
-  background: #646cff;
+  background: var(--re-accent);
 }
 
 .modal-footer button:last-child:hover {
-  background: #535bf2;
+  background: var(--re-accent-hover);
 }
 
 /* Filter Rows */
@@ -456,8 +456,8 @@
 
 .remove-btn {
   background: none;
-  border: 1px solid #ff4444;
-  color: #ff4444;
+  border: 1px solid var(--re-error);
+  color: var(--re-error);
   cursor: pointer;
   padding: 8px 12px;
   border-radius: 6px;
@@ -467,7 +467,7 @@
 }
 
 .remove-btn:hover {
-  background: #ff4444;
+  background: var(--re-error);
   color: white;
 }
 
@@ -475,9 +475,9 @@
   width: 100%;
   padding: 10px;
   background: transparent;
-  border: 1px dashed #646cff;
+  border: 1px dashed var(--re-accent);
   border-radius: 8px;
-  color: #646cff;
+  color: var(--re-accent);
   cursor: pointer;
   font-size: 14px;
   margin-top: 8px;
@@ -493,7 +493,7 @@
   justify-content: center;
   align-items: center;
   height: 200px;
-  color: #666;
+  color: var(--re-text-dim);
 }
 
 /* Animations */
@@ -517,49 +517,49 @@
 }
 
 .agents-column::-webkit-scrollbar-thumb {
-  background: #646cff;
+  background: var(--re-accent);
   border-radius: 3px;
 }
 
 /* Focus mode (Red Eye) */
 body:has(.eye__apple__focus) .AgentsPage {
-  border-top-color: #a51900;
+  border-top-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .column-header {
-  border-bottom-color: #a51900;
+  border-bottom-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .agents-column {
-  border-right-color: #a51900;
+  border-right-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .agent-card:hover,
 body:has(.eye__apple__focus) .agent-card.selected {
-  border-color: #a51900;
+  border-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .info-badge {
-  border-color: #a51900;
-  color: #a51900;
+  border-color: var(--re-danger);
+  color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .modal-header {
-  border-bottom-color: #a51900;
+  border-bottom-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .action-btn:hover:not(:disabled) {
-  border-color: #a51900;
+  border-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .modal-footer button:last-child {
-  background: #a51900;
+  background: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .modal-footer button:last-child:hover {
-  background: #8a1500;
+  background: var(--re-danger-hover);
 }
 
 body:has(.eye__apple__focus) .agents-column::-webkit-scrollbar-thumb {
-  background: #a51900;
+  background: var(--re-danger);
 }

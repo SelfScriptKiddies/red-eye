@@ -9,7 +9,7 @@ h2 {
     align-items: center;
 }
 .eye:has(> .eye__apple__focus) + h2 > span.RedEyeSpan{ 
-    color: #cc2000;
+    color: var(--re-danger-hover);
 }
 .eye + h2 > span.RedEyeSpan{ 
     color: #0079b6;

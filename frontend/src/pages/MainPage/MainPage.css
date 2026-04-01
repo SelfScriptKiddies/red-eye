@@ -1,7 +1,7 @@
 .MainPage {
     width: 100vw;
     margin-top: 130px;
-    border-top: 3px solid #646cff;
+    border-top: 3px solid var(--re-accent);
     padding: 20px 30px;
     box-sizing: border-box;
 }
@@ -15,10 +15,10 @@
 
 .stat-card {
     flex: 1;
-    background: #2a2a2a;
+    background: var(--re-bg-deep);
     border-radius: 8px;
     padding: 16px 20px;
-    border-left: 3px solid #646cff;
+    border-left: 3px solid var(--re-accent);
 }
 
 .stat-value {
@@ -29,21 +29,21 @@
 
 .stat-total {
     font-size: 16px;
-    color: #666;
+    color: var(--re-text-dim);
     font-weight: normal;
 }
 
 .stat-active {
-    color: #0a8a0a;
+    color: var(--re-success);
 }
 
 .stat-inactive {
-    color: #666;
+    color: var(--re-text-dim);
 }
 
 .stat-label {
     font-size: 12px;
-    color: #888;
+    color: var(--re-text-muted);
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -57,7 +57,7 @@
 
 .dashboard-column {
     flex: 1;
-    background: #2a2a2a;
+    background: var(--re-bg-deep);
     border-radius: 8px;
     padding: 16px;
     max-height: calc(100vh - 330px);
@@ -67,11 +67,11 @@
 .dashboard-section-title {
     margin: 0 0 14px 0;
     font-size: 13px;
-    color: #888;
+    color: var(--re-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding-bottom: 10px;
-    border-bottom: 2px solid #646cff;
+    border-bottom: 2px solid var(--re-accent);
 }
 
 /* Tag Metrics */
@@ -80,7 +80,7 @@
     align-items: center;
     gap: 10px;
     padding: 6px 0;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--re-border-light);
 }
 
 .tag-metric-row:last-child {
@@ -90,7 +90,7 @@
 .tag-metric-name {
     flex: 1;
     font-size: 13px;
-    color: #ccc;
+    color: var(--re-text-secondary);
 }
 
 .sparkline {
@@ -100,7 +100,7 @@
 .tag-metric-count {
     font-size: 14px;
     font-weight: bold;
-    color: #646cff;
+    color: var(--re-accent);
     min-width: 30px;
     text-align: right;
 }
@@ -111,7 +111,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 6px 0;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--re-border-light);
 }
 
 .recent-stream-row:last-child {
@@ -128,19 +128,19 @@
 
 .recent-stream-service {
     font-size: 13px;
-    color: #ccc;
+    color: var(--re-text-secondary);
 }
 
 .recent-stream-meta {
     display: flex;
     gap: 10px;
     font-size: 12px;
-    color: #888;
+    color: var(--re-text-muted);
     flex-shrink: 0;
 }
 
 .recent-stream-time {
-    color: #666;
+    color: var(--re-text-dim);
 }
 
 /* Agent Summary */
@@ -149,7 +149,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 8px 0;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--re-border-light);
 }
 
 .agent-summary-row:last-child {
@@ -165,7 +165,7 @@
 .agent-summary-name {
     font-size: 14px;
     font-weight: 500;
-    color: #ccc;
+    color: var(--re-text-secondary);
 }
 
 .agent-summary-right {
@@ -176,12 +176,12 @@
 
 .agent-summary-ports {
     font-size: 12px;
-    color: #666;
+    color: var(--re-text-dim);
     font-family: monospace;
 }
 
 .empty-state {
-    color: #555;
+    color: var(--re-text-faint);
     font-size: 13px;
     text-align: center;
     padding: 20px;
@@ -196,12 +196,12 @@
 }
 
 .status-dot.online {
-    background: #0a8a0a;
-    box-shadow: 0 0 4px #0a8a0a;
+    background: var(--re-success);
+    box-shadow: 0 0 4px var(--re-success);
 }
 
 .status-dot.offline {
-    background: #666;
+    background: var(--re-text-dim);
 }
 
 /* Badge (reused) */
@@ -213,12 +213,12 @@
 }
 
 .info-badge {
-    border: 1px solid #646cff;
-    color: #646cff;
+    border: 1px solid var(--re-accent);
+    color: var(--re-accent);
 }
 
 .option-badge {
-    background-color: #0a8a0a;
+    background-color: var(--re-success);
     color: white;
 }
 
@@ -228,27 +228,27 @@
 }
 
 .dashboard-column::-webkit-scrollbar-thumb {
-    background: #646cff;
+    background: var(--re-accent);
     border-radius: 2px;
 }
 
 /* Focus mode */
 body:has(.eye__apple__focus) .MainPage {
-    border-top-color: #a51900;
+    border-top-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .stat-card {
-    border-left-color: #a51900;
+    border-left-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .dashboard-section-title {
-    border-bottom-color: #a51900;
+    border-bottom-color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .tag-metric-count {
-    color: #a51900;
+    color: var(--re-danger);
 }
 
 body:has(.eye__apple__focus) .sparkline polyline {
-    stroke: #a51900;
+    stroke: var(--re-danger);
 }

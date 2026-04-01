@@ -1,26 +1,71 @@
 :root {
+  /* ── Colors ── */
+  --re-accent: #646cff;
+  --re-accent-hover: #535bf2;
+  --re-accent-soft: rgba(100, 108, 255, 0.12);
+  --re-danger: #a51900;
+  --re-danger-hover: #cc2000;
+  --re-danger-soft: rgba(165, 25, 0, 0.12);
+  --re-success: #0a8a0a;
+  --re-error: #ff4444;
+  --re-error-soft: rgba(255, 68, 68, 0.12);
+  --re-warning: #e06000;
+
+  /* ── Surfaces ── */
+  --re-bg: #242424;
+  --re-bg-card: #353535;
+  --re-bg-card-hover: #424242;
+  --re-bg-input: #1a1a1a;
+  --re-bg-deep: #2a2a2a;
+  --re-bg-highlight: #2a2a4a;
+  --re-bg-overlay: rgba(0, 0, 0, 0.7);
+
+  /* ── Text ── */
+  --re-text: rgba(255, 255, 255, 0.87);
+  --re-text-secondary: #ccc;
+  --re-text-muted: #888;
+  --re-text-dim: #666;
+  --re-text-faint: #555;
+
+  /* ── Borders ── */
+  --re-border: #444;
+  --re-border-light: #333;
+
+  /* ── Radii ── */
+  --re-radius-sm: 4px;
+  --re-radius-md: 8px;
+  --re-radius-lg: 12px;
+  --re-radius-xl: 20px;
+
+  /* ── Font sizes ── */
+  --re-font-xs: 11px;
+  --re-font-sm: 12px;
+  --re-font-md: 14px;
+  --re-font-lg: 16px;
+
+  /* ── Layout ── */
+  --re-header-height: 130px;
+
+  /* ── Base ── */
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
   color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
+  color: var(--re-text);
+  background-color: var(--re-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
 }
 
 a {
   font-weight: 500;
-  color: #646cff;
+  color: var(--re-accent);
   text-decoration: inherit;
 }
 a:hover {
-  color: #535bf2;
+  color: var(--re-accent-hover);
 }
 
 body {
@@ -42,36 +87,24 @@ h1 {
 }
 
 button {
-  border-radius: 8px;
+  border-radius: var(--re-radius-md);
   border: 1px solid transparent;
   padding: 0.6em 1.2em;
   font-size: 1em;
   font-weight: 500;
   font-family: inherit;
-  background-color: #1a1a1a;
+  background-color: var(--re-bg-input);
   cursor: pointer;
   transition: border-color 0.25s;
 }
 button:hover {
-  border-color: #0079b6;
+  border-color: var(--re-accent);
 }
 button:focus,
 button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
-}
 .header {
   display: flex;
   justify-content: space-between;
@@ -81,12 +114,12 @@ button:focus-visible {
   width: 100%;
   padding: 0 5%;
   box-sizing: border-box;
-  height: 130px; /*Этак константа используется в других стилях*/
+  height: var(--re-header-height);
 }
-.header:has( .eye__apple__focus) a{
+.header:has(.eye__apple__focus) a {
   color: #f00;
 }
-.header a{
+.header a {
   text-decoration: none;
   color: inherit;
 }
@@ -105,7 +138,7 @@ button:focus-visible {
   width: 76px;
   height: 68px;
   justify-content: center;
-  border: 1.5px solid #444;
+  border: 1.5px solid var(--re-border);
   border-radius: 10px;
   background: transparent;
   cursor: pointer;
@@ -113,29 +146,29 @@ button:focus-visible {
 }
 
 .nav-card:hover {
-  border-color: #646cff;
+  border-color: var(--re-accent);
   background: rgba(100, 108, 255, 0.08);
 }
 
 .nav-card--active {
-  border-color: #646cff;
-  background: rgba(100, 108, 255, 0.12);
+  border-color: var(--re-accent);
+  background: var(--re-accent-soft);
 }
 
 .nav-card-icon {
-  color: #888;
+  color: var(--re-text-muted);
   display: flex;
   transition: color 0.2s;
 }
 
 .nav-card:hover .nav-card-icon,
 .nav-card--active .nav-card-icon {
-  color: #646cff;
+  color: var(--re-accent);
 }
 
 .nav-card-label {
   font-size: 9px;
-  color: #666;
+  color: var(--re-text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   transition: color 0.2s;
@@ -149,14 +182,15 @@ button:focus-visible {
 /* Focus mode nav */
 body:has(.eye__apple__focus) .nav-card:hover,
 body:has(.eye__apple__focus) .nav-card--active {
-  border-color: #a51900;
-  background: rgba(165, 25, 0, 0.12);
+  border-color: var(--re-danger);
+  background: var(--re-danger-soft);
 }
 
 body:has(.eye__apple__focus) .nav-card:hover .nav-card-icon,
 body:has(.eye__apple__focus) .nav-card--active .nav-card-icon {
-  color: #a51900;
+  color: var(--re-danger);
 }
+
 main.content {
   width: 100vw;
   display: flex;
