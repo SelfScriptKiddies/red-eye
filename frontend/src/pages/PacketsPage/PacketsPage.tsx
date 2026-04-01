@@ -574,6 +574,14 @@ export function PacketsPage() {
                         onStreamClick={handleStreamClick}
                         onFavoriteToggle={handleFavoriteToggle}
                         onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
+                        onIpBan={(ip: string) => {
+                            if (!confirm(`Забанить IP ${ip} на всех агентах?`)) return;
+                            fetch('/api/protect/ip-ban', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ agent_id: '_all', ip, ban: true })
+                            });
+                        }}
                         tagColors={tagColors}
                     />
                 })}

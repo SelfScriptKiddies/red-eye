@@ -236,6 +236,21 @@ impl HarpoonEngine {
         self.nft.apply_rules(rules)
     }
 
+    /// Ban an IP via nftables.
+    pub fn ban_ip(&mut self, ip: &str) -> Result<()> {
+        self.nft.ban_ip(ip)
+    }
+
+    /// Unban an IP.
+    pub fn unban_ip(&mut self, ip: &str) -> Result<()> {
+        self.nft.unban_ip(ip)
+    }
+
+    /// List banned IPs.
+    pub fn banned_ips(&self) -> Vec<String> {
+        self.nft.banned_ips().to_vec()
+    }
+
     /// Clear all nftables rules.
     pub fn clear_nft_rules(&mut self) -> Result<()> {
         self.nft.clear()

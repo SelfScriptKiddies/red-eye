@@ -90,6 +90,10 @@ pub enum AgentCommand {
     ReplayStop {
         name: String,
     },
+
+    // IP ban via nftables
+    IpBan { ip: String },
+    IpUnban { ip: String },
 }
 
 pub fn spawn_command_listener(
@@ -296,6 +300,20 @@ async fn handle_command(
             info!("Stopping replay forward '{}'", name);
             if let Err(e) = harpoon.lock().await.remove_rule(&rule_name).await {
                 error!("Failed to stop replay '{}': {}", name, e);
+            }
+        }
+
+        AgentCommand::IpBan { ip } => {
+            info!("Banning IP: {}", ip);
+            if let Err(e) = harpoon.lock().await.ban_ip(&ip) {
+                error!("Failed to ban IP '{}': {}", ip, e);
+            }
+        }
+
+        AgentCommand::IpUnban { ip } => {
+            info!("Unbanning IP: {}", ip);
+            if let Err(e) = harpoon.lock().await.unban_ip(&ip) {
+                error!("Failed to unban IP '{}': {}", ip, e);
             }
         }
     }

@@ -17,6 +17,7 @@ pub struct RedirectRule {
 pub struct NftablesManager {
     initialized: bool,
     rules: Vec<RedirectRule>,
+    banned_ips: Vec<String>,
 }
 
 impl NftablesManager {
@@ -24,6 +25,7 @@ impl NftablesManager {
         Self {
             initialized: false,
             rules: Vec::new(),
+            banned_ips: Vec::new(),
         }
     }
 
@@ -70,6 +72,46 @@ impl NftablesManager {
             );
         }
         Ok(())
+    }
+
+    /// Ban an IP address (drop all traffic from it).
+    pub fn ban_ip(&mut self, ip: &str) -> Result<()> {
+        self.ensure_table()?;
+        // Add drop rule for this IP
+        run_nft(&format!(
+            "add rule inet {} {} ip saddr {} drop",
+            TABLE_NAME, CHAIN_NAME, ip
+        ))?;
+        if !self.banned_ips.contains(&ip.to_string()) {
+            self.banned_ips.push(ip.to_string());
+        }
+        info!("Banned IP: {}", ip);
+        Ok(())
+    }
+
+    /// Unban an IP address.
+    pub fn unban_ip(&mut self, ip: &str) -> Result<()> {
+        self.banned_ips.retain(|i| i != ip);
+        // Re-apply all rules (flush chain, re-add redirects + remaining bans)
+        if self.initialized {
+            self.flush_chain()?;
+            for rule in &self.rules.clone() {
+                self.add_redirect_rule(rule)?;
+            }
+            for banned in &self.banned_ips.clone() {
+                let _ = run_nft(&format!(
+                    "add rule inet {} {} ip saddr {} drop",
+                    TABLE_NAME, CHAIN_NAME, banned
+                ));
+            }
+        }
+        info!("Unbanned IP: {}", ip);
+        Ok(())
+    }
+
+    /// List currently banned IPs.
+    pub fn banned_ips(&self) -> &[String] {
+        &self.banned_ips
     }
 
     /// Delete the entire nftables table.

@@ -1,7 +1,6 @@
 use actix_identity::Identity;
 use actix_web::{post, web, HttpResponse, Responder};
 use serde::Deserialize;
-use sqlx::PgPool;
 use std::sync::Arc;
 
 use crate::api::agent::agent_service::AgentService;
@@ -12,14 +11,10 @@ pub struct ProtectRequest {
     pub service_id: i32,
     pub agent_id: String,
     pub enable: bool,
-    /// Enable TLS MITM (decrypt + re-encrypt)
     #[serde(default)]
     pub tls_mitm: bool,
-}
-
-/// Calculate harpoon proxy port from service port
-fn proxy_port(service_port: i32) -> u16 {
-    (service_port + 10000) as u16
+    /// Custom proxy port (if not set, defaults to service_port + 10000)
+    pub proxy_port: Option<u16>,
 }
 
 /// Generate proxy rule name from service
@@ -27,16 +22,20 @@ fn proxy_name(service_name: &str) -> String {
     format!("protect-{}", service_name.replace(' ', "-").to_lowercase())
 }
 
-#[utoipa::path(
-    post,
-    path = "/api/protect",
-    responses(
-        (status = 200, description = "Protection toggled"),
-        (status = 400, description = "Bad request"),
-        (status = 401, description = "Unauthorized")
-    ),
-    tag = "protect"
-)]
+/// Default proxy port
+fn default_proxy_port(service_port: i32) -> u16 {
+    (service_port + 10000) as u16
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct IpBanRequest {
+    pub agent_id: String,
+    pub ip: String,
+    pub ban: bool,
+}
+
+#[utoipa::path(post, path = "/api/protect", tag = "protect",
+    responses((status = 200, description = "Protection toggled")))]
 #[post("/protect")]
 async fn toggle_protection(
     _identity: Identity,
@@ -44,14 +43,13 @@ async fn toggle_protection(
     service_service: web::Data<ServiceService>,
     body: web::Json<ProtectRequest>,
 ) -> impl Responder {
-    // Get service info
     let service = match service_service.get_service_by_id(body.service_id).await {
         Ok(s) => s,
         Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"error": "Service not found"})),
     };
 
     let rule_name = proxy_name(&service.name);
-    let harpoon_port = proxy_port(service.port);
+    let harpoon_port = body.proxy_port.unwrap_or_else(|| default_proxy_port(service.port));
 
     if body.enable {
         let mut command = serde_json::json!({
@@ -93,6 +91,35 @@ async fn toggle_protection(
     }
 }
 
+#[utoipa::path(post, path = "/api/protect/ip-ban", tag = "protect",
+    responses((status = 200, description = "IP ban toggled")))]
+#[post("/protect/ip-ban")]
+async fn toggle_ip_ban(
+    _identity: Identity,
+    agent_service: web::Data<Arc<AgentService>>,
+    body: web::Json<IpBanRequest>,
+) -> impl Responder {
+    let command = if body.ban {
+        serde_json::json!({"type": "IpBan", "ip": body.ip})
+    } else {
+        serde_json::json!({"type": "IpUnban", "ip": body.ip})
+    };
+
+    let action = if body.ban { "banned" } else { "unbanned" };
+
+    if body.agent_id == "_all" {
+        let results = agent_service.broadcast_command(&[], &command).await;
+        let success = results.iter().filter(|(_, r)| r.is_ok()).count();
+        HttpResponse::Ok().json(serde_json::json!({"status": action, "ip": body.ip, "agents": success}))
+    } else {
+        match agent_service.send_command(&body.agent_id, &command).await {
+            Ok(_) => HttpResponse::Ok().json(serde_json::json!({"status": action, "ip": body.ip})),
+            Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e})),
+        }
+    }
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(toggle_protection);
+    cfg.service(toggle_protection)
+        .service(toggle_ip_ban);
 }

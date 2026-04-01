@@ -75,6 +75,32 @@
     background: rgba(100, 108, 255, 0.2);
 }
 
+.stream-ip-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.ip-ban-btn {
+    background: none !important;
+    border: none !important;
+    color: #666;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 2px !important;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.stream-card:hover .ip-ban-btn {
+    opacity: 0.5;
+}
+
+.ip-ban-btn:hover {
+    opacity: 1 !important;
+    color: #ff4444;
+}
+
 .stream-packet-count {
     font-size: 0.85rem;
     color: #999;

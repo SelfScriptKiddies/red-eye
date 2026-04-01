@@ -1,7 +1,7 @@
 import "./StreamCard.css"
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFilter, tagColors = {} }) {
+export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {
@@ -88,9 +88,15 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFil
             </div>
             <div className="info-block column">
                 {streamObj.dst_ip && (
-                    <span className="stream-ip" onClick={(e) => { e.stopPropagation(); onIpFilter?.(streamObj.dst_ip); }}
-                        title={`Фильтр по IP ${streamObj.dst_ip}`} style={{ cursor: onIpFilter ? 'pointer' : 'default' }}>
-                        {streamObj.dst_ip}
+                    <span className="stream-ip-group">
+                        <span className="stream-ip" onClick={(e) => { e.stopPropagation(); onIpFilter?.(streamObj.dst_ip); }}
+                            title={`Фильтр по IP`}>
+                            {streamObj.dst_ip}
+                        </span>
+                        {onIpBan && (
+                            <button className="ip-ban-btn" onClick={(e) => { e.stopPropagation(); onIpBan(streamObj.dst_ip); }}
+                                title={`Забанить ${streamObj.dst_ip}`}>✕</button>
+                        )}
                     </span>
                 )}
                 <span className="stream-time">{moment.unix(streamObj.first_packet_time).format("HH:mm:ss")}-{moment.unix(streamObj.last_packet_time).format("HH:mm:ss")}</span>
