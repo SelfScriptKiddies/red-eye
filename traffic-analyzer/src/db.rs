@@ -236,7 +236,7 @@ impl DB {
         .map(|row| row.get::<i32, _>("id"))
     }
 
-    /// Insert a gRPC message
+    /// Insert a gRPC message with deduplicated body
     pub async fn insert_grpc_message(
         &self,
         stream_id: usize,
@@ -247,8 +247,26 @@ impl DB {
         decoded_json: &str,
         timestamp: i64,
     ) -> Result<i32, Error> {
+        // Dedup body via hash (like header_set)
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        decoded_json.hash(&mut hasher);
+        let body_hash = hasher.finish() as i64;
+
+        // Upsert into grpc_body_set
+        let body_set_id = sqlx::query_scalar::<_, i32>(
+            "INSERT INTO grpc_body_set (hash, decoded_json) VALUES ($1, $2)
+             ON CONFLICT (hash) DO UPDATE SET hash = grpc_body_set.hash
+             RETURNING id"
+        )
+        .bind(body_hash)
+        .bind(decoded_json)
+        .fetch_one(&self.pgpool)
+        .await?;
+
         sqlx::query(
-            "INSERT INTO grpc_message (stream_id, http_message_id, service_name, method_name, is_request, decoded_json, timestamp)
+            "INSERT INTO grpc_message (stream_id, http_message_id, service_name, method_name, is_request, body_set_id, timestamp)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id"
         )
@@ -257,7 +275,7 @@ impl DB {
         .bind(service_name)
         .bind(method_name)
         .bind(is_request)
-        .bind(decoded_json)
+        .bind(body_set_id)
         .bind(timestamp)
         .fetch_one(&self.pgpool)
         .await

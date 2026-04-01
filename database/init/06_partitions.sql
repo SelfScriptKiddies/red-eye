@@ -94,9 +94,11 @@ BEGIN
     dropped := dropped + drop_old_partitions('tag', cutoff_ts);
     dropped := dropped + drop_old_partitions('packets', cutoff_ts);
 
-    -- Cleanup orphaned header sets (no messages reference them)
+    -- Cleanup orphaned header/body sets
     DELETE FROM header_set
     WHERE id NOT IN (SELECT DISTINCT header_set_id FROM http_message WHERE header_set_id IS NOT NULL);
+    DELETE FROM grpc_body_set
+    WHERE id NOT IN (SELECT DISTINCT body_set_id FROM grpc_message WHERE body_set_id IS NOT NULL);
 
     -- Delete streams with no remaining packets (excluding favorites)
     DELETE FROM stream
