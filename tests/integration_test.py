@@ -344,10 +344,13 @@ def main():
 
     # Cleanup
     for t in targets:
-        if hasattr(t, 'shutdown'):
-            t.shutdown()
-        elif hasattr(t, 'close'):
-            t.close()
+        try:
+            if isinstance(t, HTTPServer):
+                t.shutdown()
+            elif hasattr(t, 'close'):
+                t.close()
+        except:
+            pass
 
     sys.exit(0 if success else 1)
 
