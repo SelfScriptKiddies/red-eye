@@ -35,8 +35,7 @@ impl SnifferEngine {
             .promisc(true)
             .snaplen(65535)
             .timeout(1000)
-            .open()?
-            .setnonblock()?;
+            .open()?;
 
         let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
         let ports_filter = if initial_ports.is_empty() {
@@ -64,8 +63,9 @@ impl SnifferEngine {
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
+            eprintln!("[SNIFFER] Capture thread spawned!");
             let mut capture = cap;
-            debug!("Capture thread started");
+            info!("Capture thread started, waiting for packets...");
             while active.load(Ordering::SeqCst) {
                 let packet = match capture.next_packet() {
                     Ok(packet) => packet,
@@ -94,12 +94,13 @@ impl SnifferEngine {
                     }
                 };
 
+                let payload_len = payload.len();
                 if tx.send(payload).is_err() {
                     warn!("Receiver dropped, stopping capture");
                     break;
                 }
 
-                trace!("Packet captured");
+                info!("Packet captured, {} bytes", payload_len);
             }
             info!("Capture thread stopped");
             drop(tx);
