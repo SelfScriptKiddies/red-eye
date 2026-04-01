@@ -118,11 +118,12 @@ export function PacketsPage() {
             let data = await getUrl(req_url);
             const newStreams = Object.values(data);
             
+            const MAX_STREAMS = 200;
             if (reset) {
-                await setStreams(newStreams);
+                await setStreams(newStreams.slice(0, MAX_STREAMS));
                 setCurrentOffset(20);
             } else {
-                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams]);
+                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams].slice(0, MAX_STREAMS));
                 setCurrentOffset(prev => prev + 20);
             }
             
@@ -182,10 +183,25 @@ export function PacketsPage() {
         }
     }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]);
 
-    // WebSocket connection for real-time packet updates
+    // WebSocket connection for real-time packet updates (throttled)
+    const wsRefreshPending = useRef(false);
+    const wsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const WS_THROTTLE_MS = 2000; // Max 1 refresh per 2 seconds
+
     useEffect(() => {
         if (isRedEyeActive) return;
         let reconnectTimeout: ReturnType<typeof setTimeout>;
+
+        const scheduleRefresh = () => {
+            if (wsRefreshPending.current) return; // Already scheduled
+            wsRefreshPending.current = true;
+            wsRefreshTimer.current = setTimeout(() => {
+                wsRefreshPending.current = false;
+                setCurrentOffset(0);
+                setHasMoreStreams(true);
+                getFilteredStreams(true);
+            }, WS_THROTTLE_MS);
+        };
 
         const connectWs = () => {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -193,13 +209,8 @@ export function PacketsPage() {
             const ws = new WebSocket(wsUrl);
             wsRef.current = ws;
 
-            ws.onmessage = (event) => {
-                try {
-                    JSON.parse(event.data); // validate
-                    setCurrentOffset(0);
-                    setHasMoreStreams(true);
-                    getFilteredStreams(true);
-                } catch {}
+            ws.onmessage = () => {
+                scheduleRefresh(); // Throttled — at most 1 refresh per 2s
             };
 
             ws.onclose = () => {
@@ -215,8 +226,9 @@ export function PacketsPage() {
 
         return () => {
             clearTimeout(reconnectTimeout);
+            if (wsRefreshTimer.current) clearTimeout(wsRefreshTimer.current);
             if (wsRef.current) {
-                wsRef.current.onclose = null; // prevent reconnect on cleanup
+                wsRef.current.onclose = null;
                 wsRef.current.close();
                 wsRef.current = null;
             }
@@ -326,7 +338,8 @@ export function PacketsPage() {
         try {
             const data = await getUrl(`/api/packet/stream_id/${streamId}`);
             const packets = Object.values(data);
-            setPacketData(packets);
+            const MAX_PACKETS = 500;
+            setPacketData(packets.slice(0, MAX_PACKETS));
         } catch (error) {
             console.error('Ошибка при получении данных пакета:', error);
         }
