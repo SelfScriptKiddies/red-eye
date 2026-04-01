@@ -276,9 +276,35 @@ export function PacketsPage() {
         return groups;
     }, [packetData, shouldMerge]);
 
-    // Filter streams by header search results
+    // When header search is active, load matching streams individually
+    const [headerFilteredStreams, setHeaderFilteredStreams] = useState<any[]>([]);
+
+    useEffect(() => {
+        if (!headerSearchResults || headerSearchResults.stream_ids.length === 0) {
+            setHeaderFilteredStreams([]);
+            return;
+        }
+        // Try to find in already-loaded streams first
+        const ids = new Set(headerSearchResults.stream_ids);
+        const found = streamsArray.filter((s: any) => ids.has(s.id));
+        if (found.length > 0) {
+            setHeaderFilteredStreams(found);
+        } else {
+            // Load more streams (bigger window) and filter
+            getUrl(`/api/stream?limit=200&offset=0`)
+                .then(data => {
+                    if (data) {
+                        const all = Object.values(data) as any[];
+                        const matched = all.filter((s: any) => ids.has(s.id));
+                        setHeaderFilteredStreams(matched);
+                    }
+                })
+                .catch(() => setHeaderFilteredStreams([]));
+        }
+    }, [headerSearchResults]);
+
     const filteredStreams = headerSearchResults
-        ? streamsArray.filter((s: any) => headerSearchResults.stream_ids.includes(s.id))
+        ? headerFilteredStreams
         : streamsArray;
 
     const addHeaderFilter = (name: string, value: string) => {
