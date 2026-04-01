@@ -83,7 +83,7 @@ mod dto {
         fn from(service: service_dto::Service) -> Self {
             Service {
                 name: service.name,
-                port: service.port.try_into().unwrap(),
+                port: (service.port as u16),
                 chunked_transfer_encoding: service.chunked_transfer_encoding,
                 decrypt_tls: service.decrypt_tls,
                 inflate_websockets: service.inflate_websockets,
