@@ -15,8 +15,14 @@
     width: 20%;
     padding: 0;
 }
-.streams {
+.streams-wrapper {
     width: 30%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.streams {
+    flex: 1;
     overflow-y: auto;
 }
 .tag-filter {

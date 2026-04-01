@@ -489,15 +489,25 @@ export function PacketsPage() {
         setCurrentOffset(0);
         setHasMoreStreams(true);
     };
+    // Re-fetch streams when tag/service/header filters change
+    const filtersVersion = useRef(0);
+    useEffect(() => {
+        // Skip initial render
+        if (filtersVersion.current === 0) {
+            filtersVersion.current = 1;
+            return;
+        }
+        setCurrentOffset(0);
+        setHasMoreStreams(true);
+        getFilteredStreams(true);
+    }, [usedTags, usedServices, headerSearchResults]);
+
     const handleTagClick = (e) => {
         const tagName = e.target.dataset.service;
         setUsedTags(prev => {
             if (prev.includes(tagName)) return prev.filter(t => t !== tagName);
             return [...prev, tagName];
         });
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-        setTimeout(() => getFilteredStreams(true), 0);
     };
     const handleServiceClick = (e) => {
         const serviceName = e.target.dataset.service;
@@ -505,9 +515,6 @@ export function PacketsPage() {
             if (prev.includes(serviceName)) return prev.filter(s => s !== serviceName);
             return [...prev, serviceName];
         });
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-        setTimeout(() => getFilteredStreams(true), 0);
     };
 
     return (
@@ -527,8 +534,8 @@ export function PacketsPage() {
                     })}
                 </div>
             </div>
-            <div id="streams" className="streams" ref={streamsContainerRef}>
-                {/* Filter indicator */}
+            <div className="streams-wrapper">
+                {/* Filter indicator — above scroll area */}
                 {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0) && (
                     <div className="filter-indicator">
                         <span>Фильтр активен</span>
@@ -549,6 +556,7 @@ export function PacketsPage() {
                         )}
                     </div>
                 )}
+                <div id="streams" className="streams" ref={streamsContainerRef}>
                 {filteredStreams.map((stream, index) => {
                     return < StreamCard
                         key={stream.id}
@@ -582,7 +590,8 @@ export function PacketsPage() {
                         Нет стримов по заданным фильтрам
                     </div>
                 )}
-            </div>
+                </div>{/* streams */}
+            </div>{/* streams-wrapper */}
             <div className="packetData">
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
