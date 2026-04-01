@@ -19,7 +19,7 @@ impl DB {
         info!("Initializing database connection pool");
         
         let pool = PgPoolOptions::new()
-            .max_connections(10)
+            .max_connections(50)
             .connect(connection_string)
             .await?;
         
@@ -29,7 +29,7 @@ impl DB {
 
     pub async fn init(config: &ApplicationConfig) -> Result<Self, Error> {
         let pool = PgPoolOptions::new()
-            .max_connections(10)
+            .max_connections(50)
             .connect(&format!("postgres://{}:{}@{}:{}/{}", config.db_username, config.db_password, config.db_host, config.db_port, config.db_schema))
             .await?;
         Ok(Self { pgpool: pool })
@@ -116,6 +116,31 @@ impl DB {
         .execute(&self.pgpool)
         .await
         .map(|_| ())
+    }
+
+    /// Batch insert triggers (single multi-row INSERT)
+    pub async fn insert_triggers_batch(&self, rows: &[(i32, usize, usize, usize)]) -> Result<(), Error> {
+        if rows.is_empty() { return Ok(()); }
+
+        // Build multi-row INSERT: INSERT INTO tag (packet_id, tag_id, start_index, end_index) VALUES ($1,$2,$3,$4), ($5,$6,$7,$8), ...
+        let mut query = String::from("INSERT INTO tag (packet_id, tag_id, start_index, end_index) VALUES ");
+        let mut params: Vec<i32> = Vec::with_capacity(rows.len() * 4);
+
+        for (i, (packet_id, filter_id, start, end)) in rows.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            let base = i * 4;
+            query.push_str(&format!("(${}, ${}, ${}, ${})", base + 1, base + 2, base + 3, base + 4));
+            params.push(*packet_id);
+            params.push(*filter_id as i32);
+            params.push(*start as i32);
+            params.push(*end as i32);
+        }
+
+        let mut q = sqlx::query(&query);
+        for p in &params {
+            q = q.bind(p);
+        }
+        q.execute(&self.pgpool).await.map(|_| ())
     }
 
     /// Update stream's L7 protocol (only if currently 'unknown')

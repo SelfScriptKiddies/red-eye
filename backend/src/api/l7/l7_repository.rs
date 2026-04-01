@@ -174,7 +174,10 @@ impl L7Repository {
 
             result = Some(match result {
                 None => ids,
-                Some(prev) => prev.into_iter().filter(|id| ids.contains(id)).collect(),
+                Some(prev) => {
+                    let ids_set: std::collections::HashSet<i32> = ids.into_iter().collect();
+                    prev.into_iter().filter(|id| ids_set.contains(id)).collect()
+                }
             });
         }
 

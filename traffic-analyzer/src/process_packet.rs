@@ -148,13 +148,17 @@ impl PacketProcessor {
             .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Packet insertion failed: {:?}", e)))?;
         debug!("Packet ID: {:?}", packet_id);
 
-        // Inserting triggers into database
-        for (filter_id, triggers_array) in triggers {
-            debug!("Inserting {} triggers for filter ID: {:?}", triggers_array.len(), filter_id);
-            for trigger in triggers_array {
-                self.db.insert_trigger(packet_id, filter_id, trigger.start_index, trigger.end_index).await
-                    .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Trigger insertion failed: {:?}", e)))?;
-            }
+        // Inserting triggers into database (batched)
+        let trigger_rows: Vec<(i32, usize, usize, usize)> = triggers
+            .iter()
+            .flat_map(|(filter_id, arr)| {
+                arr.iter().map(move |t| (packet_id, *filter_id, t.start_index, t.end_index))
+            })
+            .collect();
+        if !trigger_rows.is_empty() {
+            debug!("Inserting {} triggers", trigger_rows.len());
+            self.db.insert_triggers_batch(&trigger_rows).await
+                .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Trigger batch insert failed: {:?}", e)))?;
         }
 
         // Try L7 HTTP parsing (only if service has http_parse enabled)

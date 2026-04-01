@@ -1,6 +1,6 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
@@ -184,54 +184,39 @@ export function PacketsPage() {
 
     // WebSocket connection for real-time packet updates
     useEffect(() => {
-        if (isRedEyeActive) {
-            return; // Don't connect if RedEye is not active
-        }
+        if (isRedEyeActive) return;
+        let reconnectTimeout: ReturnType<typeof setTimeout>;
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
+        const connectWs = () => {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
 
-        ws.onopen = () => {
-            console.log('WebSocket connected');
-        };
-
-        ws.onmessage = async (event) => {
-            try {
-                const packetEvent: PacketEvent = JSON.parse(event.data);
-                console.log('Received packet event:', packetEvent);
-                
-                // Update streams list when new packet arrives
-                // This will refresh the stream list to show updated timestamps and move active streams to top
-                if (!isRedEyeActive) {
+            ws.onmessage = (event) => {
+                try {
+                    JSON.parse(event.data); // validate
                     setCurrentOffset(0);
                     setHasMoreStreams(true);
                     getFilteredStreams(true);
-                }
-            } catch (error) {
-                console.error('Error parsing WebSocket message:', error);
-            }
+                } catch {}
+            };
+
+            ws.onclose = () => {
+                reconnectTimeout = setTimeout(() => {
+                    if (wsRef.current?.readyState === WebSocket.CLOSED) {
+                        connectWs();
+                    }
+                }, 3000);
+            };
         };
 
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-
-        ws.onclose = () => {
-            console.log('WebSocket disconnected, reconnecting...');
-            // Reconnect after 3 seconds
-            setTimeout(() => {
-                if (!isRedEyeActive) {
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-                    wsRef.current = new WebSocket(wsUrl);
-                }
-            }, 3000);
-        };
+        connectWs();
 
         return () => {
+            clearTimeout(reconnectTimeout);
             if (wsRef.current) {
+                wsRef.current.onclose = null; // prevent reconnect on cleanup
                 wsRef.current.close();
                 wsRef.current = null;
             }
@@ -255,8 +240,8 @@ export function PacketsPage() {
         return false;
     })();
 
-    // Merge adjacent packets with the same direction (when enabled)
-    const mergedPackets = (() => {
+    // Merge adjacent packets with the same direction (when enabled) — memoized
+    const mergedPackets = useMemo(() => {
         if (!packetData || packetData.length === 0) return [];
         if (!shouldMerge) return packetData.map(p => ({ ...p, _merged_count: 1 }));
         const groups: any[] = [];
@@ -277,7 +262,7 @@ export function PacketsPage() {
             }
         }
         return groups;
-    })();
+    }, [packetData, shouldMerge]);
 
     // Filter streams by header search results
     const filteredStreams = headerSearchResults
@@ -492,40 +477,24 @@ export function PacketsPage() {
         setHasMoreStreams(true);
     };
     const handleTagClick = (e) => {
-        let tag_name = e.target.dataset.service;
-        let tmp = usedTags;
-        if(usedTags.includes(tag_name))
-        {
-            let idx_tag = tmp.indexOf(tag_name); 
-            tmp.splice(idx_tag, 1); 
-            console.log("NEW ARRAY:", tmp);
-        }
-        else
-        {
-            tmp.push(e.target.dataset.service);
-        }
-        setUsedTags(tmp);
+        const tagName = e.target.dataset.service;
+        setUsedTags(prev => {
+            if (prev.includes(tagName)) return prev.filter(t => t !== tagName);
+            return [...prev, tagName];
+        });
         setCurrentOffset(0);
         setHasMoreStreams(true);
-        getFilteredStreams(true);
+        setTimeout(() => getFilteredStreams(true), 0);
     };
     const handleServiceClick = (e) => {
-        let service_name = e.target.dataset.service;
-        let tmp = usedServices;
-        if(usedServices.includes(service_name))
-        {
-            let idx_tag = tmp.indexOf(service_name); 
-            tmp.splice(idx_tag, 1); 
-            console.log("NEW ARRAY:", tmp);
-        }
-        else
-        {
-            tmp.push(e.target.dataset.service);
-        }
-        setUsedServices(tmp);
+        const serviceName = e.target.dataset.service;
+        setUsedServices(prev => {
+            if (prev.includes(serviceName)) return prev.filter(s => s !== serviceName);
+            return [...prev, serviceName];
+        });
         setCurrentOffset(0);
         setHasMoreStreams(true);
-        getFilteredStreams(true);
+        setTimeout(() => getFilteredStreams(true), 0);
     };
 
     return (
