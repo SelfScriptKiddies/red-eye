@@ -228,9 +228,12 @@ impl L7Repository {
         sqlx::query_as::<_, super::l7_dto::GrpcMessage>(
             "SELECT g.id, g.stream_id, g.http_message_id, g.service_name, g.method_name,
                     g.is_request, g.body_set_id, g.timestamp,
-                    COALESCE(b.decoded_json, '{}') as decoded_json
+                    COALESCE(b.decoded_json, '{}') as decoded_json,
+                    hm.packet_id
              FROM grpc_message g
              LEFT JOIN grpc_body_set b ON b.id = g.body_set_id
+             LEFT JOIN http_message hm ON hm.id = g.http_message_id
+                AND hm.timestamp = g.timestamp
              WHERE g.stream_id = $1
              ORDER BY g.timestamp ASC, g.id ASC",
         )
