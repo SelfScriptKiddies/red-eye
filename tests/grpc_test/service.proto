@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package ctf;
+
+service UserService {
+  rpc Login (LoginRequest) returns (LoginResponse);
+  rpc GetUser (GetUserRequest) returns (GetUserResponse);
+  rpc SubmitFlag (SubmitFlagRequest) returns (SubmitFlagResponse);
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string token = 1;
+  bool success = 2;
+}
+
+message GetUserRequest {
+  int32 user_id = 1;
+}
+
+message GetUserResponse {
+  int32 user_id = 1;
+  string username = 2;
+  string email = 3;
+  string role = 4;
+}
+
+message SubmitFlagRequest {
+  string flag = 1;
+  string service_name = 2;
+}
+
+message SubmitFlagResponse {
+  bool accepted = 1;
+  string message = 2;
+}
