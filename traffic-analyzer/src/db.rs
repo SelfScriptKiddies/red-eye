@@ -143,10 +143,10 @@ impl DB {
         q.execute(&self.pgpool).await.map(|_| ())
     }
 
-    /// Update stream's L7 protocol (only if currently 'unknown')
+    /// Update stream's L7 protocol (upgrades: unknown→http1→grpc)
     pub async fn update_stream_l7_protocol(&self, stream_id: usize, protocol: &str) -> Result<(), Error> {
         sqlx::query(
-            "UPDATE stream SET l7_protocol = $1 WHERE id = $2 AND l7_protocol = 'unknown'"
+            "UPDATE stream SET l7_protocol = $1 WHERE id = $2 AND (l7_protocol = 'unknown' OR ($1 = 'grpc' AND l7_protocol = 'http1'))"
         )
         .bind(protocol)
         .bind(stream_id as i32)
