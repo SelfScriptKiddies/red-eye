@@ -100,7 +100,14 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFil
                     </span>
                 )}
                 <span className="stream-time">{moment.unix(streamObj.first_packet_time).format("HH:mm:ss")}-{moment.unix(streamObj.last_packet_time).format("HH:mm:ss")}</span>
-                <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
+                <span className="stream-meta-row">
+                    {streamObj.l7_protocol && streamObj.l7_protocol !== 'unknown' && (
+                        <span className={`protocol-badge protocol-${streamObj.l7_protocol}`}>
+                            {streamObj.l7_protocol === 'http1' ? 'HTTP' : streamObj.l7_protocol.toUpperCase()}
+                        </span>
+                    )}
+                    <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
+                </span>
             </div>
         </div>
     );

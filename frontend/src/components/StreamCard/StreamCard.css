@@ -101,6 +101,38 @@
     color: var(--re-error);
 }
 
+.stream-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.protocol-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    border: 1px solid var(--re-border);
+    color: var(--re-text-muted);
+}
+
+.protocol-http1 {
+    border-color: var(--re-accent);
+    color: var(--re-accent);
+}
+
+.protocol-http2 {
+    border-color: #0089ce;
+    color: #0089ce;
+}
+
+.protocol-grpc {
+    border-color: var(--re-success);
+    color: var(--re-success);
+}
+
 .stream-packet-count {
     font-size: 0.85rem;
     color: #999;
