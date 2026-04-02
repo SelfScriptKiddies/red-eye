@@ -514,7 +514,8 @@ export default function AgentsPage() {
                   </select>
                   <select className="select-input" value={f.action}
                     onChange={e => updateFilterRow(i, 'action', e.target.value)}>
-                    <option value="drop">Drop</option>
+                    <option value="drop">Drop Packet</option>
+                    <option value="drop_connection">Drop Connection</option>
                     <option value="alert">Alert</option>
                   </select>
                   <button className="remove-btn" onClick={() => removeFilterRow(i)}>✕</button>
