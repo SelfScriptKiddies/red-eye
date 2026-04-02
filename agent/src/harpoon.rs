@@ -317,7 +317,6 @@ impl HarpoonEngine {
                     CAPTURE_MAX_PAYLOAD,
                     CAPTURE_TIMEOUT_SECS,
                 )
-                .await
             {
                 warn!("Failed to start capture for rule '{}': {}", name, e);
             }
