@@ -34,6 +34,10 @@ fn init_logging(level: &str) {
     let mut builder = colog::default_builder();
     builder.filter(None, filter);
     builder.init();
+
+    // Initialize tracing subscriber for harpoon-core logs
+    // tracing-log bridge forwards tracing events to the log crate
+    let _ = tracing_log::LogTracer::init();
 }
 
 pub async fn run() {
