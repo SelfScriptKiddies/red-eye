@@ -127,28 +127,19 @@ async fn create_service(
             }
 
             // Bind to all agents by default and sync their ports
+            // Bind new service to all known agents in one query
             let _ = sqlx::query(
                 "INSERT INTO agent_service (agent_id, service_id)
-                 SELECT DISTINCT agent_id, $1 FROM agent_service
-                 UNION SELECT $2, $1
+                 SELECT agent_id, $1 FROM agent
                  ON CONFLICT DO NOTHING"
             )
             .bind(created.id)
-            .bind("__placeholder__") // Will be replaced by known agents
             .execute(pool.get_ref())
             .await;
 
-            // Simpler: bind to all known agents
+            // Sync ports for all agents
             let agents = agent_svc.list_agents().await;
             for a in &agents {
-                let _ = sqlx::query(
-                    "INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
-                )
-                .bind(&a.agent_id)
-                .bind(created.id)
-                .execute(pool.get_ref())
-                .await;
-
                 crate::api::agent::sync_agent_ports(&a.agent_id, pool.get_ref(), &agent_svc).await;
             }
 
