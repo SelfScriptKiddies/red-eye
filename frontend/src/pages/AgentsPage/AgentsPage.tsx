@@ -85,9 +85,8 @@ export default function AgentsPage() {
   const [replayModal, setReplayModal] = useState(false);
   const [replayForm, setReplayForm] = useState<ReplayForm>(defaultReplay);
 
-  const [snifferModal, setSnifferModal] = useState(false);
-  const [snifferPorts, setSnifferPorts] = useState('');
   const [services, setServices] = useState<Service[]>([]);
+  const [boundServices, setBoundServices] = useState<number[]>([]);
 
   const fetchAgents = () => {
     fetch('/api/agent')
@@ -101,6 +100,37 @@ export default function AgentsPage() {
       .then(r => r.json())
       .then(data => setServices(Array.isArray(data) ? data : Object.values(data)))
       .catch(() => {});
+  };
+
+  const fetchBoundServices = (agentId: string) => {
+    fetch(`/api/agent/${agentId}/services`)
+      .then(r => r.json())
+      .then(data => setBoundServices(Array.isArray(data) ? data : []))
+      .catch(() => setBoundServices([]));
+  };
+
+  const bindService = (serviceId: number) => {
+    if (!selected) return;
+    fetch(`/api/agent/${selected}/services/bind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service_id: serviceId }),
+    }).then(() => {
+      fetchBoundServices(selected);
+      setTimeout(fetchAgents, 1000);
+    });
+  };
+
+  const unbindService = (serviceId: number) => {
+    if (!selected) return;
+    fetch(`/api/agent/${selected}/services/unbind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service_id: serviceId }),
+    }).then(() => {
+      fetchBoundServices(selected);
+      setTimeout(fetchAgents, 1000);
+    });
   };
 
   // Check protection status for a service on selected agent
@@ -249,7 +279,7 @@ export default function AgentsPage() {
               <div
                 key={agent.agent_id}
                 className={`agent-card ${selected === agent.agent_id ? 'selected' : ''} ${agent.online ? 'online' : 'offline'}`}
-                onClick={() => setSelected(agent.agent_id)}
+                onClick={() => { setSelected(agent.agent_id); fetchBoundServices(agent.agent_id); }}
               >
                 <div className="agent-card-header">
                   <span className={`status-dot ${agent.online ? 'online' : 'offline'}`} />
@@ -341,40 +371,44 @@ export default function AgentsPage() {
                   </div>
                 </div>
 
-                {/* Service Protection */}
+                {/* Services bound to this agent */}
                 <div className="detail-section">
                   <div className="section-header">
-                    <h3>Защита сервисов</h3>
+                    <h3>Сервисы</h3>
                   </div>
                   {services.map(svc => {
+                    const isBound = boundServices.includes(svc.id);
                     const status = getProtectionStatus(svc);
                     const hasProxy = status === 'proxy' || status === 'proxy-nft';
                     return (
-                      <div key={svc.id} className="settings-card">
+                      <div key={svc.id} className={`settings-card ${!isBound ? 'card-dimmed' : ''}`}>
                         <div className="card-row">
                           <span className="rule-name">{svc.name}</span>
                           <div className="card-right">
                             <span className="port-label">:{svc.port}</span>
-                            <span className={`badge ${statusStyle[status]}`}
-                              style={status === 'off' ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
-                              {statusLabel[status]}
-                            </span>
+                            {isBound && (
+                              <span className={`badge ${statusStyle[status]}`}
+                                style={status === 'off' ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
+                                {statusLabel[status]}
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="card-buttons">
-                          {!hasProxy ? (
+                          {isBound ? (
                             <>
-                              <button className="small-btn" onClick={() => toggleProtection(svc, true)}>
-                                Proxy
-                              </button>
-                              <button className="small-btn" onClick={() => toggleProtection(svc, true, true)}>
-                                Proxy + TLS
-                              </button>
+                              {!hasProxy ? (
+                                <>
+                                  <button className="small-btn" onClick={() => toggleProtection(svc, true)}>Proxy</button>
+                                  <button className="small-btn" onClick={() => toggleProtection(svc, true, true)}>Proxy + TLS</button>
+                                </>
+                              ) : (
+                                <button className="small-btn btn-danger" onClick={() => toggleProtection(svc, false)}>Отключить защиту</button>
+                              )}
+                              <button className="small-btn btn-danger" onClick={() => unbindService(svc.id)}>Отвязать</button>
                             </>
                           ) : (
-                            <button className="small-btn btn-danger" onClick={() => toggleProtection(svc, false)}>
-                              Отключить
-                            </button>
+                            <button className="small-btn" onClick={() => bindService(svc.id)}>Привязать</button>
                           )}
                         </div>
                       </div>
@@ -400,17 +434,12 @@ export default function AgentsPage() {
           <div className="items-list">
             <div className="action-group">
               <h3>Для выбранного</h3>
-              <button className="action-btn" disabled={!selected} onClick={() => setProxyModal(true)}>Добавить прокси</button>
-              <button className="action-btn" disabled={!selected} onClick={() => { setFilters([]); setFilterModal(true); }}>Настроить фильтры</button>
-              <button className="action-btn" disabled={!selected} onClick={() => setReplayModal(true)}>Replay Forward</button>
-              <button className="action-btn" disabled={!selected} onClick={() => {
-                setSnifferPorts(selectedAgent?.sniffer_ports.join(', ') || '');
-                setSnifferModal(true);
-              }}>Настроить сниффер</button>
+              <button className="action-btn" disabled={!selected} onClick={() => setReplayModal(true)}>Port Forward</button>
+              <button className="action-btn" disabled={!selected} onClick={() => { setFilters([]); setFilterModal(true); }}>Firewall</button>
             </div>
             <div className="action-group">
               <h3>Для всех агентов</h3>
-              <button className="action-btn broadcast" onClick={() => { setFilters([]); setFilterModal(true); }}>Синхронизировать фильтры</button>
+              <button className="action-btn broadcast" onClick={() => { setFilters([]); setFilterModal(true); }}>Firewall (все агенты)</button>
             </div>
           </div>
         </div>
@@ -507,7 +536,7 @@ export default function AgentsPage() {
         <div className="modal-overlay" onClick={() => setReplayModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Replay Forward</h3>
+              <h3>Port Forward</h3>
               <button className="close-btn" onClick={() => setReplayModal(false)}>✕</button>
             </div>
             <div className="modal-body">
@@ -526,25 +555,7 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Sniffer Modal */}
-      {snifferModal && (
-        <div className="modal-overlay" onClick={() => setSnifferModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Настройка сниффера</h3>
-              <button className="close-btn" onClick={() => setSnifferModal(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <input placeholder="Порты через запятую (8080, 443, 3000)" value={snifferPorts}
-                onChange={e => setSnifferPorts(e.target.value)} />
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setSnifferModal(false)}>Отмена</button>
-              <button onClick={saveSniffer}>Применить</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Sniffer modal removed — ports managed via service bindings */}
     </div>
   );
 }

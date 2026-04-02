@@ -563,3 +563,11 @@ body:has(.eye__apple__focus) .modal-footer button:last-child:hover {
 body:has(.eye__apple__focus) .agents-column::-webkit-scrollbar-thumb {
   background: var(--re-danger);
 }
+
+.card-dimmed {
+  opacity: 0.4;
+}
+
+.card-dimmed:hover {
+  opacity: 0.7;
+}

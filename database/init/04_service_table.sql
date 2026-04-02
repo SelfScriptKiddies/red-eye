@@ -15,3 +15,10 @@ CREATE TABLE IF NOT EXISTS service (
 
 -- Создание индекса на поле port для ускорения поиска по порту
 CREATE INDEX IF NOT EXISTS idx_services_port ON service(port);
+
+-- Agent-to-service bindings (which agent monitors which service)
+CREATE TABLE IF NOT EXISTS agent_service (
+    agent_id VARCHAR(255) NOT NULL,
+    service_id INTEGER NOT NULL REFERENCES service(id) ON DELETE CASCADE,
+    PRIMARY KEY (agent_id, service_id)
+);

@@ -116,6 +116,8 @@ async fn create_service(
     _identity: Identity,
     service: web::Data<ServiceService>,
     updater: web::Data<UpdateAgent>,
+    pool: web::Data<sqlx::PgPool>,
+    agent_svc: web::Data<std::sync::Arc<crate::api::agent::agent_service::AgentService>>,
     new_service: Either<web::Form<ServiceTransfer>, web::Json<ServiceTransfer>>
 ) -> impl Responder {
     match service.create_service(&new_service.into_inner().into()).await {
@@ -123,6 +125,33 @@ async fn create_service(
             if let Err(e) = updater.add_service(created.clone().into(), created.id.try_into().unwrap()).await {
                 log::error!("Failed to send update: {}", e);
             }
+
+            // Bind to all agents by default and sync their ports
+            let _ = sqlx::query(
+                "INSERT INTO agent_service (agent_id, service_id)
+                 SELECT DISTINCT agent_id, $1 FROM agent_service
+                 UNION SELECT $2, $1
+                 ON CONFLICT DO NOTHING"
+            )
+            .bind(created.id)
+            .bind("__placeholder__") // Will be replaced by known agents
+            .execute(pool.get_ref())
+            .await;
+
+            // Simpler: bind to all known agents
+            let agents = agent_svc.list_agents().await;
+            for a in &agents {
+                let _ = sqlx::query(
+                    "INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+                )
+                .bind(&a.agent_id)
+                .bind(created.id)
+                .execute(pool.get_ref())
+                .await;
+
+                crate::api::agent::sync_agent_ports(&a.agent_id, pool.get_ref(), &agent_svc).await;
+            }
+
             HttpResponse::Created().json(created)
         }
         Err(_) => HttpResponse::InternalServerError().finish()
