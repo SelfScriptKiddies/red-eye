@@ -19,7 +19,8 @@ pub fn try_parse_http(payload: &[u8]) -> Option<HttpParsed> {
     }
 
     // Harpoon serializes HTTP/2 as "HTTP/2" — httparse only understands HTTP/1.x
-    // Rewrite to HTTP/1.1 for parsing
+    // Rewrite to HTTP/1.1 for parsing, but remember the original for body_offset
+    let original = payload;
     let (payload, is_h2) = if payload.starts_with(b"HTTP/2 ") || payload.windows(8).any(|w| w == b" HTTP/2\r") {
         let mut fixed = payload.to_vec();
         // Replace "HTTP/2 " with "HTTP/1.1 " in responses
@@ -39,7 +40,11 @@ pub fn try_parse_http(payload: &[u8]) -> Option<HttpParsed> {
     // Quick check: does it look like HTTP?
     if payload.starts_with(b"HTTP/") {
         let mut parsed = parse_response(payload)?;
-        if is_h2 { parsed.http_version = Some("2".to_string()); }
+        if is_h2 {
+            parsed.http_version = Some("2".to_string());
+            // Fix body_offset: rewrite shifted it by 2 bytes
+            fix_body_offset_for_h2(&mut parsed, original);
+        }
         return Some(parsed);
     }
 
@@ -55,11 +60,22 @@ pub fn try_parse_http(payload: &[u8]) -> Option<HttpParsed> {
         || payload.starts_with(b"TRACE ")
     {
         let mut parsed = parse_request(payload)?;
-        if is_h2 { parsed.http_version = Some("2".to_string()); }
+        if is_h2 {
+            parsed.http_version = Some("2".to_string());
+            fix_body_offset_for_h2(&mut parsed, original);
+        }
         return Some(parsed);
     }
 
     None
+}
+
+/// The HTTP/2→HTTP/1.1 rewrite adds 2 bytes, making httparse's body_offset
+/// incorrect for the original payload. Recalculate from the original bytes.
+fn fix_body_offset_for_h2(parsed: &mut HttpParsed, original: &[u8]) {
+    if let Some(pos) = original.windows(4).position(|w| w == b"\r\n\r\n") {
+        parsed.body_offset = pos + 4;
+    }
 }
 
 fn parse_request(payload: &[u8]) -> Option<HttpParsed> {
