@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use log::debug;
+
+use crate::proto_schema::ProtoSchema;
 
 /// Parsed gRPC message
 pub struct GrpcParsed {
@@ -11,11 +14,13 @@ pub struct GrpcParsed {
 
 /// Try to parse a gRPC message from HTTP body.
 /// gRPC body format: [1 byte compressed flag] [4 bytes length BE] [protobuf payload]
+/// If `proto` is provided, field names are resolved from the .proto definition.
 /// Returns None if not a valid gRPC body.
 pub fn try_parse_grpc_body(
     body: &[u8],
     path: Option<&str>,
     is_request: bool,
+    proto: Option<&ProtoSchema>,
 ) -> Option<GrpcParsed> {
     if body.len() < 5 {
         return None;
@@ -42,8 +47,14 @@ pub fn try_parse_grpc_body(
         (None, None)
     };
 
-    // Decode protobuf without .proto — raw field dump
-    let decoded_json = decode_protobuf_raw(payload);
+    // Resolve field names from .proto if available
+    let field_names = proto.and_then(|p| {
+        let svc = service_name.as_deref()?;
+        let method = method_name.as_deref()?;
+        p.resolve_fields(svc, method, is_request)
+    });
+
+    let decoded_json = decode_protobuf_raw(payload, field_names);
 
     debug!("gRPC parsed: {}/{} ({} bytes payload)",
         service_name.as_deref().unwrap_or("?"),
@@ -59,9 +70,9 @@ pub fn try_parse_grpc_body(
     })
 }
 
-/// Decode protobuf without .proto — extract raw fields with wire types.
-/// Returns JSON-like string with field numbers and values.
-fn decode_protobuf_raw(data: &[u8]) -> String {
+/// Decode protobuf — extract fields with wire types.
+/// If `field_names` is provided, uses real names; otherwise falls back to field_N.
+fn decode_protobuf_raw(data: &[u8], field_names: Option<&HashMap<u64, String>>) -> String {
     let mut fields = Vec::new();
     let mut pos = 0;
 
@@ -75,11 +86,19 @@ fn decode_protobuf_raw(data: &[u8]) -> String {
         let wire_type = tag & 0x07;
         pos = new_pos;
 
+        let fname = field_names
+            .and_then(|m| m.get(&field_number))
+            .map(|s| s.as_str());
+        let key = match fname {
+            Some(name) => format!("\"{}\"", name),
+            None => format!("\"field_{}\"", field_number),
+        };
+
         match wire_type {
             0 => {
                 // Varint
                 if let Some((value, new_pos)) = decode_varint(data, pos) {
-                    fields.push(format!("\"field_{}\": {}", field_number, value));
+                    fields.push(format!("{}: {}", key, value));
                     pos = new_pos;
                 } else {
                     break;
@@ -89,7 +108,7 @@ fn decode_protobuf_raw(data: &[u8]) -> String {
                 // 64-bit
                 if pos + 8 <= data.len() {
                     let value = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
-                    fields.push(format!("\"field_{}\": {}", field_number, value));
+                    fields.push(format!("{}: {}", key, value));
                     pos += 8;
                 } else {
                     break;
@@ -102,15 +121,14 @@ fn decode_protobuf_raw(data: &[u8]) -> String {
                     pos = new_pos;
                     if pos + length <= data.len() {
                         let value = &data[pos..pos + length];
-                        // Try as UTF-8 string first
                         if let Ok(s) = std::str::from_utf8(value) {
                             if s.chars().all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t') {
-                                fields.push(format!("\"field_{}\": \"{}\"", field_number, s.replace('\"', "\\\"")));
+                                fields.push(format!("{}: \"{}\"", key, s.replace('\"', "\\\"")));
                             } else {
-                                fields.push(format!("\"field_{}\": \"<{} bytes>\"", field_number, length));
+                                fields.push(format!("{}: \"<{} bytes>\"", key, length));
                             }
                         } else {
-                            fields.push(format!("\"field_{}\": \"<{} bytes>\"", field_number, length));
+                            fields.push(format!("{}: \"<{} bytes>\"", key, length));
                         }
                         pos += length;
                     } else {
@@ -124,7 +142,7 @@ fn decode_protobuf_raw(data: &[u8]) -> String {
                 // 32-bit
                 if pos + 4 <= data.len() {
                     let value = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-                    fields.push(format!("\"field_{}\": {}", field_number, value));
+                    fields.push(format!("{}: {}", key, value));
                     pos += 4;
                 } else {
                     break;

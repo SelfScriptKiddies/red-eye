@@ -39,9 +39,9 @@ pub struct PacketEvent {
 impl PacketProcessor {
     pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, nats_client: Option<Client>) -> Self {
         let nats_topic = config.nats_websocket_packets_topic.clone();
-        Self { 
-            cache, 
-            config, 
+        Self {
+            cache,
+            config,
             db,
             nats_client,
             nats_topic,
@@ -213,12 +213,17 @@ impl PacketProcessor {
 
                     if is_grpc {
                         let body = &packet.payload[parsed.body_offset..];
+
+                        let proto = {
+                            let schemas = self.cache.proto_schemas.read().unwrap();
+                            schemas.get(&service_id).cloned()
+                        };
                         if let Some(grpc) = grpc_parser::try_parse_grpc_body(
                             body,
                             parsed.path.as_deref(),
                             parsed.is_request,
+                            proto.as_ref(),
                         ) {
-                            // Store decoded gRPC in grpc_message table
                             let _ = self.db.insert_grpc_message(
                                 stream_id,
                                 msg_id,
