@@ -20,4 +20,5 @@ uuid = { version = "1.0", features = ["v4"] }
 hostname = "0.4"
 harpoon-core = { path = "../../harpoon/crates/harpoon-core", features = ["regex-filter", "tls", "http2"] }
 rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 hex = "0.4"

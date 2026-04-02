@@ -40,6 +40,9 @@ pub async fn run() {
     let config = AgentConfig::parse();
     init_logging(&config.logging_level);
 
+    // Initialize rustls crypto provider (required by rustls 0.23+)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let agent_id = config.resolved_agent_id();
     info!("Starting Red Eye Agent '{}'", agent_id);
     debug!("Config: {:?}", config);
