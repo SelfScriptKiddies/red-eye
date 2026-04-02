@@ -218,4 +218,24 @@ impl L7Repository {
             .await
         }
     }
+
+    // ── gRPC ──
+
+    pub async fn get_grpc_messages_by_stream(
+        &self,
+        stream_id: i32,
+    ) -> Result<Vec<super::l7_dto::GrpcMessage>, Error> {
+        sqlx::query_as::<_, super::l7_dto::GrpcMessage>(
+            "SELECT g.id, g.stream_id, g.http_message_id, g.service_name, g.method_name,
+                    g.is_request, g.body_set_id, g.timestamp,
+                    COALESCE(b.decoded_json, '{}') as decoded_json
+             FROM grpc_message g
+             LEFT JOIN grpc_body_set b ON b.id = g.body_set_id
+             WHERE g.stream_id = $1
+             ORDER BY g.timestamp ASC, g.id ASC",
+        )
+        .bind(stream_id)
+        .fetch_all(&self.pgpool)
+        .await
+    }
 }

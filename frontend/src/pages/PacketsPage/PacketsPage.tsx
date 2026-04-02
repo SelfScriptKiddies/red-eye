@@ -667,6 +667,7 @@ export function PacketsPage() {
                         key={packet.id}
                         {...packet}
                         isHttp={selectedStreamL7 === 'http1'}
+                        isGrpc={selectedStreamL7 === 'grpc'}
                         onHeaderSearch={addHeaderFilter}
                         diffSelected={diffLeft?.id === packet.id}
                         onDiffSelect={(pkt) => {

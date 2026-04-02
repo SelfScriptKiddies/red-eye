@@ -63,4 +63,13 @@ impl L7Service {
             .search_streams_by_headers(filters, limit)
             .await
     }
+
+    pub async fn get_grpc_messages(
+        &self,
+        stream_id: i32,
+    ) -> Result<Vec<super::l7_dto::GrpcMessage>, Error> {
+        self.repository
+            .get_grpc_messages_by_stream(stream_id)
+            .await
+    }
 }

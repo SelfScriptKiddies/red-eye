@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import './PacketCard.css';
 
-type ViewMode = 'text' | 'hex' | 'python' | 'http';
+type ViewMode = 'text' | 'hex' | 'python' | 'http' | 'grpc';
 
 interface PacketProps {
     direction: string;
@@ -10,6 +10,7 @@ interface PacketProps {
     stream_id: number;
     timestamp: number;
     isHttp?: boolean;
+    isGrpc?: boolean;
     onHeaderSearch?: (name: string, value: string) => void;
     onQuickBlock?: (pattern: string) => void;
     onDiffSelect?: (packet: { id: number; packet_data: string; direction: string }) => void;
@@ -265,8 +266,10 @@ interface TagTrigger {
     color: number;
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, onHeaderSearch, onQuickBlock, onDiffSelect, diffSelected, _merged_count }: PacketProps) {
-    const [viewMode, setViewMode] = useState<ViewMode>(isHttp ? 'http' : 'text');
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onQuickBlock, onDiffSelect, diffSelected, _merged_count }: PacketProps) {
+    const [viewMode, setViewMode] = useState<ViewMode>(isGrpc ? 'grpc' : isHttp ? 'http' : 'text');
+    const [grpcData, setGrpcData] = useState<any[] | null>(null);
+    const [grpcLoading, setGrpcLoading] = useState(false);
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
     const [httpLoading, setHttpLoading] = useState(false);
     const [triggers, setTriggers] = useState<TagTrigger[]>([]);
@@ -328,6 +331,18 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
         }
     }, [isHttp, id, stream_id]);
 
+    // Load gRPC data
+    useEffect(() => {
+        if (isGrpc && !grpcData && !grpcLoading) {
+            setGrpcLoading(true);
+            fetch(`/api/grpc/stream/${stream_id}`)
+                .then(r => r.json())
+                .then((msgs: any[]) => setGrpcData(msgs || []))
+                .catch(() => setGrpcData([]))
+                .finally(() => setGrpcLoading(false));
+        }
+    }, [isGrpc, stream_id]);
+
     const getContent = (): string => {
         switch (viewMode) {
             case 'text':
@@ -337,6 +352,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             case 'python':
                 return toPythonBytesLiteral(bytes);
             case 'http':
+            case 'grpc':
                 return ''; // Rendered as JSX below
         }
     };
@@ -349,6 +365,42 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             text = getContent();
         }
         copyText(text);
+    };
+
+    const renderGrpcView = () => {
+        if (grpcLoading) return <div className="http-loading">Loading...</div>;
+        if (!grpcData || grpcData.length === 0) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
+
+        // Find gRPC message for this packet direction
+        const msg = grpcData.find((m: any) => m.is_request === (direction === 'dest'));
+        if (!msg) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
+
+        let decoded: Record<string, any> = {};
+        try {
+            decoded = JSON.parse(msg.decoded_json || '{}');
+        } catch {}
+
+        return (
+            <div className="http-parsed">
+                <div className="http-status-line">
+                    <span className="http-method">{msg.is_request ? 'REQUEST' : 'RESPONSE'}</span>
+                    {msg.service_name && <span className="http-path"> {msg.service_name}/{msg.method_name}</span>}
+                </div>
+                <div className="http-headers">
+                    {Object.entries(decoded).map(([key, val]) => (
+                        <div key={key} className="http-header-line">
+                            <span className="h-name">{key}:</span>
+                            <span className="h-value">{typeof val === 'string' ? val : JSON.stringify(val)}</span>
+                        </div>
+                    ))}
+                </div>
+                {Object.keys(decoded).length === 0 && (
+                    <div className="text-muted" style={{fontSize: '12px', padding: '8px 0'}}>
+                        No decoded fields (raw protobuf)
+                    </div>
+                )}
+            </div>
+        );
     };
 
     const renderHttpView = () => {
@@ -465,6 +517,12 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                             onClick={() => setViewMode('http')}
                         >HTTP</button>
                     )}
+                    {isGrpc && (
+                        <button
+                            className={`view-mode-btn ${viewMode === 'grpc' ? 'active' : ''}`}
+                            onClick={() => setViewMode('grpc')}
+                        >GRPC</button>
+                    )}
                 </div>
                 <span className="packet-time">{formattedTime}</span>
                 <span className={`packet-direction ${direction}`}>
@@ -476,7 +534,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             </div>
 
             <div className="packet-content">
-                {viewMode === 'http' ? renderHttpView() : viewMode === 'hex' ? (
+                {viewMode === 'grpc' ? renderGrpcView() : viewMode === 'http' ? renderHttpView() : viewMode === 'hex' ? (
                     <div className="packet-body monospace">
                         <InteractiveHexDump bytes={bytes} onQuickBlock={onQuickBlock} />
                     </div>

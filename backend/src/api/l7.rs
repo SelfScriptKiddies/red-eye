@@ -14,7 +14,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(get_http_message_full)
         .service(get_http_headers)
         .service(search_by_header)
-        .service(search_by_headers);
+        .service(search_by_headers)
+        .service(get_grpc_messages);
 }
 
 #[utoipa::path(
@@ -144,6 +145,20 @@ async fn search_by_headers(
             let total = stream_ids.len() as i64;
             HttpResponse::Ok().json(HeaderSearchResult { stream_ids, total })
         }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+#[utoipa::path(get, path = "/api/grpc/stream/{stream_id}", tag = "l7",
+    responses((status = 200, description = "gRPC messages for stream")))]
+#[get("/grpc/stream/{stream_id}")]
+async fn get_grpc_messages(
+    _identity: Identity,
+    l7_service: web::Data<L7Service>,
+    stream_id: web::Path<i32>,
+) -> impl Responder {
+    match l7_service.get_grpc_messages(stream_id.into_inner()).await {
+        Ok(messages) => HttpResponse::Ok().json(messages),
         Err(_) => HttpResponse::InternalServerError().finish(),
     }
 }
