@@ -2,10 +2,22 @@ use std::net::IpAddr;
 
 use harpoon_core::capture::CapturedPacket;
 
+/// Rewrite localhost/unspecified IPs to the machine's real IP so the analyzer
+/// can match the packet to the correct service.
+fn rewrite_ip(ip: IpAddr, machine_ip: IpAddr) -> IpAddr {
+    if ip.is_loopback() || ip.is_unspecified() {
+        machine_ip
+    } else {
+        ip
+    }
+}
+
 /// Synthesizes a raw Ethernet frame from a CapturedPacket so that the analyzer's
 /// parse_packet() can process it without any changes.
-pub fn synthesize_raw_frame(packet: &CapturedPacket) -> Vec<u8> {
-    match (packet.src.ip(), packet.dst.ip()) {
+pub fn synthesize_raw_frame(packet: &CapturedPacket, machine_ip: IpAddr) -> Vec<u8> {
+    let src_ip = rewrite_ip(packet.src.ip(), machine_ip);
+    let dst_ip = rewrite_ip(packet.dst.ip(), machine_ip);
+    match (src_ip, dst_ip) {
         (IpAddr::V4(src_ip), IpAddr::V4(dst_ip)) => {
             let transport_header_len: usize = 20; // TCP header, no options
             let ip_total_len = (20 + transport_header_len + packet.payload.len()) as u16;
@@ -85,8 +97,8 @@ pub fn synthesize_raw_frame(packet: &CapturedPacket) -> Vec<u8> {
 
 /// Encode a CapturedPacket into the same bincode format the sniffer uses:
 /// (tv_usec: i64, tv_sec: i64, raw_ethernet_bytes: Vec<u8>)
-pub fn encode_for_nats(packet: &CapturedPacket) -> Option<Vec<u8>> {
-    let raw = synthesize_raw_frame(packet);
+pub fn encode_for_nats(packet: &CapturedPacket, machine_ip: IpAddr) -> Option<Vec<u8>> {
+    let raw = synthesize_raw_frame(packet, machine_ip);
     if raw.is_empty() {
         return None;
     }

@@ -22,22 +22,18 @@ use nats::NatsClient;
 use updates::{create_ports_cache, create_restart_notifier};
 
 fn init_logging(level: &str) {
-    let filter = match level.to_lowercase().as_str() {
-        "trace" => log::LevelFilter::Trace,
-        "debug" => log::LevelFilter::Debug,
-        "info" => log::LevelFilter::Info,
-        "warn" => log::LevelFilter::Warn,
-        "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Info,
-    };
+    use tracing_subscriber::{fmt, EnvFilter};
 
-    let mut builder = colog::default_builder();
-    builder.filter(None, filter);
-    builder.init();
+    // RUST_LOG takes priority; fallback includes harpoon_core
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            EnvFilter::new(format!("{l},harpoon_core={l}", l = level))
+        });
 
-    // Initialize tracing subscriber for harpoon-core logs
-    // tracing-log bridge forwards tracing events to the log crate
-    let _ = tracing_log::LogTracer::init();
+    fmt()
+        .with_env_filter(env_filter)
+        .with_target(true)
+        .init();
 }
 
 pub async fn run() {
@@ -87,7 +83,11 @@ pub async fn run() {
 
     // Capture forwarder: harpoon packets → NATS (same format as sniffer)
     let capture_mgr = harpoon.lock().await.capture_manager();
-    harpoon::spawn_capture_forwarder(capture_mgr, nats.clone());
+    let machine_ip: std::net::IpAddr = config.machine_ip.parse().unwrap_or_else(|_| {
+        warn!("Invalid machine_ip '{}', using 0.0.0.0", config.machine_ip);
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+    });
+    harpoon::spawn_capture_forwarder(capture_mgr, nats.clone(), machine_ip);
 
     // Start background subsystems
     updates::spawn_updates_listener(

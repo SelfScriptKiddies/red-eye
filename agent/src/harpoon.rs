@@ -393,6 +393,7 @@ pub fn parse_filter(
 pub fn spawn_capture_forwarder(
     capture_mgr: Arc<CaptureManager>,
     nats: crate::nats::NatsClient,
+    machine_ip: std::net::IpAddr,
 ) {
     tokio::spawn(async move {
         let mut rx = capture_mgr.subscribe();
@@ -401,7 +402,7 @@ pub fn spawn_capture_forwarder(
         loop {
             match rx.recv().await {
                 Ok(packet) => {
-                    if let Some(encoded) = packet_synthesis::encode_for_nats(&packet) {
+                    if let Some(encoded) = packet_synthesis::encode_for_nats(&packet, machine_ip) {
                         nats.send_packet(encoded).await;
                     }
                 }
