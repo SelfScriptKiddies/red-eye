@@ -64,10 +64,10 @@ impl StreamRepository {
                 str.src_ip::text as src_ip,
                 str.dst_ip::text as dst_ip
             FROM packets p
+            JOIN stream str ON str.id = p.stream_id
+            JOIN service s ON s.id = str.service_id
             LEFT JOIN tag t ON t.packet_id = p.id
-            LEFT JOIN tag_name tn ON tn.id = t.tag_id
-            LEFT JOIN stream str ON str.id = p.stream_id
-            LEFT JOIN service s ON s.id = str.service_id"#.to_string());
+            LEFT JOIN tag_name tn ON tn.id = t.tag_id"#.to_string());
 
         let mut where_clauses = Vec::new();
 
