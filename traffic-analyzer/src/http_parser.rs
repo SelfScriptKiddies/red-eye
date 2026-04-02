@@ -11,16 +11,36 @@ pub struct HttpParsed {
     pub body_offset: usize,
 }
 
-/// Try to parse payload as HTTP/1.x request or response.
+/// Try to parse payload as HTTP/1.x or HTTP/2 (text-serialized) request or response.
 /// Returns None if the payload doesn't look like HTTP.
 pub fn try_parse_http(payload: &[u8]) -> Option<HttpParsed> {
     if payload.is_empty() {
         return None;
     }
 
+    // Harpoon serializes HTTP/2 as "HTTP/2" — httparse only understands HTTP/1.x
+    // Rewrite to HTTP/1.1 for parsing
+    let (payload, is_h2) = if payload.starts_with(b"HTTP/2 ") || payload.windows(8).any(|w| w == b" HTTP/2\r") {
+        let mut fixed = payload.to_vec();
+        // Replace "HTTP/2 " with "HTTP/1.1 " in responses
+        if let Some(pos) = fixed.windows(7).position(|w| w == b"HTTP/2 ") {
+            fixed.splice(pos..pos + 6, b"HTTP/1.1".iter().cloned());
+        }
+        // Replace " HTTP/2\r" with " HTTP/1.1\r" in requests
+        if let Some(pos) = fixed.windows(8).position(|w| w == b" HTTP/2\r") {
+            fixed.splice(pos + 1..pos + 7, b"HTTP/1.1".iter().cloned());
+        }
+        (std::borrow::Cow::Owned(fixed), true)
+    } else {
+        (std::borrow::Cow::Borrowed(payload), false)
+    };
+    let payload = payload.as_ref();
+
     // Quick check: does it look like HTTP?
     if payload.starts_with(b"HTTP/") {
-        return parse_response(payload);
+        let mut parsed = parse_response(payload)?;
+        if is_h2 { parsed.http_version = Some("2".to_string()); }
+        return Some(parsed);
     }
 
     // Check for common HTTP methods
@@ -34,7 +54,9 @@ pub fn try_parse_http(payload: &[u8]) -> Option<HttpParsed> {
         || payload.starts_with(b"CONNECT ")
         || payload.starts_with(b"TRACE ")
     {
-        return parse_request(payload);
+        let mut parsed = parse_request(payload)?;
+        if is_h2 { parsed.http_version = Some("2".to_string()); }
+        return Some(parsed);
     }
 
     None
