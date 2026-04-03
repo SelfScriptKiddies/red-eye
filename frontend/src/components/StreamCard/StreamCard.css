@@ -1,30 +1,60 @@
 .stream-card {
-    border-radius: 20px;
+    border-radius: 12px;
     background-color: var(--re-bg-card);
-    height: 50px;
-    margin: 10px;
+    min-height: 48px;
+    margin: 6px 10px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px;
-    width: calc(100% - 10px * 2 - 10px * 2);
-    transition: 0.3s;
+    padding: 8px 12px;
+    width: calc(100% - 10px * 2 - 12px * 2);
+    transition: background 0.15s, border-radius 0.15s;
+    gap: 12px;
 }
 
+.stream-card:hover {
+    cursor: pointer;
+    border-radius: 8px;
+    background-color: var(--re-bg-card-hover);
+}
+
+/* Left column: star + arrow + tags */
+.stream-card > div.row {
+    width: 55%;
+    min-width: 0;
+}
+
+.stream-card > div.row > p {
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+    line-height: 1.4;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+/* Favorite star */
 .favorite-btn {
     background: transparent !important;
     border: none !important;
     outline: none !important;
     box-shadow: none !important;
     color: var(--re-accent);
-    margin-right: 10px;
+    margin-right: 8px;
     cursor: pointer;
-    transition: color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+    transition: color 0.2s, transform 0.15s, opacity 0.15s;
     display: flex;
     align-items: center;
     padding: 0 !important;
-    opacity: 0.5;
+    opacity: 0.4;
     line-height: 1;
+    flex-shrink: 0;
 }
 
 .favorite-btn--active {
@@ -34,51 +64,37 @@
 .favorite-btn:hover {
     opacity: 1;
     transform: scale(1.15);
-    border: none !important;
-    border-color: transparent !important;
 }
 
-.stream-card:hover {
-    cursor: pointer;
-    border-radius: 10px;
-    background-color: var(--re-bg-card-hover);
-}
-
-.row {
-    display: flex;
-    flex-direction: row;
-}
-
-.center {
-    display: flex;
-    flex-direction: column;
-}
-
+/* Right column: IP, time, protocol + count */
 .info-block {
     color: var(--re-text-secondary);
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 4px;
+    gap: 2px;
+    flex-shrink: 0;
 }
 
+/* IP address */
 .stream-ip {
-    font-size: 0.75rem;
+    font-size: 0.8rem;
     color: var(--re-accent);
-    font-family: monospace;
-    border-radius: 3px;
-    padding: 0 3px;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    border-radius: 4px;
+    padding: 1px 5px;
+    cursor: pointer;
     transition: background 0.15s;
 }
 
 .stream-ip:hover {
-    background: rgba(100, 108, 255, 0.2);
+    background: rgba(100, 108, 255, 0.15);
 }
 
 .stream-ip-group {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
 }
 
 .ip-ban-btn {
@@ -86,10 +102,11 @@
     border: none !important;
     color: var(--re-text-dim);
     cursor: pointer;
-    font-size: 10px;
-    padding: 0 2px !important;
+    font-size: 11px;
+    padding: 2px 4px !important;
     opacity: 0;
     transition: opacity 0.15s;
+    border-radius: 3px;
 }
 
 .stream-card:hover .ip-ban-btn {
@@ -99,8 +116,18 @@
 .ip-ban-btn:hover {
     opacity: 1 !important;
     color: var(--re-error);
+    background: rgba(255, 70, 70, 0.1) !important;
 }
 
+/* Time */
+.stream-time {
+    font-size: 0.75rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    color: var(--re-text-dim);
+    letter-spacing: -0.3px;
+}
+
+/* Protocol + packet count row */
 .stream-meta-row {
     display: flex;
     align-items: center;
@@ -116,6 +143,7 @@
     letter-spacing: 0.5px;
     border: 1px solid var(--re-border);
     color: var(--re-text-muted);
+    white-space: nowrap;
 }
 
 .protocol-http1 {
@@ -134,41 +162,23 @@
 }
 
 .stream-packet-count {
-    font-size: 0.85rem;
-    color: #999;
+    font-size: 0.75rem;
+    color: var(--re-text-dim);
+    white-space: nowrap;
 }
 
+/* Tags */
 .tag {
     color: white;
     display: inline;
-    margin: 0 5px;
-    font-size: 1.25rem;
-    /* textShadow is applied dynamically via inline styles */
+    margin: 0 4px;
+    font-size: 0.9rem;
 }
 
 .noselect {
     -webkit-touch-callout: none;
-    /* iOS Safari */
     -webkit-user-select: none;
-    /* Safari */
-    -khtml-user-select: none;
-    /* Konqueror HTML */
     -moz-user-select: none;
-    /* Old versions of Firefox */
     -ms-user-select: none;
-    /* Internet Explorer/Edge */
     user-select: none;
-    /* Non-prefixed version, currently
-                                    supported by Chrome, Edge, Opera and Firefox */
-}
-
-.stream-card>div.row {
-    width: 55%;
-}
-
-.stream-card > div.row > p {
-    width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }

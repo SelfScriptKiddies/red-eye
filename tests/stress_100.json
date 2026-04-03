@@ -1,0 +1,66 @@
+{
+  "config": {
+    "api_url": "http://localhost:8000",
+    "password": "test123",
+    "target_host": "10.77.0.97",
+    "http_port": 31337,
+    "tcp_port": 31338,
+    "rps": 100,
+    "duration": 300,
+    "http_ratio": 0.8,
+    "workers": 50,
+    "monitor_interval": 30,
+    "spawn_targets": false,
+    "output": "tests/stress_100.json"
+  },
+  "totals": {
+    "http_sent": 8789,
+    "http_errors": 0,
+    "tcp_sent": 0,
+    "tcp_errors": 2183
+  },
+  "snapshots": [
+    {
+      "time": 1775063362.4546268,
+      "http_sent": 2445,
+      "http_errors": 0,
+      "tcp_sent": 0,
+      "tcp_errors": 596,
+      "api_p50": 633.1,
+      "api_p99": 633.1,
+      "api_streams_ms": 633.1,
+      "api_agents_ms": 0.7,
+      "agents_online": 1,
+      "api_services_ms": 0.8,
+      "api_search_ms": 12.6
+    },
+    {
+      "time": 1775063393.139933,
+      "http_sent": 4890,
+      "http_errors": 0,
+      "tcp_sent": 0,
+      "tcp_errors": 1194,
+      "api_p50": 669.0,
+      "api_p99": 669.0,
+      "api_streams_ms": 669.0,
+      "api_agents_ms": 0.6,
+      "agents_online": 1,
+      "api_services_ms": 0.8,
+      "api_search_ms": 14.8
+    },
+    {
+      "time": 1775063423.712029,
+      "http_sent": 7298,
+      "http_errors": 0,
+      "tcp_sent": 0,
+      "tcp_errors": 1819,
+      "api_p50": 554.4,
+      "api_p99": 554.4,
+      "api_streams_ms": 554.4,
+      "api_agents_ms": 0.6,
+      "agents_online": 1,
+      "api_services_ms": 0.9,
+      "api_search_ms": 16.0
+    }
+  ]
+}
