@@ -22,9 +22,16 @@ fn proxy_name(service_name: &str) -> String {
     format!("protect-{}", service_name.replace(' ', "-").to_lowercase())
 }
 
-/// Default proxy port
-fn default_proxy_port(service_port: i32) -> u16 {
-    (service_port + 10000) as u16
+/// Default proxy port — tries port+10000, falls back to +10001..+10099 if taken.
+fn default_proxy_port(service_port: i32, used_ports: &[u16]) -> u16 {
+    let base = (service_port + 10000) as u16;
+    for offset in 0..100 {
+        let candidate = base + offset;
+        if !used_ports.contains(&candidate) {
+            return candidate;
+        }
+    }
+    base // fallback to base even if "taken" (agent will report error)
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -49,7 +56,16 @@ async fn toggle_protection(
     };
 
     let rule_name = proxy_name(&service.name);
-    let harpoon_port = body.proxy_port.unwrap_or_else(|| default_proxy_port(service.port));
+    let harpoon_port = match body.proxy_port {
+        Some(p) => p,
+        None => {
+            let used_ports: Vec<u16> = agent_service
+                .get_agent(&body.agent_id).await
+                .map(|info| info.nft_redirects.iter().map(|r| r.to_port).collect())
+                .unwrap_or_default();
+            default_proxy_port(service.port, &used_ports)
+        }
+    };
 
     if body.enable {
         let mut command = serde_json::json!({
