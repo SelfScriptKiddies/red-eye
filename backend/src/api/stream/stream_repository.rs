@@ -15,7 +15,7 @@ impl StreamRepository {
     pub async fn get_packet_by_id(&self, stream_id: i32) -> Result<Stream, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
             FROM stream
             WHERE id = $1
             "#)
@@ -27,7 +27,7 @@ impl StreamRepository {
     pub async fn get_all_streams(&self) -> Result<Vec<Stream>, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
             FROM stream
             "#)
             .fetch_all(&self.pgpool)
@@ -46,25 +46,28 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool)>, sqlx::Error> {
+    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
         let mut query_parts = Vec::new();
         let mut params = Vec::new();
 
         query_parts.push(r#"
-            SELECT 
+            SELECT
                 p.stream_id,
                 MIN(p.timestamp) as first_time,
                 MAX(p.timestamp) as last_time,
                 COUNT(DISTINCT p.id) as packet_count,
-                COALESCE(array_agg(DISTINCT tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
+                COALESCE(array_agg(tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
                 s.name as service_name,
                 s.id as service_id,
-                str.favorite as favorite
+                str.favorite as favorite,
+                str.l7_protocol as l7_protocol,
+                str.src_ip::text as src_ip,
+                str.dst_ip::text as dst_ip
             FROM packets p
+            JOIN stream str ON str.id = p.stream_id
+            JOIN service s ON s.id = str.service_id
             LEFT JOIN tag t ON t.packet_id = p.id
-            LEFT JOIN tag_name tn ON tn.id = t.tag_id
-            LEFT JOIN stream str ON str.id = p.stream_id
-            LEFT JOIN service s ON s.id = str.service_id"#.to_string());
+            LEFT JOIN tag_name tn ON tn.id = t.tag_id"#.to_string());
 
         let mut where_clauses = Vec::new();
 
@@ -101,7 +104,7 @@ impl StreamRepository {
 
         // Добавление GROUP BY и других частей запроса
         query_parts.push(r#"
-            GROUP BY p.stream_id, s.name, s.id, str.favorite
+            GROUP BY p.stream_id, s.name, s.id, str.favorite, str.l7_protocol, str.src_ip, str.dst_ip
             ORDER BY last_time DESC"#.to_string());
 
         // Добавление LIMIT и OFFSET
@@ -117,7 +120,7 @@ impl StreamRepository {
         log::debug!("Params: tags={:?}, services={:?}, limit={}, offset={}", tags, services, limit, offset);
         
         // Выполнение запроса с параметрами
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool)>(&query_string);
+        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>(&query_string);
         
         // Биндинг параметров tags и services
         for param in &params {

@@ -7,7 +7,7 @@
 .packetsPage > div{
     overflow-x: hidden;
     transition: 0.3s;
-    scrollbar-color: #646cff #353535;
+    scrollbar-color: var(--re-accent) var(--re-bg-card);
     scrollbar-width: bold;
     height: 100%;
 }
@@ -15,8 +15,14 @@
     width: 20%;
     padding: 0;
 }
-.streams {
+.streams-wrapper {
     width: 30%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.streams {
+    flex: 1;
     overflow-y: auto;
 }
 .tag-filter {
@@ -45,41 +51,41 @@
 
 #root:has( div.packetsPage) .header {
     transition: 0.3s;
-    border-bottom: solid 3px #646cff;
+    border-bottom: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .header{
-    border-bottom: solid 3px #a51900;
+    border-bottom: solid 3px var(--re-danger);
 }
 
 #root:has( div.packetsPage) .tag-filter {
     transition: 0.3s;
-    border-bottom: solid 3px #646cff;
+    border-bottom: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .tag-filter{
-    border-bottom: solid 3px #a51900;
+    border-bottom: solid 3px var(--re-danger);
 }
 
 #root:has( div.packetsPage) .filterTape {
     transition: 0.3s;
-    border-right: solid 3px #646cff;
+    border-right: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .filterTape{
-    border-right: solid 3px #a51900;
+    border-right: solid 3px var(--re-danger);
 }
 
 #root:has( div.packetsPage) .packetData {
     transition: 0.3s;
-    border-left: solid 3px #646cff;
+    border-left: solid 3px var(--re-accent);
 }
 #root:has( div.packetsPage):has( .eye__apple__focus) .packetData{
-    border-left: solid 3px #a51900;
+    border-left: solid 3px var(--re-danger);
 }
 
 .side-btn {
     width: 50%;
     position: absolute;
     border-radius: 100% 100% 0 0;
-    background-color: #353535;
+    background-color: var(--re-bg-card);
     font-size: 16px;
 }
 .bottom-side-btn {
@@ -101,13 +107,13 @@
 }
 
 #root:has( div.eye__apple__focus) .packetsPage > div{
-    scrollbar-color: #a51900 #353535;
+    scrollbar-color: var(--re-danger) var(--re-bg-card);
 }
 .packetsPage button:hover {
-    border: solid 3px #646cff;
+    border: solid 3px var(--re-accent);
 }
 #root:has( div.eye__apple__focus) .packetsPage button:hover {
-    border: solid 3px #a51900;
+    border: solid 3px var(--re-danger);
 }
 .filterTape > div {
     text-align: center;
@@ -117,4 +123,275 @@
     margin: 10px;
     width: calc(100% - 20px);
     transition: 0.15s;
+}
+
+/* Filter indicator in streams column */
+.filter-indicator {
+    background: var(--re-bg-highlight);
+    border: 1px solid var(--re-accent);
+    border-radius: 8px;
+    margin: 10px;
+    padding: 10px 14px;
+    font-size: 12px;
+}
+
+.filter-indicator > span {
+    color: var(--re-accent);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.filter-indicator-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.filter-indicator-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--re-bg-highlight);
+    border: 1px solid var(--re-border);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--re-text-secondary);
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.filter-indicator-chip button {
+    background: none !important;
+    border: none !important;
+    color: var(--re-text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0 !important;
+}
+
+.filter-indicator-chip button:hover {
+    color: var(--re-error);
+}
+
+.filter-clear-btn {
+    display: block;
+    margin-top: 8px;
+    background: transparent !important;
+    border: 1px solid var(--re-accent) !important;
+    border-radius: 4px;
+    color: var(--re-accent);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 10px !important;
+}
+
+.filter-clear-btn:hover {
+    background: var(--re-accent) !important;
+    color: white;
+}
+
+/* Header search bar */
+.header-search-bar {
+    background: var(--re-bg-highlight);
+    border-bottom: 2px solid var(--re-accent);
+    padding: 10px 15px;
+    flex-shrink: 0;
+}
+
+.header-search-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.header-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--re-bg-highlight);
+    border: 1px solid var(--re-accent);
+    border-radius: 16px;
+    padding: 3px 10px;
+    font-size: 12px;
+    max-width: 350px;
+    overflow: hidden;
+}
+
+.header-chip-name {
+    color: var(--re-accent);
+    flex-shrink: 0;
+}
+
+.header-chip-value {
+    color: var(--re-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.header-chip button {
+    background: none !important;
+    border: none !important;
+    color: var(--re-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 !important;
+}
+
+.header-chip button:hover {
+    color: var(--re-error);
+}
+
+.header-search-info {
+    font-size: 12px;
+    color: var(--re-text-muted);
+    margin-bottom: 4px;
+}
+
+.header-search-streams {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.stream-link-btn {
+    background: var(--re-bg-card) !important;
+    border: 1px solid transparent !important;
+    border-radius: 4px;
+    color: var(--re-accent);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 8px !important;
+}
+
+.stream-link-btn:hover {
+    border-color: var(--re-accent) !important;
+}
+
+/* Packet toolbar */
+.packet-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--re-border-light);
+    flex-shrink: 0;
+}
+
+.toolbar-left, .toolbar-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.merge-toggle-btn, .toolbar-btn {
+    background: var(--re-bg-deep) !important;
+    border: 1px solid var(--re-border) !important;
+    border-radius: 4px;
+    color: var(--re-text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 10px !important;
+    transition: all 0.2s;
+}
+
+.merge-toggle-btn.active {
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
+}
+
+.toolbar-btn:hover {
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
+}
+
+.merge-reset-btn {
+    background: transparent !important;
+    border: none !important;
+    color: var(--re-text-dim);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 6px !important;
+}
+
+.merge-reset-btn:hover {
+    color: var(--re-accent);
+}
+
+/* Export dropdown */
+.export-dropdown {
+    position: relative;
+}
+
+.export-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: var(--re-bg-deep);
+    border: 1px solid var(--re-accent);
+    border-radius: 6px;
+    overflow: hidden;
+    z-index: 100;
+    min-width: 120px;
+}
+
+.export-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent !important;
+    border: none !important;
+    color: var(--re-text-secondary);
+    padding: 8px 14px !important;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: monospace;
+}
+
+.export-menu button:hover {
+    background: var(--re-bg-card) !important;
+    color: var(--re-accent);
+}
+
+/* Merge toggle */
+.merge-toggle {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px;
+    align-items: center;
+}
+
+.merge-toggle-btn {
+    background: var(--re-bg-deep) !important;
+    border: 1px solid var(--re-border) !important;
+    border-radius: 4px;
+    color: var(--re-text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 10px !important;
+    transition: all 0.2s;
+}
+
+.merge-toggle-btn.active {
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
+}
+
+.merge-reset-btn {
+    background: transparent !important;
+    border: none !important;
+    color: var(--re-text-dim);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 6px !important;
+}
+
+.merge-reset-btn:hover {
+    color: var(--re-accent);
 }

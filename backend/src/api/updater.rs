@@ -76,18 +76,20 @@ mod dto {
         pub inflate_websockets: bool,
         pub merge_adjacent_packets: bool,
         pub urldecode: bool,
+        pub http_parse: bool,
     }
 
     impl From<service_dto::Service> for Service {
         fn from(service: service_dto::Service) -> Self {
             Service {
                 name: service.name,
-                port: service.port.try_into().unwrap(),
+                port: (service.port as u16),
                 chunked_transfer_encoding: service.chunked_transfer_encoding,
                 decrypt_tls: service.decrypt_tls,
                 inflate_websockets: service.inflate_websockets,
                 merge_adjacent_packets: service.merge_adjacent_packets,
                 urldecode: service.urldecode,
+                http_parse: service.http_parse,
             }
         }
     }

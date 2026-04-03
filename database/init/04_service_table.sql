@@ -8,8 +8,17 @@ CREATE TABLE IF NOT EXISTS service (
     merge_adjacent_packets BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически склеивать соседние пакеты в одном направлении
     inflate_websockets BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически разархивировать сжатые WebSocket-пакеты
     decrypt_tls BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически расшифровывать TLS-трафик
+    http_parse BOOLEAN NOT NULL DEFAULT FALSE, -- HTTP/1.1 L7 парсинг и автосклейка пакетов
+    http2_parse BOOLEAN NOT NULL DEFAULT FALSE, -- HTTP/2 парсинг через harpoon proxy
     CONSTRAINT unique_service_port UNIQUE (name, port) -- Уникальность сочетания имени сервиса и порта
 );
 
 -- Создание индекса на поле port для ускорения поиска по порту
-CREATE INDEX IF NOT EXISTS idx_services_port ON services(port);
+CREATE INDEX IF NOT EXISTS idx_services_port ON service(port);
+
+-- Agent-to-service bindings (which agent monitors which service)
+CREATE TABLE IF NOT EXISTS agent_service (
+    agent_id VARCHAR(255) NOT NULL,
+    service_id INTEGER NOT NULL REFERENCES service(id) ON DELETE CASCADE,
+    PRIMARY KEY (agent_id, service_id)
+);

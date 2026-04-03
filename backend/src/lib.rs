@@ -12,11 +12,13 @@ use config_manager::ConfigInit;
 use log::{debug, info, error};
 use api::auth;
 use crate::api::{
-    packet::packet_service::PacketService, 
-    stream::stream_service::StreamService, 
+    packet::packet_service::PacketService,
+    stream::stream_service::StreamService,
     tag::tag_service::TagService,
     service::service_service::ServiceService,
     updater::{UpdateAgent, start_config_sync_scheduler},
+    agent::agent_service::{AgentService, spawn_heartbeat_listener},
+    l7::l7_service::L7Service,
 };
 use std::sync::Arc;
 use async_nats::ConnectOptions;
@@ -65,6 +67,7 @@ pub async fn run() -> std::io::Result<()> {
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
+    let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
     
     // Создаём UpdateAgent для использования в web и фоновой задаче
@@ -81,9 +84,9 @@ pub async fn run() -> std::io::Result<()> {
         start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
     });
 
-    // Periodic cleanup of old non-favorite streams (and their packets via CASCADE)
+    // Partition management + cleanup via partition drops
     {
-        let stream_service_cleanup = StreamService::new_from_pgpool(pool.clone());
+        let cleanup_pool = pool.clone();
         let age_minutes = config.cleanup_stream_age_minutes;
         let interval_minutes = config.cleanup_interval_minutes;
         tokio::spawn(async move {
@@ -91,24 +94,69 @@ pub async fn run() -> std::io::Result<()> {
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
             loop {
                 ticker.tick().await;
-                match stream_service_cleanup.delete_old_streams(age_minutes).await {
-                    Ok(removed) => {
-                        if removed > 0 {
-                            info!("Cleanup removed {} old streams", removed);
+
+                // Ensure partitions exist for upcoming data
+                match sqlx::query_scalar::<_, i32>(
+                    "SELECT ensure_current_partitions(60, 120, 300)"
+                )
+                .fetch_one(&cleanup_pool)
+                .await
+                {
+                    Ok(created) => {
+                        if created > 0 {
+                            debug!("Created {} new partitions", created);
                         }
                     }
-                    Err(e) => {
-                        error!("Failed to cleanup old streams: {}", e);
+                    Err(e) => error!("Failed to create partitions: {}", e),
+                }
+
+                // Drop old partitions + orphaned streams
+                match sqlx::query_as::<_, (i32, i64)>(
+                    "SELECT * FROM cleanup_old_data($1)"
+                )
+                .bind(age_minutes as i32)
+                .fetch_one(&cleanup_pool)
+                .await
+                {
+                    Ok((partitions, streams)) => {
+                        if partitions > 0 || streams > 0 {
+                            info!(
+                                "Cleanup: dropped {} partitions, removed {} streams",
+                                partitions, streams
+                            );
+                        }
                     }
+                    Err(e) => error!("Cleanup failed: {}", e),
                 }
             }
         });
     }
 
+    // Create AgentService for agent management
+    let agent_nats_client = ConnectOptions::with_user_and_password(
+        config.nats_login.clone(),
+        config.nats_password.clone()
+    )
+    .connect(&config.nats_broker)
+    .await
+    .expect("Failed to connect to NATS for agent service");
+
+    let agent_service = Arc::new(AgentService::new(agent_nats_client.clone()));
+    let agent_service_data = web::Data::new(agent_service.clone());
+
+    // Subscribe to agent heartbeats (syncs block filters on new agent connect)
+    spawn_heartbeat_listener(agent_nats_client, agent_service.clone(), pool.clone());
+
     // Create broadcaster for WebSocket connections
     let (tx, _) = broadcast::channel::<String>(1000);
     let broadcaster_tx = Arc::new(tx);
     let broadcaster = web::Data::new(broadcaster_tx.clone());
+
+    // Spawn special trigger handler (flag farm + alert notifications)
+    api::special_triggers::spawn_special_trigger_handler(
+        pool.clone(),
+        broadcaster_tx.clone(),
+    );
 
     // Subscribe to NATS events and broadcast to WebSocket clients
     let broadcaster_tx_clone = broadcaster_tx.clone();
@@ -187,8 +235,10 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(stream_service.clone())
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
+            .app_data(l7_service.clone())
             .app_data(updater.clone())
             .app_data(broadcaster.clone())
+            .app_data(agent_service_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

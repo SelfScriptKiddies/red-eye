@@ -1,6 +1,6 @@
 .stream-card {
     border-radius: 20px;
-    background-color: #353535;
+    background-color: var(--re-bg-card);
     height: 50px;
     margin: 10px;
     display: flex;
@@ -12,28 +12,36 @@
 }
 
 .favorite-btn {
-    background: transparent;
-    border: none;
-    color: #777;
-    font-size: 1.3rem;
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    color: var(--re-accent);
     margin-right: 10px;
     cursor: pointer;
-    transition: color 0.2s ease, transform 0.2s ease;
+    transition: color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+    display: flex;
+    align-items: center;
+    padding: 0 !important;
+    opacity: 0.5;
+    line-height: 1;
 }
 
 .favorite-btn--active {
-    color: #f7d046;
+    opacity: 1;
 }
 
 .favorite-btn:hover {
-    color: #ffe38a;
-    transform: scale(1.1);
+    opacity: 1;
+    transform: scale(1.15);
+    border: none !important;
+    border-color: transparent !important;
 }
 
 .stream-card:hover {
     cursor: pointer;
     border-radius: 10px;
-    background-color: #424242;
+    background-color: var(--re-bg-card-hover);
 }
 
 .row {
@@ -47,11 +55,82 @@
 }
 
 .info-block {
-    color: #ccc;
+    color: var(--re-text-secondary);
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     gap: 4px;
+}
+
+.stream-ip {
+    font-size: 0.75rem;
+    color: var(--re-accent);
+    font-family: monospace;
+    border-radius: 3px;
+    padding: 0 3px;
+    transition: background 0.15s;
+}
+
+.stream-ip:hover {
+    background: rgba(100, 108, 255, 0.2);
+}
+
+.stream-ip-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.ip-ban-btn {
+    background: none !important;
+    border: none !important;
+    color: var(--re-text-dim);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 2px !important;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.stream-card:hover .ip-ban-btn {
+    opacity: 0.5;
+}
+
+.ip-ban-btn:hover {
+    opacity: 1 !important;
+    color: var(--re-error);
+}
+
+.stream-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.protocol-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    border: 1px solid var(--re-border);
+    color: var(--re-text-muted);
+}
+
+.protocol-http1 {
+    border-color: var(--re-accent);
+    color: var(--re-accent);
+}
+
+.protocol-http2 {
+    border-color: #0089ce;
+    color: #0089ce;
+}
+
+.protocol-grpc {
+    border-color: var(--re-success);
+    color: var(--re-success);
 }
 
 .stream-packet-count {

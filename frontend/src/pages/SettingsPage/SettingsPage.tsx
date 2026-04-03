@@ -11,6 +11,8 @@ interface Service {
     merge_adjacent_packets: boolean;
     inflate_websockets: boolean;
     decrypt_tls: boolean;
+    http_parse: boolean;
+    http2_parse: boolean;
 }
 
 interface Filter {
@@ -20,9 +22,15 @@ interface Filter {
     template_type: string;
     template: string;
     direction: string;
+    special_type: string | null;
 }
 
 export function SettingsPage() {
+    // Settings state
+    const [farmUrl, setFarmUrl] = useState('');
+    const [farmEnabled, setFarmEnabled] = useState(false);
+    const [settingsLoaded, setSettingsLoaded] = useState(false);
+
     // Services state
     const [services, setServices] = useState<Service[]>([]);
     const [serviceModalOpen, setServiceModalOpen] = useState(false);
@@ -34,7 +42,9 @@ export function SettingsPage() {
         urldecode: false,
         merge_adjacent_packets: false,
         inflate_websockets: false,
-        decrypt_tls: false
+        decrypt_tls: false,
+        http_parse: false,
+        http2_parse: false
     });
     
     // Filters state
@@ -46,15 +56,71 @@ export function SettingsPage() {
         color: 0,
         template_type: 'regex',
         template: '',
-        direction: 'both'
+        direction: 'both',
+        special_type: null
     });
+
+    // Proto files state
+    const [protoFiles, setProtoFiles] = useState<{id: number, service_id: number, filename: string}[]>([]);
+    const [protoServiceId, setProtoServiceId] = useState('');
+    const [protoFilename, setProtoFilename] = useState('');
+    const [protoContent, setProtoContent] = useState('');
 
     const API_URL = '/api';
 
-    // Fetch services on component mount
+    const fetchSettings = async () => {
+        try {
+            const resp = await fetch(`${API_URL}/settings`);
+            if (resp.ok) {
+                const data = await resp.json();
+                setFarmUrl(data.farm_url || '');
+                setFarmEnabled(data.farm_enabled === 'true');
+                setSettingsLoaded(true);
+            }
+        } catch (e) { console.error('Error fetching settings:', e); }
+    };
+
+    const saveSetting = async (key: string, value: string) => {
+        try {
+            await fetch(`${API_URL}/settings/${key}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value })
+            });
+        } catch (e) { console.error('Error saving setting:', e); }
+    };
+
+    const fetchProtoFiles = async () => {
+        try {
+            const resp = await fetch(`${API_URL}/proto`);
+            if (resp.ok) setProtoFiles(await resp.json());
+        } catch {}
+    };
+
+    const uploadProto = async () => {
+        if (!protoServiceId || !protoFilename.trim() || !protoContent.trim()) return;
+        await fetch(`${API_URL}/proto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ service_id: parseInt(protoServiceId), filename: protoFilename, content: protoContent })
+        });
+        setProtoFilename('');
+        setProtoContent('');
+        fetchProtoFiles();
+    };
+
+    const deleteProto = async (id: number) => {
+        if (!confirm('Удалить .proto файл?')) return;
+        await fetch(`${API_URL}/proto/${id}`, { method: 'DELETE' });
+        fetchProtoFiles();
+    };
+
+    // Fetch on mount
     useEffect(() => {
         fetchServices();
         fetchFilters();
+        fetchSettings();
+        fetchProtoFiles();
     }, []);
 
     // Services CRUD operations
@@ -113,7 +179,9 @@ export function SettingsPage() {
                     urldecode: serviceForm.urldecode,
                     merge_adjacent_packets: serviceForm.merge_adjacent_packets,
                     inflate_websockets: serviceForm.inflate_websockets,
-                    decrypt_tls: serviceForm.decrypt_tls
+                    decrypt_tls: serviceForm.decrypt_tls,
+                    http_parse: serviceForm.http_parse,
+                    http2_parse: serviceForm.http2_parse
                 })
             });
             
@@ -194,7 +262,8 @@ export function SettingsPage() {
                     color: filterForm.color,
                     template_type: filterForm.template_type,
                     template: filterForm.template,
-                    direction: filterForm.direction
+                    direction: filterForm.direction,
+                    special_type: filterForm.special_type || null
                 })
             });
             
@@ -244,6 +313,8 @@ export function SettingsPage() {
                                         {service.merge_adjacent_packets && <span className="option-badge">Merge</span>}
                                         {service.inflate_websockets && <span className="option-badge">WS</span>}
                                         {service.decrypt_tls && <span className="option-badge">TLS</span>}
+                                        {service.http_parse && <span className="option-badge">HTTP</span>}
+                                        {service.http2_parse && <span className="option-badge">HTTP/2</span>}
                                     </div>
                                 </div>
                                 <div className="card-actions">
@@ -281,6 +352,9 @@ export function SettingsPage() {
                                         <span className="info-badge">
                                             {filter.direction === 'in' ? 'In' : filter.direction === 'out' ? 'Out' : 'Both'}
                                         </span>
+                                        {filter.special_type && (
+                                            <span className="option-badge">{filter.special_type}</span>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="card-actions">
@@ -297,8 +371,85 @@ export function SettingsPage() {
                     <div className="column-header">
                         <h2>Общие</h2>
                     </div>
-                    <div className="placeholder-content">
-                        <p>Здесь будут общие настройки приложения</p>
+                    <div className="items-list">
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Flag Farm</h4>
+                                <div className="setting-row">
+                                    <label className="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={farmEnabled}
+                                            onChange={(e) => {
+                                                setFarmEnabled(e.target.checked);
+                                                saveSetting('farm_enabled', e.target.checked ? 'true' : 'false');
+                                            }}
+                                        />
+                                        Отправка флагов включена
+                                    </label>
+                                </div>
+                                <input
+                                    type="text"
+                                    placeholder="Farm URL (http://farm:8080/submit)"
+                                    value={farmUrl}
+                                    onChange={(e) => setFarmUrl(e.target.value)}
+                                    onBlur={() => saveSetting('farm_url', farmUrl)}
+                                    style={{ width: 'calc(100% - 24px)', padding: '10px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px', marginTop: '8px' }}
+                                />
+                                <p style={{ color: '#888', fontSize: '12px', margin: '8px 0 0' }}>
+                                    {farmEnabled
+                                        ? farmUrl ? `Флаги отправляются на ${farmUrl}` : 'Укажите URL фермы'
+                                        : 'Отправка выключена'}
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Proto Files */}
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Proto Files (gRPC)</h4>
+                                {protoFiles.map(pf => {
+                                    const svc = services.find(s => s.id === pf.service_id);
+                                    return (
+                                        <div key={pf.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #333' }}>
+                                            <span style={{ fontSize: '13px' }}>
+                                                <span style={{ color: '#888' }}>{svc?.name || `#${pf.service_id}`}</span>
+                                                {' / '}
+                                                <span style={{ color: '#ccc' }}>{pf.filename}</span>
+                                            </span>
+                                            <button style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px', padding: '0' }} onClick={() => deleteProto(pf.id)}>✕</button>
+                                        </div>
+                                    );
+                                })}
+                                {protoFiles.length === 0 && <p style={{ color: '#666', fontSize: '12px' }}>Нет загруженных .proto файлов</p>}
+                                <div style={{ marginTop: '10px', borderTop: '1px solid #333', paddingTop: '10px' }}>
+                                    <select
+                                        value={protoServiceId}
+                                        onChange={(e) => setProtoServiceId(e.target.value)}
+                                        className="select-input"
+                                        style={{ marginBottom: '8px' }}
+                                    >
+                                        <option value="">Выберите сервис</option>
+                                        {services.map(s => <option key={s.id} value={s.id}>{s.name} :{s.port}</option>)}
+                                    </select>
+                                    <input
+                                        type="text"
+                                        placeholder="Имя файла (service.proto)"
+                                        value={protoFilename}
+                                        onChange={(e) => setProtoFilename(e.target.value)}
+                                        style={{ width: 'calc(100% - 24px)', padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px', marginBottom: '8px' }}
+                                    />
+                                    <textarea
+                                        placeholder="Содержимое .proto файла"
+                                        value={protoContent}
+                                        onChange={(e) => setProtoContent(e.target.value)}
+                                        rows={4}
+                                        style={{ width: 'calc(100% - 24px)', padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '12px', fontFamily: 'monospace', resize: 'vertical', marginBottom: '8px' }}
+                                    />
+                                    <button className="add-btn" onClick={uploadProto} style={{ fontSize: '12px', padding: '6px 14px' }}>Загрузить</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -365,6 +516,22 @@ export function SettingsPage() {
                                     />
                                     Decrypt TLS
                                 </label>
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={serviceForm.http_parse}
+                                        onChange={(e) => setServiceForm({ ...serviceForm, http_parse: e.target.checked })}
+                                    />
+                                    HTTP Parse
+                                </label>
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={serviceForm.http2_parse}
+                                        onChange={(e) => setServiceForm({ ...serviceForm, http2_parse: e.target.checked })}
+                                    />
+                                    HTTP/2 Parse
+                                </label>
                             </div>
                         </div>
                         <div className="modal-footer">
@@ -413,6 +580,17 @@ export function SettingsPage() {
                                 <option value="in">Входящие</option>
                                 <option value="out">Исходящие</option>
                                 <option value="both">Оба направления</option>
+                            </select>
+                            <select
+                                value={filterForm.special_type || ''}
+                                onChange={(e) => setFilterForm({ ...filterForm, special_type: e.target.value || null })}
+                                className="select-input"
+                            >
+                                <option value="">Без спец.типа</option>
+                                <option value="flag">Flag (отправка в ферму)</option>
+                                <option value="alert">Alert (уведомление)</option>
+                                <option value="block">Block (drop data)</option>
+                                <option value="block_conn">Block (kill connection)</option>
                             </select>
                             <div className="color-picker-wrapper">
                                 <label>Цвет (Hue): {filterForm.color}°</label>

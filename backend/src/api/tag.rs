@@ -1,10 +1,18 @@
 use actix_identity::Identity;
 use actix_web::{get, put, post, delete, web, Responder, HttpResponse};
 use serde_json::json;
+use std::sync::Arc;
+use sqlx::PgPool;
 use crate::api::tag::tag_service::TagService;
 use crate::api::tag::tag_dto::Tag;
 use crate::api::tag::tag_dto::TagName;
 use crate::api::updater::UpdateAgent;
+use crate::api::agent::agent_service::AgentService;
+use crate::api::block_sync::sync_block_filters;
+
+fn is_block_type(st: Option<&str>) -> bool {
+    matches!(st, Some("block") | Some("block_conn"))
+}
 
 pub(crate) mod tag_dto;
 pub(crate) mod tag_repository;
@@ -135,13 +143,19 @@ async fn create_tag_name(
     _identity: Identity,
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
-    updater: web::Data<UpdateAgent>
+    updater: web::Data<UpdateAgent>,
+    agent_service: web::Data<Arc<AgentService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
+    let is_block = is_block_type(tag_name.special_type.as_deref());
     match tag_service.create_tag_name(tag_name.into_inner()).await {
         Ok(created_tag) => {
             let id = created_tag.id.try_into().unwrap();
             if let Err(e) = updater.add_filter(created_tag.clone().into(), id).await {
                 log::error!("Failed to send update: {}", e);
+            }
+            if is_block {
+                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::Ok().json(created_tag))
         }
@@ -166,14 +180,23 @@ async fn update_tag_name(
     path: web::Path<(i32,)>,
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
-    updater: web::Data<UpdateAgent>
+    updater: web::Data<UpdateAgent>,
+    agent_service: web::Data<Arc<AgentService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
+    // Check if old tag was block (need to re-sync if changing away from block)
+    let was_block = tag_service.get_tag_name_by_id(id).await
+        .map(|t| is_block_type(t.special_type.as_deref())).unwrap_or(false);
+    let will_be_block = is_block_type(tag_name.special_type.as_deref());
     match tag_service.update_tag_name(id, tag_name.into_inner()).await {
         Ok(updated_tag) => {
             let id = updated_tag.id.try_into().unwrap();
             if let Err(e) = updater.update_filter(id, updated_tag.clone().into()).await {
                 log::error!("Failed to send update: {}", e);
+            }
+            if was_block || will_be_block {
+                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::Ok().json(updated_tag))
         }
@@ -197,13 +220,21 @@ async fn delete_tag_name(
     _identity: Identity,
     path: web::Path<(i32,)>,
     tag_service: web::Data<TagService>,
-    updater: web::Data<UpdateAgent>
+    updater: web::Data<UpdateAgent>,
+    agent_service: web::Data<Arc<AgentService>>,
+    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
+    // Check if deleted tag was block type (need to re-sync after delete)
+    let was_block = tag_service.get_tag_name_by_id(id).await
+        .map(|t| is_block_type(t.special_type.as_deref())).unwrap_or(false);
     match tag_service.delete_tag_name(id).await {
         Ok(_) => {
             if let Err(e) = updater.remove_filter(id.try_into().unwrap()).await {
                 log::error!("Failed to send update: {}", e);
+            }
+            if was_block {
+                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::NoContent().finish())
         }
@@ -213,6 +244,41 @@ async fn delete_tag_name(
 }
 
 
+#[utoipa::path(
+    get,
+    path = "/api/tag/metrics",
+    responses(
+        (status = 200, description = "Tag trigger metrics per minute"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "tag"
+)]
+#[get("/tag/metrics")]
+async fn get_tag_metrics(
+    _identity: Identity,
+    tag_service: web::Data<TagService>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let minutes = query.get("minutes")
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(30);
+
+    match tag_service.get_tag_metrics(minutes).await {
+        Ok(data) => {
+            let metrics: Vec<serde_json::Value> = data.iter().map(|(tag_id, tag_name, minute_ts, count)| {
+                json!({
+                    "tag_id": tag_id,
+                    "tag_name": tag_name,
+                    "timestamp": minute_ts,
+                    "count": count
+                })
+            }).collect();
+            HttpResponse::Ok().json(metrics)
+        }
+        Err(_) => HttpResponse::InternalServerError().finish()
+    }
+}
+
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
     cfg
         .service(get_tags_by_stream_id)
@@ -220,5 +286,6 @@ pub fn tag_config(cfg: &mut web::ServiceConfig) {
         .service(get_tag_name_by_id)
         .service(create_tag_name)
         .service(update_tag_name)
-        .service(delete_tag_name);
+        .service(delete_tag_name)
+        .service(get_tag_metrics);
 }

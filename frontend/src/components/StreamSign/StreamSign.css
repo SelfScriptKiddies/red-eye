@@ -3,7 +3,7 @@
     margin-right: 10px;
 }
 .danger {
-    color: #cc2000;
+    color: var(--re-danger-hover);
 }
 .common {
     color: #0079b6;

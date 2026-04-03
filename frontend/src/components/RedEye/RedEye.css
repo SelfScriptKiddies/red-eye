@@ -58,12 +58,12 @@
     left: 50%;
     width: 35px;
     height: 35px;
-    border-color:  #a51900;
-    background-color: #cc2000;
+    border-color:  var(--re-danger);
+    background-color: var(--re-danger-hover);
 }
 .eye:has(> .eye__apple__focus) { 
     border-width: 10px;
-    border-color:  #a51900;
+    border-color:  var(--re-danger);
     background-color: #ff1e1e;
 }
 
@@ -77,7 +77,7 @@
     opacity: 0;
 }
 .bloodrop svg path {
-    fill:  #a51900;
+    fill:  var(--re-danger);
 }
 .bloodrop svg {
     width: 30px;

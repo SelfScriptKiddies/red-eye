@@ -37,3 +37,4 @@ futures-util = "0.3.31"
 actix = "0.13.5"
 async-nats = "0.42.0"
 anyhow = "1.0.98"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

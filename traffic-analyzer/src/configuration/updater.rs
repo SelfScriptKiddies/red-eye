@@ -59,6 +59,7 @@ pub mod dto {
         pub inflate_websockets: bool,
         pub merge_adjacent_packets: bool,
         pub urldecode: bool,
+        pub http_parse: bool,
     }
 }
 

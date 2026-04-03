@@ -2,7 +2,7 @@
     margin: 10px;
     padding: 15px;
     border-radius: 4px;
-    background-color: #353535;
+    background-color: var(--re-bg-card);
     max-width: 80%;
     border: 1px solid #757575;
 }
@@ -40,7 +40,7 @@
 }
 
 .view-mode-btn {
-    background: #2a2a2a;
+    background: var(--re-bg-deep);
     color: #777;
     border: none !important;
     outline: none !important;
@@ -54,7 +54,7 @@
 }
 
 .view-mode-btn:hover {
-    box-shadow: inset 0 0 0 1px #646cff;
+    box-shadow: inset 0 0 0 1px var(--re-accent);
 }
 
 .view-mode-btn:focus,
@@ -112,7 +112,7 @@
     margin: 0;
     padding: 10px;
     padding-right: 60px;
-    background-color: #2a2a2a;
+    background-color: var(--re-bg-deep);
     color: #e0e0e0;
     border-radius: 4px;
     white-space: pre-wrap;
@@ -126,15 +126,305 @@
     font-size: 0.8rem;
 }
 
-.copy-btn {
+.packet-btn-group {
     position: absolute;
     top: 8px;
     right: 8px;
-    background: #444;
+    display: flex;
+    gap: 4px;
+}
+
+.copy-btn, .block-btn, .diff-select-btn {
+    background: var(--re-border) !important;
     color: #bbb;
-    border: 1px solid #555;
+    border: 1px solid var(--re-text-faint) !important;
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 3px 8px !important;
+    cursor: pointer;
+    line-height: 1.2;
+    font-family: inherit;
+}
+
+.diff-select-btn {
+    border-color: var(--re-accent) !important;
+    color: var(--re-accent);
+}
+
+.diff-select-btn.selected {
+    background: var(--re-accent) !important;
+    color: white;
+}
+
+.block-btn {
+    border-color: var(--re-error) !important;
+    color: var(--re-error);
+}
+
+.block-btn:hover {
+    background: var(--re-error) !important;
+    color: white;
+}
+
+/* HTTP parsed view */
+.http-parsed {
+    background: var(--re-bg-deep);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.83rem;
+    line-height: 1.5;
+}
+
+.http-status-line {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--re-border);
+}
+
+.http-method {
+    color: var(--re-accent);
+    font-weight: bold;
+}
+
+.http-path {
+    color: #e0e0e0;
+}
+
+.http-ver {
+    color: var(--re-text-dim);
+}
+
+.http-code-2 { color: #4CAF50; font-weight: bold; }
+.http-code-3 { color: #c4a000; font-weight: bold; }
+.http-code-4 { color: var(--re-warning); font-weight: bold; }
+.http-code-5 { color: #e00000; font-weight: bold; }
+
+.http-headers {
+    margin-bottom: 8px;
+}
+
+.http-header-line {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 1px 0;
+}
+
+.h-name {
+    color: var(--re-accent);
+    flex-shrink: 0;
+}
+
+.h-value {
+    color: var(--re-text-secondary);
+    word-break: break-all;
+    flex: 1;
+}
+
+.header-search-btn {
+    background: none !important;
+    border: 1px solid transparent !important;
+    color: var(--re-accent);
+    cursor: pointer;
+    padding: 2px 4px !important;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+}
+
+.http-header-line:hover .header-search-btn {
+    opacity: 0.6;
+}
+
+.header-search-btn:hover {
+    opacity: 1 !important;
+    border-color: var(--re-accent) !important;
+}
+
+.path-search {
+    opacity: 0.5;
+    display: inline-flex;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.path-search:hover {
+    opacity: 1 !important;
+}
+
+.cookie-line {
+    padding-left: 16px;
+}
+
+.cookie-name {
+    color: #a080ff !important;
+    font-size: 0.8rem;
+}
+
+.http-body {
+    margin: 0;
+    padding: 8px 0 0;
+    border-top: 1px solid var(--re-border);
+    color: #aaa;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 0.8rem;
+}
+
+.curl-copy-btn {
+    margin-top: 8px;
+    background: transparent !important;
+    border: 1px solid var(--re-accent) !important;
+    color: var(--re-accent);
+    cursor: pointer;
+    padding: 3px 10px !important;
     border-radius: 4px;
     font-size: 0.75rem;
-    padding: 4px 10px;
+    font-family: monospace;
+}
+
+.curl-copy-btn:hover {
+    background: var(--re-accent) !important;
+    color: white;
+}
+
+.http-loading {
+    color: var(--re-text-dim);
+    padding: 10px;
+}
+
+/* Interactive Hexdump */
+.interactive-hexdump {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    user-select: text;
+}
+
+.hx-row {
+    white-space: pre;
+}
+
+.hx-offset {
+    color: var(--re-text-faint);
+    margin-right: 8px;
+}
+
+.hx-hex {
+    margin-right: 12px;
+}
+
+.hx-byte {
+    cursor: default;
+    padding: 0 1px;
+    border-radius: 2px;
+    transition: background 0.08s;
+}
+
+.hx-byte + .hx-byte::before {
+    content: ' ';
+}
+
+.hx-gap {
+    margin: 0 2px;
+}
+
+.hx-ascii {
+    color: #999;
+}
+
+.hx-ascii-char {
+    cursor: default;
+    border-radius: 1px;
+    transition: background 0.08s;
+}
+
+.hx-nonprint {
+    color: var(--re-text-faint);
+}
+
+.hx-hover {
+    background: rgba(100, 108, 255, 0.3);
+    color: #fff;
+}
+
+.hx-selected {
+    background: rgba(100, 108, 255, 0.5);
+    color: #fff;
+}
+
+.hx-pad {
+    color: transparent;
+}
+
+/* Context menu */
+.hx-ctx-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 999;
+}
+
+.hx-ctx-menu {
+    position: fixed;
+    z-index: 1000;
+    background: #1e1e1e;
+    border: 1px solid var(--re-accent);
+    border-radius: 6px;
+    overflow: hidden;
+    min-width: 160px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.hx-ctx-header {
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--re-text-muted);
+    border-bottom: 1px solid var(--re-border-light);
+}
+
+.hx-ctx-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent !important;
+    border: none !important;
+    color: var(--re-text-secondary);
+    padding: 7px 12px !important;
+    font-size: 12px;
     cursor: pointer;
+    font-family: monospace;
+}
+
+.hx-ctx-menu button:hover {
+    background: var(--re-bg-highlight) !important;
+    color: var(--re-accent);
+}
+
+.hx-ctx-block {
+    color: var(--re-error) !important;
+    border-top: 1px solid var(--re-border-light) !important;
+}
+
+.hx-ctx-block:hover {
+    color: #ff6666 !important;
+    background: #2a1a1a !important;
+}
+
+/* Pattern highlight */
+.highlight-match {
+    border-radius: 2px;
+    padding: 0 1px;
+}
+
+.merged-badge {
+    font-size: 0.7rem;
+    color: var(--re-text-muted);
+    background: var(--re-bg-deep);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--re-border);
 }

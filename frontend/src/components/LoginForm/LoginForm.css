@@ -16,11 +16,11 @@ form > div {
 }
 .eye:has(> .eye__apple__focus) ~ form input:focus{ 
     border: none;
-    border-bottom: 2px solid #cc2000;
+    border-bottom: 2px solid var(--re-danger-hover);
 }
 .eye ~ form input:focus{ 
     border-bottom: 2px solid #0079b6;
 }
 .errorMessage {
-    color: #cc2000;
+    color: var(--re-danger-hover);
 }

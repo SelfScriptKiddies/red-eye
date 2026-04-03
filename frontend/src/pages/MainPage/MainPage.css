@@ -1,0 +1,254 @@
+.MainPage {
+    width: 100vw;
+    margin-top: 130px;
+    border-top: 3px solid var(--re-accent);
+    padding: 20px 30px;
+    box-sizing: border-box;
+}
+
+/* Stats Row */
+.stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-card {
+    flex: 1;
+    background: var(--re-bg-deep);
+    border-radius: 8px;
+    padding: 16px 20px;
+    border-left: 3px solid var(--re-accent);
+}
+
+.stat-value {
+    font-size: 28px;
+    font-weight: bold;
+    color: #fff;
+}
+
+.stat-total {
+    font-size: 16px;
+    color: var(--re-text-dim);
+    font-weight: normal;
+}
+
+.stat-active {
+    color: var(--re-success);
+}
+
+.stat-inactive {
+    color: var(--re-text-dim);
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--re-text-muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Dashboard Columns */
+.dashboard-columns {
+    display: flex;
+    gap: 20px;
+}
+
+.dashboard-column {
+    flex: 1;
+    background: var(--re-bg-deep);
+    border-radius: 8px;
+    padding: 16px;
+    max-height: calc(100vh - 330px);
+    overflow-y: auto;
+}
+
+.dashboard-section-title {
+    margin: 0 0 14px 0;
+    font-size: 13px;
+    color: var(--re-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--re-accent);
+}
+
+/* Tag Metrics */
+.tag-metric-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--re-border-light);
+}
+
+.tag-metric-row:last-child {
+    border-bottom: none;
+}
+
+.tag-metric-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--re-text-secondary);
+}
+
+.sparkline {
+    flex-shrink: 0;
+}
+
+.tag-metric-count {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--re-accent);
+    min-width: 30px;
+    text-align: right;
+}
+
+/* Recent Streams */
+.recent-stream-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--re-border-light);
+}
+
+.recent-stream-row:last-child {
+    border-bottom: none;
+}
+
+.recent-stream-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    overflow: hidden;
+}
+
+.recent-stream-service {
+    font-size: 13px;
+    color: var(--re-text-secondary);
+}
+
+.recent-stream-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--re-text-muted);
+    flex-shrink: 0;
+}
+
+.recent-stream-time {
+    color: var(--re-text-dim);
+}
+
+/* Agent Summary */
+.agent-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--re-border-light);
+}
+
+.agent-summary-row:last-child {
+    border-bottom: none;
+}
+
+.agent-summary-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-summary-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--re-text-secondary);
+}
+
+.agent-summary-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-summary-ports {
+    font-size: 12px;
+    color: var(--re-text-dim);
+    font-family: monospace;
+}
+
+.empty-state {
+    color: var(--re-text-faint);
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+}
+
+/* Status dots (reused from AgentsPage) */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.online {
+    background: var(--re-success);
+    box-shadow: 0 0 4px var(--re-success);
+}
+
+.status-dot.offline {
+    background: var(--re-text-dim);
+}
+
+/* Badge (reused) */
+.badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+
+.info-badge {
+    border: 1px solid var(--re-accent);
+    color: var(--re-accent);
+}
+
+.option-badge {
+    background-color: var(--re-success);
+    color: white;
+}
+
+/* Scrollbar */
+.dashboard-column::-webkit-scrollbar {
+    width: 4px;
+}
+
+.dashboard-column::-webkit-scrollbar-thumb {
+    background: var(--re-accent);
+    border-radius: 2px;
+}
+
+/* Focus mode */
+body:has(.eye__apple__focus) .MainPage {
+    border-top-color: var(--re-danger);
+}
+
+body:has(.eye__apple__focus) .stat-card {
+    border-left-color: var(--re-danger);
+}
+
+body:has(.eye__apple__focus) .dashboard-section-title {
+    border-bottom-color: var(--re-danger);
+}
+
+body:has(.eye__apple__focus) .tag-metric-count {
+    color: var(--re-danger);
+}
+
+body:has(.eye__apple__focus) .sparkline polyline {
+    stroke: var(--re-danger);
+}

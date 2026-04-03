@@ -1,19 +1,14 @@
--- Create 'packets' table
+-- Create partitioned 'packets' table
 CREATE TABLE IF NOT EXISTS packets (
-    id SERIAL PRIMARY KEY,
+    id SERIAL,
     timestamp BIGINT NOT NULL,
     timestamp_microseconds BIGINT NOT NULL,
-    direction VARCHAR(4) NOT NULL, -- from dest/orig
+    direction VARCHAR(4) NOT NULL,
     stream_id INTEGER NOT NULL,
     packet_data BYTEA NOT NULL,
-    CONSTRAINT fk_stream
-        FOREIGN KEY(stream_id) 
-            REFERENCES stream(id)
-            ON DELETE CASCADE
-);
+    PRIMARY KEY (id, timestamp)
+) PARTITION BY RANGE (timestamp);
 
--- Create index on stream_id for faster lookups
+-- Indexes (applied to all partitions automatically)
 CREATE INDEX IF NOT EXISTS idx_packets_stream_id ON packets(stream_id);
-
--- Optional: Create index on timestamp if queries frequently filter by time
 CREATE INDEX IF NOT EXISTS idx_packets_timestamp ON packets(timestamp);

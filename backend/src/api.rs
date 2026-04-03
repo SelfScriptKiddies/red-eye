@@ -1,8 +1,15 @@
+pub mod agent;
 pub mod auth;
+pub mod block_sync;
+pub mod l7;
+pub mod protect;
+pub mod proto;
 pub(crate) mod packet;
 pub mod realtime;
 pub mod service;
 pub(crate) mod stream;
+pub mod settings;
+pub mod special_triggers;
 pub mod tag;
 pub mod updater;
 use actix_web::web;
@@ -22,6 +29,11 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(tag::tag_config)
             .configure(service::config)
             .configure(realtime::config)
+            .configure(agent::config)
+            .configure(l7::config)
+            .configure(settings::config)
+            .configure(protect::config)
+            .configure(proto::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }
@@ -52,12 +64,24 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         tag::create_tag_name,
         tag::update_tag_name,
         tag::delete_tag_name,
+        tag::get_tag_metrics,
 
         service::get_all_services,
         service::get_service_by_id,
         service::create_service,
         service::update_service,
-        service::delete_service
+        service::delete_service,
+
+        agent::get_all_agents,
+        agent::get_agent_by_id,
+        agent::send_agent_command,
+        agent::broadcast_agent_command,
+
+        l7::get_http_messages,
+        l7::get_http_message_full,
+        l7::get_http_headers,
+        l7::search_by_header,
+        l7::search_by_headers
     ),
     components(
         schemas(auth::LoginData, packet::GetPacketsQuery)
@@ -67,7 +91,9 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         (name = "packet", description = "Packet endpoints"),
         (name = "stream", description = "Stream endpoints"),
         (name = "tag", description = "Tag endpoints"),
-        (name = "service", description = "Service endpoints")
+        (name = "service", description = "Service endpoints"),
+        (name = "agent", description = "Agent management endpoints"),
+        (name = "l7", description = "L7 protocol analysis endpoints")
     )
 
 )]

@@ -1,9 +1,0 @@
-interface: ens33
-
-nats:
-  host: 127.0.0.1:4222
-  login: red-eye-client
-  password: 6781261b9d9f2d24
-
-logging:
-  level: trace

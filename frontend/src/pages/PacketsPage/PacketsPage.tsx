@@ -1,9 +1,10 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
+import { DiffView } from '../../components/DiffView';
 
 interface PacketEvent {
     packet_id: number;
@@ -13,12 +14,29 @@ interface PacketEvent {
     direction: string;
 }
 
+function copyText(text: string) {
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text);
+    } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+    }
+}
+
 export function PacketsPage() {
     const [streamsArray, setStreams] = useState([]);
     const [servicesArray, setServices] = useState([]);
     const [tagsArray, setTags] = useState([]);
     const [tagColors, setTagColors] = useState({});
     const [packetData, setPacketData] = useState<any[]>([]);
+    const [selectedStreamL7, setSelectedStreamL7] = useState<string>('unknown');
+    const [selectedStreamId, setSelectedStreamId] = useState<number | null>(null);
     const [pageLoaded, setPageLoaded] = useState(null);
     const [servicesLoaded, setServicesLoaded] = useState(false);
     const [tagsLoaded, setTagsLoaded] = useState(false);
@@ -27,6 +45,13 @@ export function PacketsPage() {
     const [currentOffset, setCurrentOffset] = useState(0);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [hasMoreStreams, setHasMoreStreams] = useState(true);
+    const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
+    const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
+    const [headerSearching, setHeaderSearching] = useState(false);
+    const [mergeOverride, setMergeOverride] = useState<boolean | null>(null); // null = auto
+    const [diffLeft, setDiffLeft] = useState<any | null>(null);
+    const [diffRight, setDiffRight] = useState<any | null>(null);
+    const [diffOpen, setDiffOpen] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const selectedStreamIdRef = useRef<number | null>(null);
     const streamsContainerRef = useRef<HTMLDivElement | null>(null);
@@ -93,11 +118,12 @@ export function PacketsPage() {
             let data = await getUrl(req_url);
             const newStreams = Object.values(data);
             
+            const MAX_STREAMS = 200;
             if (reset) {
-                await setStreams(newStreams);
+                await setStreams(newStreams.slice(0, MAX_STREAMS));
                 setCurrentOffset(20);
             } else {
-                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams]);
+                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams].slice(0, MAX_STREAMS));
                 setCurrentOffset(prev => prev + 20);
             }
             
@@ -132,91 +158,224 @@ export function PacketsPage() {
             return () => container.removeEventListener('scroll', handleScroll);
         }
     }, [isLoadingMore, hasMoreStreams, isRedEyeActive, currentOffset, usedTags, usedServices]);
-    // Initial data loading
+    // Initial data loading + handle ?stream=ID from URL
     useEffect(() => {
         if (isRedEyeActive) return;
-        
+
         if (!pageLoaded) {
             setPageLoaded(true);
             getStreams();
+
+            // Auto-select stream from URL query param
+            const params = new URLSearchParams(window.location.search);
+            const streamParam = params.get('stream');
+            if (streamParam) {
+                setTimeout(() => handleStreamClick(parseInt(streamParam)), 500);
+            }
         }
-        
+
         if (!servicesLoaded) {
             getServices();
         }
-        
+
         if (!tagsLoaded) {
             getTags();
         }
-    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]); // Only run when these change
+    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]);
 
-    // WebSocket connection for real-time packet updates
+    // WebSocket connection for real-time packet updates (throttled)
+    const wsRefreshPending = useRef(false);
+    const wsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const WS_THROTTLE_MS = 2000; // Max 1 refresh per 2 seconds
+
     useEffect(() => {
-        if (isRedEyeActive) {
-            return; // Don't connect if RedEye is not active
-        }
+        if (isRedEyeActive) return;
+        let reconnectTimeout: ReturnType<typeof setTimeout>;
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            console.log('WebSocket connected');
+        const scheduleRefresh = () => {
+            if (wsRefreshPending.current) return; // Already scheduled
+            wsRefreshPending.current = true;
+            wsRefreshTimer.current = setTimeout(() => {
+                wsRefreshPending.current = false;
+                setCurrentOffset(0);
+                setHasMoreStreams(true);
+                getFilteredStreams(true);
+            }, WS_THROTTLE_MS);
         };
 
-        ws.onmessage = async (event) => {
-            try {
-                const packetEvent: PacketEvent = JSON.parse(event.data);
-                console.log('Received packet event:', packetEvent);
-                
-                // Update streams list when new packet arrives
-                // This will refresh the stream list to show updated timestamps and move active streams to top
-                if (!isRedEyeActive) {
-                    setCurrentOffset(0);
-                    setHasMoreStreams(true);
-                    getFilteredStreams(true);
-                }
-            } catch (error) {
-                console.error('Error parsing WebSocket message:', error);
-            }
+        const connectWs = () => {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/api/ws`;
+            const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
+
+            ws.onmessage = () => {
+                scheduleRefresh(); // Throttled — at most 1 refresh per 2s
+            };
+
+            ws.onclose = () => {
+                reconnectTimeout = setTimeout(() => {
+                    if (wsRef.current?.readyState === WebSocket.CLOSED) {
+                        connectWs();
+                    }
+                }, 3000);
+            };
         };
 
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-
-        ws.onclose = () => {
-            console.log('WebSocket disconnected, reconnecting...');
-            // Reconnect after 3 seconds
-            setTimeout(() => {
-                if (!isRedEyeActive) {
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-                    wsRef.current = new WebSocket(wsUrl);
-                }
-            }, 3000);
-        };
+        connectWs();
 
         return () => {
+            clearTimeout(reconnectTimeout);
+            if (wsRefreshTimer.current) clearTimeout(wsRefreshTimer.current);
             if (wsRef.current) {
+                wsRef.current.onclose = null;
                 wsRef.current.close();
                 wsRef.current = null;
             }
         };
     }, [isRedEyeActive]);
 
+    // Determine if merge should be active
+    const shouldMerge = (() => {
+        if (mergeOverride !== null) return mergeOverride;
+        // Auto: merge for HTTP services, or if service has merge_adjacent_packets
+        if (selectedStreamL7 === 'http1') return true;
+        // Check service flags from the selected stream
+        if (selectedStreamId) {
+            const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
+            const stream = streamsArray.find((s: any) => s.id === numId);
+            if (stream) {
+                const svc = servicesArray.find((s: any) => s.id === stream.service_id);
+                if (svc?.merge_adjacent_packets) return true;
+            }
+        }
+        return false;
+    })();
+
+    // Merge adjacent packets with the same direction (when enabled) — memoized
+    const mergedPackets = useMemo(() => {
+        if (!packetData || packetData.length === 0) return [];
+        if (!shouldMerge) return packetData.map(p => ({ ...p, _merged_count: 1 }));
+        const groups: any[] = [];
+        for (const pkt of packetData) {
+            const last = groups[groups.length - 1];
+            if (last && last.direction === pkt.direction) {
+                const a = atob(last.packet_data);
+                const b = atob(pkt.packet_data);
+                const merged = new Uint8Array(a.length + b.length);
+                for (let i = 0; i < a.length; i++) merged[i] = a.charCodeAt(i);
+                for (let i = 0; i < b.length; i++) merged[a.length + i] = b.charCodeAt(i);
+                let binary = '';
+                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
+                last.packet_data = btoa(binary);
+                last._merged_count = (last._merged_count || 1) + 1;
+            } else {
+                groups.push({ ...pkt, _merged_count: 1 });
+            }
+        }
+        return groups;
+    }, [packetData, shouldMerge]);
+
+    // When header search is active, load matching streams individually
+    const [headerFilteredStreams, setHeaderFilteredStreams] = useState<any[]>([]);
+
+    useEffect(() => {
+        if (!headerSearchResults || headerSearchResults.stream_ids.length === 0) {
+            setHeaderFilteredStreams([]);
+            return;
+        }
+        // Try to find in already-loaded streams first
+        const ids = new Set(headerSearchResults.stream_ids);
+        const found = streamsArray.filter((s: any) => ids.has(s.id));
+        if (found.length > 0) {
+            setHeaderFilteredStreams(found);
+        } else {
+            // Load more streams (bigger window) and filter
+            getUrl(`/api/stream?limit=200&offset=0`)
+                .then(data => {
+                    if (data) {
+                        const all = Object.values(data) as any[];
+                        const matched = all.filter((s: any) => ids.has(s.id));
+                        setHeaderFilteredStreams(matched);
+                    }
+                })
+                .catch(() => setHeaderFilteredStreams([]));
+        }
+    }, [headerSearchResults]);
+
+    const filteredStreams = headerSearchResults
+        ? headerFilteredStreams
+        : streamsArray;
+
+    const addHeaderFilter = (name: string, value: string) => {
+        const exists = headerFilters.some(f => f.name === name && f.value === value);
+        if (!exists) {
+            const updated = [...headerFilters, { name, value }];
+            setHeaderFilters(updated);
+            runHeaderSearch(updated);
+        }
+    };
+
+    const removeHeaderFilter = (index: number) => {
+        const updated = headerFilters.filter((_, i) => i !== index);
+        setHeaderFilters(updated);
+        if (updated.length > 0) {
+            runHeaderSearch(updated);
+        } else {
+            setHeaderSearchResults(null);
+        }
+    };
+
+    const runHeaderSearch = async (filters: {name: string, value: string}[]) => {
+        setHeaderSearching(true);
+        try {
+            const data = await fetch('/api/http/search/multi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(filters.map(f => ({ name: f.name, value: f.value }))),
+            }).then(r => r.json());
+            setHeaderSearchResults(data);
+        } catch {
+            setHeaderSearchResults(null);
+        }
+        setHeaderSearching(false);
+    };
+
     const handleStreamClick = async (streamId) => {
         selectedStreamIdRef.current = streamId;
-        console.log('Stream selected:', streamId);
+        setSelectedStreamId(streamId);
+        setMergeOverride(null);
+
+        // Get l7_protocol: try local array first, fallback to API
+        const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
+        const localStream = streamsArray.find((s: any) => s.id === numericId);
+        if (localStream?.l7_protocol) {
+            setSelectedStreamL7(localStream.l7_protocol);
+        } else {
+            // Fetch from API for shared/external links
+            try {
+                const streamData = await getUrl(`/api/stream/${numericId}`);
+                setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
+            } catch {
+                setSelectedStreamL7('unknown');
+            }
+        }
+
         try {
             const data = await getUrl(`/api/packet/stream_id/${streamId}`);
             const packets = Object.values(data);
-            console.log('Loaded packets for stream:', packets.length);
-            setPacketData(packets);
+            const MAX_PACKETS = 500;
+            setPacketData(packets.slice(0, MAX_PACKETS));
         } catch (error) {
             console.error('Ошибка при получении данных пакета:', error);
         }
+    };
+
+    const handleStreamNavigate = (streamId: number) => {
+        handleStreamClick(streamId);
+        // Scroll to stream in list
+        const streamEl = document.querySelector(`[data-stream-id="${streamId}"]`);
+        if (streamEl) streamEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
     const handleFavoriteToggle = async (streamId, currentFavorite) => {
@@ -244,46 +403,144 @@ export function PacketsPage() {
         }
     };
 
+    // Share: copy link + auto-favorite
+    const shareStream = async () => {
+        if (!selectedStreamId) return;
+        const url = `${window.location.origin}/packets?stream=${selectedStreamId}`;
+        copyText(url);
+        // Auto-favorite so it survives cleanup
+        const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
+        const stream = streamsArray.find((s: any) => s.id === numId);
+        if (stream && !stream.favorite) {
+            handleFavoriteToggle(numId, false);
+        }
+        setShareCopied(true);
+        setTimeout(() => setShareCopied(false), 2000);
+    };
+
+    // Export generators
+    const exportPwntools = (): string => {
+        if (!packetData || packetData.length === 0) return '';
+        const stream = streamsArray.find((s: any) => s.id === (typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId));
+        const host = stream ? `TARGET_IP` : 'TARGET_IP';
+        const port = stream?.service_name ? '????' : '????';
+        const lines = [`from pwn import *\n`, `r = remote('${host}', ${port})\n`];
+        for (const pkt of packetData) {
+            const raw = atob(pkt.packet_data);
+            const pyBytes = Array.from(raw).map((c: string) => {
+                const code = c.charCodeAt(0);
+                if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
+                return `\\x${code.toString(16).padStart(2, '0')}`;
+            }).join('');
+            if (pkt.direction === 'dest') {
+                lines.push(`r.send(b'${pyBytes}')`);
+            } else {
+                lines.push(`r.recv(${raw.length})  # ${raw.length} bytes`);
+            }
+        }
+        lines.push(`\nr.interactive()`);
+        return lines.join('\n');
+    };
+
+    const exportRequests = (): string => {
+        if (!packetData || packetData.length === 0) return '';
+        const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
+        // Parse merged packets for HTTP messages
+        for (const pkt of mergedPackets) {
+            if (pkt.direction !== 'dest') continue;
+            const text = atob(pkt.packet_data);
+            const methodMatch = text.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\S+)\s+HTTP/);
+            if (!methodMatch) continue;
+            const [, method, path] = methodMatch;
+            // Extract headers
+            const headerSection = text.split('\r\n\r\n')[0];
+            const headerLines = headerSection.split('\r\n').slice(1);
+            const headers: Record<string, string> = {};
+            for (const line of headerLines) {
+                const idx = line.indexOf(':');
+                if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+            }
+            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+            const headersStr = Object.entries(headers)
+                .filter(([k]) => !['Host', 'Content-Length', 'Connection'].includes(k))
+                .map(([k, v]) => `        '${k}': '${v}'`).join(',\n');
+
+            let call = `resp = s.${method.toLowerCase()}(f'{BASE}${path}'`;
+            if (headersStr) call += `,\n    headers={\n${headersStr}\n    }`;
+            if (body && method !== 'GET') call += `,\n    data=${JSON.stringify(body)}`;
+            call += ')';
+            lines.push(call);
+            lines.push(`print(resp.status_code, resp.text[:200])\n`);
+        }
+        return lines.join('\n');
+    };
+
+    const exportCurl = (): string => {
+        if (!packetData || packetData.length === 0) return '';
+        const lines = ['#!/bin/bash\n'];
+        for (const pkt of mergedPackets) {
+            if (pkt.direction !== 'dest') continue;
+            const text = atob(pkt.packet_data);
+            const methodMatch = text.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\S+)\s+HTTP/);
+            if (!methodMatch) continue;
+            const [, method, path] = methodMatch;
+            const headerSection = text.split('\r\n\r\n')[0];
+            const headerLines = headerSection.split('\r\n').slice(1);
+            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+
+            const parts = [`curl -s -X ${method} 'http://TARGET_IP:PORT${path}'`];
+            for (const line of headerLines) {
+                const idx = line.indexOf(':');
+                if (idx > 0) {
+                    const name = line.slice(0, idx).trim();
+                    if (!['Host', 'Content-Length', 'Connection'].includes(name)) {
+                        parts.push(`  -H '${line.trim()}'`);
+                    }
+                }
+            }
+            if (body && method !== 'GET') {
+                parts.push(`  -d '${body.replace(/'/g, "'\\''")}'`);
+            }
+            lines.push(parts.join(' \\\n'));
+            lines.push('echo\n');
+        }
+        return lines.join('\n');
+    };
+
+    const [shareCopied, setShareCopied] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
     const handleClearStreams = () => {
         setStreams([]);
         setCurrentOffset(0);
         setHasMoreStreams(true);
     };
-    const handleTagClick = (e) => {
-        let tag_name = e.target.dataset.service;
-        let tmp = usedTags;
-        if(usedTags.includes(tag_name))
-        {
-            let idx_tag = tmp.indexOf(tag_name); 
-            tmp.splice(idx_tag, 1); 
-            console.log("NEW ARRAY:", tmp);
+    // Re-fetch streams when tag/service/header filters change
+    const filtersVersion = useRef(0);
+    useEffect(() => {
+        // Skip initial render
+        if (filtersVersion.current === 0) {
+            filtersVersion.current = 1;
+            return;
         }
-        else
-        {
-            tmp.push(e.target.dataset.service);
-        }
-        setUsedTags(tmp);
         setCurrentOffset(0);
         setHasMoreStreams(true);
         getFilteredStreams(true);
+    }, [usedTags, usedServices, headerSearchResults]);
+
+    const handleTagClick = (e) => {
+        const tagName = e.target.dataset.service;
+        setUsedTags(prev => {
+            if (prev.includes(tagName)) return prev.filter(t => t !== tagName);
+            return [...prev, tagName];
+        });
     };
     const handleServiceClick = (e) => {
-        let service_name = e.target.dataset.service;
-        let tmp = usedServices;
-        if(usedServices.includes(service_name))
-        {
-            let idx_tag = tmp.indexOf(service_name); 
-            tmp.splice(idx_tag, 1); 
-            console.log("NEW ARRAY:", tmp);
-        }
-        else
-        {
-            tmp.push(e.target.dataset.service);
-        }
-        setUsedServices(tmp);
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-        getFilteredStreams(true);
+        const serviceName = e.target.dataset.service;
+        setUsedServices(prev => {
+            if (prev.includes(serviceName)) return prev.filter(s => s !== serviceName);
+            return [...prev, serviceName];
+        });
     };
 
     return (
@@ -303,13 +560,44 @@ export function PacketsPage() {
                     })}
                 </div>
             </div>
-            <div id="streams" className="streams" ref={streamsContainerRef}>
-                {streamsArray.map((stream, index) => {
-                    return < StreamCard 
+            <div className="streams-wrapper">
+                {/* Filter indicator — above scroll area */}
+                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0) && (
+                    <div className="filter-indicator">
+                        <span>Фильтр активен</span>
+                        {headerFilters.length > 0 && (
+                            <div className="filter-indicator-chips">
+                                {headerFilters.map((f, i) => (
+                                    <span key={i} className="filter-indicator-chip">
+                                        {f.name}: {f.value.length > 25 ? f.value.slice(0, 25) + '...' : f.value}
+                                        <button onClick={() => removeHeaderFilter(i)}>✕</button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                        {headerFilters.length > 0 && (
+                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); }}>
+                                Сбросить HTTP фильтры
+                            </button>
+                        )}
+                    </div>
+                )}
+                <div id="streams" className="streams" ref={streamsContainerRef}>
+                {filteredStreams.map((stream, index) => {
+                    return < StreamCard
                         key={stream.id}
-                        streamObj={stream} 
+                        streamObj={stream}
                         onStreamClick={handleStreamClick}
                         onFavoriteToggle={handleFavoriteToggle}
+                        onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
+                        onIpBan={(ip: string) => {
+                            if (!confirm(`Забанить IP ${ip} на всех агентах?`)) return;
+                            fetch('/api/protect/ip-ban', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ agent_id: '_all', ip, ban: true })
+                            });
+                        }}
                         tagColors={tagColors}
                     />
                 })}
@@ -318,20 +606,110 @@ export function PacketsPage() {
                         Загрузка...
                     </div>
                 )}
-                {!hasMoreStreams && streamsArray.length > 0 && (
+                {!hasMoreStreams && filteredStreams.length > 0 && !headerSearchResults && (
                     <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
                         Все стримы загружены
                     </div>
                 )}
-            </div>
+                {headerSearchResults && filteredStreams.length === 0 && (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
+                        Нет стримов по заданным фильтрам
+                    </div>
+                )}
+                </div>{/* streams */}
+            </div>{/* streams-wrapper */}
             <div className="packetData">
-                {packetData && packetData.length > 0 && packetData.map(packet => (
-                    <PacketCard 
+                {packetData.length > 0 && (
+                    <div className="packet-toolbar">
+                        <div className="toolbar-left">
+                            <button
+                                className={`merge-toggle-btn ${shouldMerge ? 'active' : ''}`}
+                                onClick={() => setMergeOverride(shouldMerge ? false : true)}
+                                title={shouldMerge ? 'Показать отдельные TCP-сегменты' : 'Склеить соседние пакеты'}
+                            >
+                                {shouldMerge ? 'Склейка вкл' : 'Склейка выкл'}
+                            </button>
+                            {mergeOverride !== null && (
+                                <button className="merge-reset-btn" onClick={() => setMergeOverride(null)}>авто</button>
+                            )}
+                        </div>
+                        <div className="toolbar-right">
+                            <button className="toolbar-btn" onClick={shareStream} title="Скопировать ссылку на стрим">
+                                {shareCopied ? '✓ Скопировано' : 'Share'}
+                            </button>
+                            <div className="export-dropdown">
+                                <button className="toolbar-btn" onClick={() => setExportMenuOpen(!exportMenuOpen)}>
+                                    Export ▾
+                                </button>
+                                {exportMenuOpen && (
+                                    <div className="export-menu">
+                                        <button onClick={() => { copyText(exportPwntools()); setExportMenuOpen(false); }}>
+                                            pwntools
+                                        </button>
+                                        {selectedStreamL7 === 'http1' && (
+                                            <>
+                                                <button onClick={() => { copyText(exportRequests()); setExportMenuOpen(false); }}>
+                                                    requests
+                                                </button>
+                                                <button onClick={() => { copyText(exportCurl()); setExportMenuOpen(false); }}>
+                                                    curl
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {mergedPackets.map(packet => (
+                    <PacketCard
                         key={packet.id}
                         {...packet}
+                        isHttp={selectedStreamL7 === 'http1'}
+                        isGrpc={selectedStreamL7 === 'grpc'}
+                        onHeaderSearch={addHeaderFilter}
+                        diffSelected={diffLeft?.id === packet.id}
+                        onDiffSelect={(pkt) => {
+                            if (!diffLeft) {
+                                setDiffLeft(pkt);
+                            } else if (diffLeft.id === pkt.id) {
+                                setDiffLeft(null);
+                            } else {
+                                setDiffRight(pkt);
+                                setDiffOpen(true);
+                            }
+                        }}
+                        onQuickBlock={(pattern: string) => {
+                            if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
+                            // Detect if hex pattern (from hex dump context menu)
+                            const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
+                            fetch('/api/tag/names', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    name: `block-${pattern.slice(0, 20)}`,
+                                    color: 0,
+                                    template_type: isHex ? 'bsubstr' : 'substr',
+                                    template: pattern,
+                                    direction: 'both',
+                                    special_type: 'block'
+                                })
+                            });
+                        }}
                     />
                 ))}
             </div>
+
+            {diffOpen && diffLeft && diffRight && (
+                <DiffView
+                    leftData={diffLeft.packet_data}
+                    rightData={diffRight.packet_data}
+                    leftLabel={`Пакет #${diffLeft.id} (${diffLeft.direction === 'orig' ? 'исх' : 'вх'})`}
+                    rightLabel={`Пакет #${diffRight.id} (${diffRight.direction === 'orig' ? 'исх' : 'вх'})`}
+                    onClose={() => { setDiffOpen(false); setDiffLeft(null); setDiffRight(null); }}
+                />
+            )}
         </div>
     );
 }

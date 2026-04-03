@@ -50,4 +50,8 @@ impl TagService {
     pub async fn get_all_tag_names(&self) -> Result<Vec<TagName>, sqlx::Error> {
         self.repository.get_all_tag_names().await
     }
+
+    pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
+        self.repository.get_tag_metrics(minutes).await
+    }
 }

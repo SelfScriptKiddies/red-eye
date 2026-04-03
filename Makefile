@@ -62,6 +62,24 @@ ps:
 	$(DC) ps
 	@echo -e ""
 
+# Run integration tests
+test:
+	@echo -e "${GREEN}Running integration tests...${NC}"
+	python3 tests/integration_test.py --spawn-targets
+	@echo -e "${GREEN}Tests completed.${NC}\n"
+
+# Run stress test (5 min, 100 rps)
+stress:
+	@echo -e "${GREEN}Running stress test (5 min, 100 rps)...${NC}"
+	python3 tests/stress_test.py --duration 300 --rps 100 --spawn-targets --output tests/stress_results.json
+	@echo -e "${GREEN}Stress test completed.${NC}\n"
+
+# Run full CTF simulation (1 hour, 500 rps)
+stress-full:
+	@echo -e "${GREEN}Running full stress test (1 hour, 500 rps)...${NC}"
+	python3 tests/stress_test.py --duration 3600 --rps 500 --spawn-targets --output tests/stress_results_full.json
+	@echo -e "${GREEN}Stress test completed.${NC}\n"
+
 # Clean docker resorces
 prune:
 	@echo -e "${GREEN}Cleaning useless Docker-resources...${NC}"

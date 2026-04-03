@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use dashmap::DashMap;
 use crate::configuration::updater::dto;
+use crate::proto_schema::ProtoSchema;
 pub mod services;
 pub mod streams;
 pub use services::ServicesCache as ServicesCache;
@@ -11,9 +12,9 @@ pub use streams::StreamsCache as StreamsCache;
 pub struct Cache {
     pub services: Arc<RwLock<HashMap<usize, dto::Service>>>,
     pub streams: Arc<Mutex<StreamsCache>>,
-    // Per-key locks to avoid global bottleneck while preventing race conditions
-    // Using Arc<Mutex<()>> allows cloning the Arc to hold the lock
     pub stream_locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
+    /// service_id → parsed proto schema (for gRPC field name resolution)
+    pub proto_schemas: Arc<RwLock<HashMap<usize, ProtoSchema>>>,
 }
 
 impl Cache {
@@ -22,6 +23,7 @@ impl Cache {
             services: Arc::new(RwLock::new(HashMap::new())),
             streams: Arc::new(Mutex::new(StreamsCache::new(capacity))),
             stream_locks: Arc::new(DashMap::new()),
+            proto_schemas: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

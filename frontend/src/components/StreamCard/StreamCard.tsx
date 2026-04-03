@@ -1,7 +1,7 @@
 import "./StreamCard.css"
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColors = {} }) {
+export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {
@@ -58,30 +58,56 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, tagColo
                     aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
                     onClick={handleFavoriteClick}
                 >
-                    {isFavorite ? '★' : '☆'}
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill={isFavorite ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                    </svg>
                 </button>
                 <p>
                     <StreamSign incoming={streamObj.incoming} containsFlag={containsFlag} />
-                    {streamObj.tags.map((tagName, index) => {
-                        const tagColor = getTagColor(tagName);
-                        return (
-                            <span 
-                                key={index}
-                                className="tag noselect" 
-                                style={{
-                                    color: 'white',
-                                    textShadow: `0 0 5px ${tagColor}, 0 0 5px ${tagColor}, 0 0 5px ${tagColor}`
-                                }}
-                            >
-                                {tagName}
-                            </span>
-                        );
-                    })}
+                    {(() => {
+                        // Aggregate tag counts
+                        const counts: Record<string, number> = {};
+                        for (const t of streamObj.tags) counts[t] = (counts[t] || 0) + 1;
+                        return Object.entries(counts).map(([tagName, count]) => {
+                            const tagColor = getTagColor(tagName);
+                            return (
+                                <span
+                                    key={tagName}
+                                    className="tag noselect"
+                                    style={{
+                                        color: 'white',
+                                        textShadow: `0 0 5px ${tagColor}, 0 0 5px ${tagColor}, 0 0 5px ${tagColor}`
+                                    }}
+                                >
+                                    {tagName}{count > 1 ? ` ×${count}` : ''}
+                                </span>
+                            );
+                        });
+                    })()}
                 </p>
             </div>
             <div className="info-block column">
+                {streamObj.dst_ip && (
+                    <span className="stream-ip-group">
+                        <span className="stream-ip" onClick={(e) => { e.stopPropagation(); onIpFilter?.(streamObj.dst_ip); }}
+                            title={`Фильтр по IP`}>
+                            {streamObj.dst_ip}
+                        </span>
+                        {onIpBan && (
+                            <button className="ip-ban-btn" onClick={(e) => { e.stopPropagation(); onIpBan(streamObj.dst_ip); }}
+                                title={`Забанить ${streamObj.dst_ip}`}>✕</button>
+                        )}
+                    </span>
+                )}
                 <span className="stream-time">{moment.unix(streamObj.first_packet_time).format("HH:mm:ss")}-{moment.unix(streamObj.last_packet_time).format("HH:mm:ss")}</span>
-                <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
+                <span className="stream-meta-row">
+                    {streamObj.l7_protocol && streamObj.l7_protocol !== 'unknown' && (
+                        <span className={`protocol-badge protocol-${streamObj.l7_protocol}`}>
+                            {streamObj.l7_protocol === 'http1' ? 'HTTP' : streamObj.l7_protocol.toUpperCase()}
+                        </span>
+                    )}
+                    <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
+                </span>
             </div>
         </div>
     );

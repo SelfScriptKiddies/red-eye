@@ -7,7 +7,9 @@ pub struct Service {
     pub urldecode: bool,
     pub merge_adjacent_packets: bool,
     pub inflate_websockets: bool,
-    pub decrypt_tls: bool
+    pub decrypt_tls: bool,
+    pub http_parse: bool,
+    pub http2_parse: bool
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
@@ -18,7 +20,9 @@ pub struct ServiceTransfer {
     pub urldecode: Option<bool>,
     pub merge_adjacent_packets: Option<bool>,
     pub inflate_websockets: Option<bool>,
-    pub decrypt_tls: Option<bool>
+    pub decrypt_tls: Option<bool>,
+    pub http_parse: Option<bool>,
+    pub http2_parse: Option<bool>
 }
 
 impl From<ServiceTransfer> for Service {
@@ -31,7 +35,9 @@ impl From<ServiceTransfer> for Service {
             urldecode: transfer.urldecode.unwrap_or(false),
             merge_adjacent_packets: transfer.merge_adjacent_packets.unwrap_or(false),
             inflate_websockets: transfer.inflate_websockets.unwrap_or(false),
-            decrypt_tls: transfer.decrypt_tls.unwrap_or(false)
+            decrypt_tls: transfer.decrypt_tls.unwrap_or(false),
+            http_parse: transfer.http_parse.unwrap_or(false),
+            http2_parse: transfer.http2_parse.unwrap_or(false)
         }
     }
 }
