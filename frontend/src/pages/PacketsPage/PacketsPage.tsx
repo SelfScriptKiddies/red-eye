@@ -5,6 +5,7 @@ import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
+import { Timeline } from '../../components/Timeline/Timeline';
 
 interface PacketEvent {
     packet_id: number;
@@ -45,6 +46,7 @@ export function PacketsPage() {
     const [currentOffset, setCurrentOffset] = useState(0);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const [hasMoreStreams, setHasMoreStreams] = useState(true);
+    const [showTimeline, setShowTimeline] = useState(false);
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
@@ -581,6 +583,22 @@ export function PacketsPage() {
                             </button>
                         )}
                     </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 10px' }}>
+                    <button
+                        className={`view-mode-btn ${showTimeline ? 'active' : ''}`}
+                        onClick={() => setShowTimeline(!showTimeline)}
+                        style={{ fontSize: '11px', padding: '3px 10px' }}
+                    >
+                        Timeline
+                    </button>
+                </div>
+                {showTimeline && (
+                    <Timeline
+                        streams={filteredStreams}
+                        selectedStreamId={selectedStreamId ? Number(selectedStreamId) : undefined}
+                        onStreamClick={handleStreamClick}
+                    />
                 )}
                 <div id="streams" className="streams" ref={streamsContainerRef}>
                 {filteredStreams.map((stream, index) => {
