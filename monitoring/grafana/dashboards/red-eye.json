@@ -1,0 +1,93 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Packets Total",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [{ "expr": "red_eye_packets_total", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Active Streams",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [{ "expr": "red_eye_active_streams", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Agents Online",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [{ "expr": "red_eye_agents_online", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0 }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Services",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [{ "expr": "red_eye_services_count", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "purple", "value": null }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "DB Size",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [{ "expr": "red_eye_db_size_bytes", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "decbytes", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1073741824 }, { "color": "red", "value": 5368709120 }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Partitions",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [{ "expr": "red_eye_partitions_count", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Packets (rate)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [{ "expr": "rate(red_eye_packets_total[1m])", "legendFormat": "packets/sec", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "#6c6cff", "mode": "fixed" }, "custom": { "fillOpacity": 15 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "L7 Messages (rate)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "rate(red_eye_http_messages_total[1m])", "legendFormat": "HTTP/sec", "refId": "A" },
+        { "expr": "rate(red_eye_grpc_messages_total[1m])", "legendFormat": "gRPC/sec", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 15 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "DB Size over time",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [{ "expr": "red_eye_db_size_bytes", "legendFormat": "DB size", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "decbytes", "color": { "fixedColor": "orange", "mode": "fixed" }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tag Triggers (rate)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [{ "expr": "rate(red_eye_tag_triggers_total[1m])", "legendFormat": "triggers/sec", "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "yellow", "mode": "fixed" }, "custom": { "fillOpacity": 15 } } }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["red-eye"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Red Eye — Overview",
+  "uid": "red-eye-overview",
+  "version": 1
+}

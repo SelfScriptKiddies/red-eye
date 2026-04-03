@@ -2,6 +2,7 @@ pub mod agent;
 pub mod auth;
 pub mod block_sync;
 pub mod l7;
+pub mod metrics;
 pub mod protect;
 pub mod proto;
 pub(crate) mod packet;
@@ -17,7 +18,10 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub fn api_config(cfg: &mut web::ServiceConfig) {
+    // Prometheus metrics — outside /api scope, no auth
+    metrics::register_metrics();
     cfg
+    .configure(metrics::config)
     .service(
         SwaggerUi::new("/api/docs/{_:.*}")
         .url("/api/docs/openapi.json", ApiDoc::openapi())
