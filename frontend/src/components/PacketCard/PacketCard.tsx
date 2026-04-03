@@ -371,8 +371,10 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
         if (grpcLoading) return <div className="http-loading">Loading...</div>;
         if (!grpcData || grpcData.length === 0) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
 
-        // Find gRPC message for this packet direction
-        const msg = grpcData.find((m: any) => m.is_request === (direction === 'dest'));
+        // Match gRPC message to this specific packet by packet_id
+        const msg = grpcData.find((m: any) => m.packet_id === id)
+            // Fallback: match by direction (for data without packet_id)
+            || grpcData.find((m: any) => m.is_request === (direction === 'dest'));
         if (!msg) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
 
         let decoded: Record<string, any> = {};

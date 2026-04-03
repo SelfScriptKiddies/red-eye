@@ -44,7 +44,32 @@ impl NftablesManager {
     }
 
     /// Add a single redirect rule (for auto-management by harpoon proxy).
+    /// Skips if a redirect for this original_port already exists.
     pub fn add_redirect(&mut self, rule: RedirectRule) -> Result<()> {
+        // Deduplicate: if a rule for this port exists, update it
+        if let Some(existing) = self.rules.iter().position(|r| r.original_port == rule.original_port) {
+            if self.rules[existing].redirect_port == rule.redirect_port
+                && self.rules[existing].protocol == rule.protocol
+            {
+                debug!("nftables redirect {} {} -> {} already exists, skipping",
+                    rule.protocol, rule.original_port, rule.redirect_port);
+                return Ok(());
+            }
+            // Different target — remove old, add new
+            self.rules.remove(existing);
+            self.flush_chain()?;
+            for r in &self.rules.clone() {
+                self.add_redirect_rule(r)?;
+            }
+            // Re-add ban rules after flush
+            for ip in &self.banned_ips.clone() {
+                let _ = run_nft(&format!(
+                    "add rule inet {} {} ip saddr {} drop",
+                    TABLE_NAME, CHAIN_NAME, ip
+                ));
+            }
+        }
+
         self.ensure_table()?;
         self.add_redirect_rule(&rule)?;
         info!(

@@ -31,7 +31,7 @@ fn default_proxy_port(service_port: i32, used_ports: &[u16]) -> u16 {
             return candidate;
         }
     }
-    base // fallback to base even if "taken" (agent will report error)
+    base
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

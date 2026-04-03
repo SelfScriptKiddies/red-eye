@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use sqlx::{postgres::PgPoolOptions, PgPool, Error, Row};
 use log::{info, error};
 use crate::ethernet::{PacketInfo, Protocol, IpVersion};
@@ -257,7 +258,7 @@ impl DB {
         // Upsert into grpc_body_set
         let body_set_id = sqlx::query_scalar::<_, i32>(
             "INSERT INTO grpc_body_set (hash, decoded_json) VALUES ($1, $2)
-             ON CONFLICT (hash) DO UPDATE SET hash = grpc_body_set.hash
+             ON CONFLICT (hash) DO UPDATE SET decoded_json = EXCLUDED.decoded_json
              RETURNING id"
         )
         .bind(body_hash)
@@ -280,5 +281,25 @@ impl DB {
         .fetch_one(&self.pgpool)
         .await
         .map(|row| row.get::<i32, _>("id"))
+    }
+
+    /// Load all proto files grouped by service_id.
+    /// Returns: service_id → Vec<(filename, content)>
+    pub async fn get_all_proto_files(&self) -> HashMap<i32, Vec<(String, String)>> {
+        let rows = sqlx::query(
+            "SELECT service_id, filename, content FROM proto_file ORDER BY service_id, id"
+        )
+        .fetch_all(&self.pgpool)
+        .await
+        .unwrap_or_default();
+
+        let mut result: HashMap<i32, Vec<(String, String)>> = HashMap::new();
+        for row in rows {
+            let svc_id: i32 = row.get("service_id");
+            let filename: String = row.get("filename");
+            let content: String = row.get("content");
+            result.entry(svc_id).or_default().push((filename, content));
+        }
+        result
     }
 }

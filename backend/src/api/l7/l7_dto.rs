@@ -60,4 +60,5 @@ pub struct GrpcMessage {
     pub body_set_id: Option<i32>,
     pub timestamp: i64,
     pub decoded_json: String,
+    pub packet_id: Option<i32>,
 }
