@@ -265,17 +265,34 @@ function generateCurl(msg: HttpMessageData): string {
 }
 
 function generateRequests(msg: HttpMessageData): string {
-    const lines = [`import requests\n`, `resp = requests.${(msg.method || 'GET').toLowerCase()}(`];
-    lines.push(`    'http://<HOST>${msg.path}',`);
-    const headers: string[] = [];
+    const lines = [`import requests\n`];
+    const headerEntries: string[] = [];
+    const cookieEntries: string[] = [];
+
     for (const h of msg.headers) {
-        if (!['Host', 'Content-Length', 'Connection'].includes(h.name)) {
-            headers.push(`        '${h.name}': '${h.value}'`);
+        if (['Host', 'Content-Length', 'Connection'].includes(h.name)) continue;
+        if (h.name.toLowerCase() === 'cookie') {
+            const cookies = h.value.split(';').map(c => c.trim()).filter(c => c.includes('='));
+            for (const cookie of cookies) {
+                const [k, ...v] = cookie.split('=');
+                cookieEntries.push(`    '${k.trim()}': '${v.join('=')}'`);
+            }
+        } else {
+            headerEntries.push(`    '${h.name}': '${h.value}'`);
         }
     }
-    if (headers.length > 0) {
-        lines.push(`    headers={\n${headers.join(',\n')}\n    },`);
+
+    if (headerEntries.length > 0) {
+        lines.push(`headers = {\n${headerEntries.join(',\n')}\n}\n`);
     }
+    if (cookieEntries.length > 0) {
+        lines.push(`cookies = {\n${cookieEntries.join(',\n')}\n}\n`);
+    }
+
+    lines.push(`resp = requests.${(msg.method || 'GET').toLowerCase()}(`);
+    lines.push(`    'http://<HOST>${msg.path}',`);
+    if (headerEntries.length > 0) lines.push(`    headers=headers,`);
+    if (cookieEntries.length > 0) lines.push(`    cookies=cookies,`);
     lines.push(`)`, `print(resp.status_code, resp.text[:200])`);
     return lines.join('\n');
 }
