@@ -25,10 +25,18 @@
     flex: 1;
     overflow-y: auto;
 }
-.tag-filter {
+.tag-filter,
+.service-filter {
     width: 100%;
     margin: 0;
     padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-content: flex-start;
+}
+
+.tag-filter {
     height: 50%;
 }
 .packetData {
