@@ -173,7 +173,7 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
             const chartWidth = chart.getBoundingClientRect().width;
             const pctShift = (dx / chartWidth) * 100;
             const timeShift = (pctShift / 100) * chartData.viewWindow;
-            setViewOffset(panRef.current.startOffset + timeShift);
+            setViewOffset(panRef.current.startOffset - timeShift);
         };
 
         const handleMidUp = () => { panRef.current = null; };

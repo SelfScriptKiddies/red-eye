@@ -40,6 +40,12 @@
     transition: color 0.2s;
 }
 
+.timeline-bar-controls button:focus,
+.timeline-bar-controls button:focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
 .timeline-bar-toggle:hover,
 .timeline-bar-scroll:hover,
 .timeline-bar-live:hover {
