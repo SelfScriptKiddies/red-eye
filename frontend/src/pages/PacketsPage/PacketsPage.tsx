@@ -42,6 +42,7 @@ export function PacketsPage() {
     const [diffOpen, setDiffOpen] = useState(false);
     const [shareCopied, setShareCopied] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
@@ -145,6 +146,9 @@ export function PacketsPage() {
         let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
         if (headerExcludeIds.size > 0) {
             streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
+        }
+        if (showFavoritesOnly) {
+            streams = streams.filter((s: any) => s.favorite);
         }
         return streams;
     })();
@@ -372,6 +376,13 @@ export function PacketsPage() {
                 <button className="clear-button" onClick={clearStreams}>
                     Очистить очередь
                 </button>
+                <button
+                  className={`clear-button ${showFavoritesOnly ? 'active' : ''}`}
+                  onClick={() => setShowFavoritesOnly(prev => !prev)}
+                  style={showFavoritesOnly ? { borderColor: 'var(--re-warning)', color: 'var(--re-warning)' } : {}}
+                >
+                  ★ Избранные
+                </button>
                 <div className="tag-filter d-inline-block">
                     {tagsArray.map((service, index) => {
                         return < ServiceCard service={service} onTagClick={handleTagClick}/>
@@ -390,7 +401,7 @@ export function PacketsPage() {
                     clearRef={timelineClearRef}
                 />
                 {/* Filter indicator — above scroll area */}
-                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null) && (
+                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null || showFavoritesOnly) && (
                     <div className="filter-indicator">
                         <span>Фильтр активен</span>
                         {startTime != null && (
