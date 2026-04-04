@@ -395,3 +395,31 @@
 .merge-reset-btn:hover {
     color: var(--re-accent);
 }
+/* OR filter mode */
+.filter-mode-badge {
+    display: inline-block;
+    margin: 6px 10px 2px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.filter-mode-and {
+    border: 1px solid var(--re-accent);
+    color: var(--re-accent);
+    background: transparent;
+}
+
+.filter-mode-or {
+    border: 1px solid var(--re-warning);
+    color: var(--re-warning);
+    background: transparent;
+}
+
+.filter-or-mode .service-card.active {
+    border-color: var(--re-warning) !important;
+    color: var(--re-warning) !important;
+}

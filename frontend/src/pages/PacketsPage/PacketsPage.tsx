@@ -29,6 +29,7 @@ export function PacketsPage() {
     const [tagsLoaded, setTagsLoaded] = useState(false);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
+    const [filterMode, setFilterMode] = useState<'and' | 'or'>('and');
     const [startTime, setStartTime] = useState<number | null>(null);
     const [endTime, setEndTime] = useState<number | null>(null);
     const timelineClearRef = useRef<(() => void) | null>(null);
@@ -56,7 +57,13 @@ export function PacketsPage() {
         updateStream,
         clearStreams,
         loadStreams,
-    } = useStreams({ tags: usedTags, services: usedServices, startTime, endTime, enabled: !isRedEyeActive });
+    } = useStreams({
+        tags: filterMode === 'and' ? usedTags : [],
+        services: filterMode === 'and' ? usedServices : [],
+        startTime,
+        endTime,
+        enabled: !isRedEyeActive,
+    });
 
     const {
         packetData,
@@ -149,6 +156,13 @@ export function PacketsPage() {
         }
         if (showFavoritesOnly) {
             streams = streams.filter((s: any) => s.favorite);
+        }
+        if (filterMode === 'or' && (usedTags.length > 0 || usedServices.length > 0)) {
+            streams = streams.filter((s: any) => {
+                const matchesTag = usedTags.length > 0 && s.tags?.some((t: string) => usedTags.includes(t));
+                const matchesService = usedServices.length > 0 && usedServices.includes(String(s.service_id));
+                return matchesTag || matchesService;
+            });
         }
         return streams;
     })();
@@ -357,15 +371,31 @@ export function PacketsPage() {
 
     const handleTagClick = (e) => {
         const tagName = e.target.dataset.service;
+        const isAlt = e.altKey;
         setUsedTags(prev => {
-            if (prev.includes(tagName)) return prev.filter(t => t !== tagName);
+            if (prev.includes(tagName)) {
+                const next = prev.filter(t => t !== tagName);
+                if (next.length === 0) setFilterMode('and');
+                return next;
+            }
+            if (prev.length === 0 && usedServices.length === 0) {
+                setFilterMode(isAlt ? 'or' : 'and');
+            }
             return [...prev, tagName];
         });
     };
     const handleServiceClick = (e) => {
         const serviceName = e.target.dataset.service;
+        const isAlt = e.altKey;
         setUsedServices(prev => {
-            if (prev.includes(serviceName)) return prev.filter(s => s !== serviceName);
+            if (prev.includes(serviceName)) {
+                const next = prev.filter(s => s !== serviceName);
+                if (next.length === 0 && usedTags.length === 0) setFilterMode('and');
+                return next;
+            }
+            if (prev.length === 0 && usedTags.length === 0) {
+                setFilterMode(isAlt ? 'or' : 'and');
+            }
             return [...prev, serviceName];
         });
     };
@@ -373,7 +403,7 @@ export function PacketsPage() {
     return (
         <div className="packetsPage">
             <div className="filterTape">
-                <button className="clear-button" onClick={clearStreams}>
+                <button className="clear-button" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); }}>
                     Очистить очередь
                 </button>
                 <button
@@ -383,12 +413,17 @@ export function PacketsPage() {
                 >
                   ★ Избранные
                 </button>
-                <div className="tag-filter d-inline-block">
+                {(usedTags.length > 0 || usedServices.length > 0) && (
+                    <div className={`filter-mode-badge ${filterMode === 'or' ? 'filter-mode-or' : 'filter-mode-and'}`}>
+                        {filterMode === 'or' ? 'OR' : 'AND'}
+                    </div>
+                )}
+                <div className={`tag-filter d-inline-block${filterMode === 'or' ? ' filter-or-mode' : ''}`}>
                     {tagsArray.map((service, index) => {
                         return < ServiceCard service={service} onTagClick={handleTagClick}/>
                     })}
                     </div>
-                <div className="service-filter d-inline-block">
+                <div className={`service-filter d-inline-block${filterMode === 'or' ? ' filter-or-mode' : ''}`}>
                     {servicesArray.map((service, index) => {
                         return < ServiceCard service={service} onTagClick={handleServiceClick}/>
                     })}
