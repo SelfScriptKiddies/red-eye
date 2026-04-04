@@ -11,6 +11,7 @@ pub mod service;
 pub(crate) mod stream;
 pub mod settings;
 pub mod special_triggers;
+pub mod stats;
 pub mod tag;
 pub mod updater;
 use actix_web::web;
@@ -38,6 +39,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(settings::config)
             .configure(protect::config)
             .configure(proto::config)
+            .configure(stats::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }

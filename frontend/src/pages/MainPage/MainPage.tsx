@@ -40,6 +40,7 @@ export function MainPage() {
     const [streams, setStreams] = useState<StreamSummary[]>([]);
     const [farmStatus, setFarmStatus] = useState<FarmStatus>({ farm_url: '', farm_enabled: 'false' });
     const [flagBalance, setFlagBalance] = useState<any[]>([]);
+    const [packetsPerMin, setPacketsPerMin] = useState<number | null>(null);
 
     const fetchAll = () => {
         fetch('/api/agent').then(r => r.json()).then(d => setAgents(Array.isArray(d) ? d : [])).catch(() => {});
@@ -47,6 +48,7 @@ export function MainPage() {
         fetch('/api/stream?limit=10&offset=0').then(r => r.json()).then(d => setStreams(Array.isArray(d) ? d : [])).catch(() => {});
         fetch('/api/settings').then(r => r.json()).then(d => setFarmStatus(d)).catch(() => {});
         fetchApi('/api/tag/flag-balance?minutes=5').then(d => { if (d) setFlagBalance(Array.isArray(d) ? d : []); });
+        fetchApi('/api/stats/rate').then(d => { if (d) setPacketsPerMin(d.packets_per_minute ?? null); });
     };
 
     useEffect(() => {
@@ -117,6 +119,12 @@ export function MainPage() {
                         {farmActive ? 'ON' : 'OFF'}
                     </div>
                     <div className="stat-label">Flag Farm</div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-value">
+                        {packetsPerMin !== null ? packetsPerMin : '—'}
+                    </div>
+                    <div className="stat-label">Пакеты/мин</div>
                 </div>
             </div>
 
