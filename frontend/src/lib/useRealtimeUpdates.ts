@@ -6,6 +6,8 @@ export function useRealtimeUpdates(onRefresh: () => void, enabled: boolean = tru
     const wsRef = useRef<WebSocket | null>(null);
     const wsRefreshPending = useRef(false);
     const wsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const onRefreshRef = useRef(onRefresh);
+    useEffect(() => { onRefreshRef.current = onRefresh; });
 
     useEffect(() => {
         if (!enabled) return;
@@ -16,7 +18,7 @@ export function useRealtimeUpdates(onRefresh: () => void, enabled: boolean = tru
             wsRefreshPending.current = true;
             wsRefreshTimer.current = setTimeout(() => {
                 wsRefreshPending.current = false;
-                onRefresh();
+                onRefreshRef.current();
             }, WS_THROTTLE_MS);
         };
 

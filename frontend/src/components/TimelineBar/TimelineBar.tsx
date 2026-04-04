@@ -209,45 +209,59 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
         setDrag({ kind: 'dragging', startPct: pct });
     }, [drag, pxToPct, onClear]);
 
-    // Window mouse events for drag/move/resize
+    // Live drag position stored in ref to avoid listener churn
+    const dragRef = useRef(drag);
+    dragRef.current = drag;
+    const [selectionRect, setSelectionRect] = useState<{ left: number; right: number; interactive: boolean } | null>(null);
+
+    // Update selection rect from drag state
+    useEffect(() => {
+        if (drag.kind === 'selected') {
+            setSelectionRect({ left: drag.leftPct, right: drag.rightPct, interactive: true });
+        } else if (drag.kind === 'idle') {
+            setSelectionRect(null);
+        }
+    }, [drag]);
+
+    // Window mouse events for drag/move/resize — attaches once per active drag
     useEffect(() => {
         if (drag.kind === 'idle' || drag.kind === 'selected') return;
 
         const handleMove = (e: MouseEvent) => {
             const pct = pxToPct(e.clientX);
+            const d = dragRef.current;
 
-            if (drag.kind === 'dragging') {
-                // Just update visual, no state change needed — handled in render
-                // We need to force re-render with current mouse position
-                // Use a synthetic selected state for preview
-                const left = Math.min(drag.startPct, pct);
-                const right = Math.max(drag.startPct, pct);
-                // We update drag to carry current position for preview
-                setDrag({ kind: 'dragging', startPct: drag.startPct, ...{ currentPct: pct } } as any);
-                void left; void right;
-            } else if (drag.kind === 'moving') {
-                const { rightPct, leftPct, grabOffset } = drag;
-                const width = rightPct - leftPct;
-                const newLeft = Math.max(0, Math.min(100 - width, pct - grabOffset));
-                setDrag({ ...drag, leftPct: newLeft, rightPct: newLeft + width });
-            } else if (drag.kind === 'resizing') {
-                const { edge, leftPct, rightPct } = drag;
-                if (edge === 'left') {
-                    const newLeft = Math.max(0, Math.min(rightPct - 1, pct));
-                    setDrag({ ...drag, leftPct: newLeft });
+            if (d.kind === 'dragging') {
+                const left = Math.min(d.startPct, pct);
+                const right = Math.max(d.startPct, pct);
+                if (right - left >= 0.1) {
+                    setSelectionRect({ left, right, interactive: false });
+                }
+            } else if (d.kind === 'moving') {
+                const width = d.rightPct - d.leftPct;
+                const newLeft = Math.max(0, Math.min(100 - width, pct - d.grabOffset));
+                dragRef.current = { ...d, leftPct: newLeft, rightPct: newLeft + width };
+                setSelectionRect({ left: newLeft, right: newLeft + width, interactive: false });
+            } else if (d.kind === 'resizing') {
+                if (d.edge === 'left') {
+                    const newLeft = Math.max(0, Math.min(d.rightPct - 1, pct));
+                    dragRef.current = { ...d, leftPct: newLeft };
+                    setSelectionRect({ left: newLeft, right: d.rightPct, interactive: false });
                 } else {
-                    const newRight = Math.min(100, Math.max(leftPct + 1, pct));
-                    setDrag({ ...drag, rightPct: newRight });
+                    const newRight = Math.min(100, Math.max(d.leftPct + 1, pct));
+                    dragRef.current = { ...d, rightPct: newRight };
+                    setSelectionRect({ left: d.leftPct, right: newRight, interactive: false });
                 }
             }
         };
 
         const handleUp = (e: MouseEvent) => {
             const pct = pxToPct(e.clientX);
+            const d = dragRef.current;
 
-            if (drag.kind === 'dragging') {
-                const left = Math.min(drag.startPct, pct);
-                const right = Math.max(drag.startPct, pct);
+            if (d.kind === 'dragging') {
+                const left = Math.min(d.startPct, pct);
+                const right = Math.max(d.startPct, pct);
                 if (right - left > 1) {
                     setDrag({ kind: 'selected', leftPct: left, rightPct: right });
                     fireSelect(left, right);
@@ -255,12 +269,8 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
                     setDrag({ kind: 'idle' });
                     onClear();
                 }
-            } else if (drag.kind === 'moving') {
-                const { leftPct, rightPct } = drag;
-                setDrag({ kind: 'selected', leftPct, rightPct });
-                fireSelect(leftPct, rightPct);
-            } else if (drag.kind === 'resizing') {
-                const { leftPct, rightPct } = drag;
+            } else if (d.kind === 'moving' || d.kind === 'resizing') {
+                const { leftPct, rightPct } = d;
                 setDrag({ kind: 'selected', leftPct, rightPct });
                 fireSelect(leftPct, rightPct);
             }
@@ -272,26 +282,8 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
             window.removeEventListener('mousemove', handleMove);
             window.removeEventListener('mouseup', handleUp);
         };
-    }, [drag, pxToPct, fireSelect, onClear]);
-
-    // Compute selection rect for rendering
-    const selectionRect = useMemo((): { left: number; right: number; interactive: boolean } | null => {
-        if (drag.kind === 'selected') {
-            return { left: drag.leftPct, right: drag.rightPct, interactive: true };
-        }
-        if (drag.kind === 'dragging') {
-            const d = drag as any;
-            const cur = d.currentPct ?? drag.startPct;
-            const left = Math.min(drag.startPct, cur);
-            const right = Math.max(drag.startPct, cur);
-            if (right - left < 0.1) return null;
-            return { left, right, interactive: false };
-        }
-        if (drag.kind === 'moving' || drag.kind === 'resizing') {
-            return { left: drag.leftPct, right: drag.rightPct, interactive: false };
-        }
-        return null;
-    }, [drag]);
+    // Only re-attach when drag *kind* changes (idle↔dragging↔moving↔resizing), not on every position update
+    }, [drag.kind]);
 
     return (
         <>
@@ -345,11 +337,11 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
                                     <>
                                         <div
                                             className="timeline-bar-handle timeline-bar-handle--left"
-                                            onMouseDown={e => { e.stopPropagation(); if (!chartData) return; const pct = (drag as any).leftPct ?? 0; setDrag({ kind: 'resizing', edge: 'left', leftPct: (drag as any).leftPct, rightPct: (drag as any).rightPct }); }}
+                                            onMouseDown={e => { e.stopPropagation(); if (drag.kind === 'selected') setDrag({ kind: 'resizing', edge: 'left', leftPct: drag.leftPct, rightPct: drag.rightPct }); }}
                                         />
                                         <div
                                             className="timeline-bar-handle timeline-bar-handle--right"
-                                            onMouseDown={e => { e.stopPropagation(); setDrag({ kind: 'resizing', edge: 'right', leftPct: (drag as any).leftPct, rightPct: (drag as any).rightPct }); }}
+                                            onMouseDown={e => { e.stopPropagation(); if (drag.kind === 'selected') setDrag({ kind: 'resizing', edge: 'right', leftPct: drag.leftPct, rightPct: drag.rightPct }); }}
                                         />
                                     </>
                                 )}
