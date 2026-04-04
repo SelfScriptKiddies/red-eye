@@ -5,11 +5,13 @@ import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
+
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
 import { fetchApi, copyText } from '../../lib/api';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
+
 
 interface PacketEvent {
     packet_id: number;
@@ -413,6 +415,22 @@ export function PacketsPage() {
                             </button>
                         )}
                     </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 10px' }}>
+                    <button
+                        className={`view-mode-btn ${showTimeline ? 'active' : ''}`}
+                        onClick={() => setShowTimeline(!showTimeline)}
+                        style={{ fontSize: '11px', padding: '3px 10px' }}
+                    >
+                        Timeline
+                    </button>
+                </div>
+                {showTimeline && (
+                    <Timeline
+                        streams={filteredStreams}
+                        selectedStreamId={selectedStreamId ? Number(selectedStreamId) : undefined}
+                        onStreamClick={handleStreamClick}
+                    />
                 )}
                 <div id="streams" className="streams" ref={streamsContainerRef}>
                 {filteredStreams.map((stream, index) => {
