@@ -61,6 +61,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         stream::get_all_streams,
         stream::get_stream_by_id,
         stream::update_stream_favorite,
+        stream::get_stream_histogram,
 
         tag::get_tags_by_stream_id,
         tag::get_all_tag_names,
