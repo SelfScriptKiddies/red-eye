@@ -74,7 +74,10 @@ struct StreamQuery {
 
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_comma_separated_numbers")]
-    pub services: Option<Vec<i32>>
+    pub services: Option<Vec<i32>>,
+
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
 }
 
 fn deserialize_comma_separated_numbers<'de, D>(deserializer: D) -> Result<Option<Vec<i32>>, D::Error>
@@ -117,10 +120,12 @@ async fn get_all_streams(
 ) -> Result<impl Responder, actix_web::error::Error> {
     info!("Getting all streams with query: {:?}", query);
     match stream_service.get_all_streams_with_details(
-        query.limit, 
-        query.offset, 
-        query.tags.clone(), 
-        query.services.clone()
+        query.limit,
+        query.offset,
+        query.tags.clone(),
+        query.services.clone(),
+        query.start_time,
+        query.end_time,
     ).await {
         Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
@@ -154,8 +159,38 @@ async fn update_stream_favorite(
     }
 }
 
+#[derive(Debug, Deserialize, IntoParams)]
+struct HistogramQuery {
+    pub bucket_secs: Option<i32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/stream/histogram",
+    params(HistogramQuery),
+    responses(
+        (status = 200, description = "Histogram data", body = Vec<stream_dto::HistogramBucket>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "stream"
+)]
+#[get("/stream/histogram")]
+async fn get_stream_histogram(
+    _identity: Identity,
+    stream_service: web::Data<StreamService>,
+    query: web::Query<HistogramQuery>,
+) -> Result<impl Responder, actix_web::error::Error> {
+    let bucket_secs = query.bucket_secs.unwrap_or(60);
+    match stream_service.get_stream_histogram(bucket_secs).await {
+        Ok(buckets) => Ok(HttpResponse::Ok().json(buckets)),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error: {:?}", e)))
+    }
+}
+
 pub fn stream_config(cfg: &mut web::ServiceConfig) {
     cfg
+        .service(get_stream_histogram)
         .service(get_all_streams)
         .service(get_stream_by_id)
         .service(update_stream_favorite);

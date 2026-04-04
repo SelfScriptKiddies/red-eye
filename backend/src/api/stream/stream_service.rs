@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use crate::api::stream::stream_dto::{Stream, StreamListResponse};
+use crate::api::stream::stream_dto::{HistogramBucket, Stream, StreamListResponse};
 use crate::api::stream::stream_repository::StreamRepository;
 
 pub(crate) struct StreamService {
@@ -24,20 +24,24 @@ impl StreamService {
     }
 
     pub async fn get_all_streams_with_details(
-        &self, 
-        limit: Option<i32>, 
+        &self,
+        limit: Option<i32>,
         offset: Option<i32>,
         tags: Option<Vec<i32>>,
-        services: Option<Vec<i32>>
+        services: Option<Vec<i32>>,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
     ) -> Result<Vec<StreamListResponse>, sqlx::Error> {
         let limit = limit.unwrap_or(10);
         let offset = offset.unwrap_or(0);
-        
+
         let streams = self.stream_repository.get_streams_with_tags(
-            limit, 
+            limit,
             offset,
             tags,
-            services
+            services,
+            start_time,
+            end_time,
         ).await?;
         
         let responses = streams.into_iter()
@@ -59,6 +63,13 @@ impl StreamService {
             .collect();
         
         Ok(responses)
+    }
+
+    pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<HistogramBucket>, sqlx::Error> {
+        let rows = self.stream_repository.get_stream_histogram(bucket_secs).await?;
+        Ok(rows.into_iter().map(|(timestamp, service_id, service_name, count)| {
+            HistogramBucket { timestamp, service_id, service_name, count }
+        }).collect())
     }
 
     pub async fn set_favorite(&self, stream_id: i32, favorite: bool) -> Result<bool, sqlx::Error> {
