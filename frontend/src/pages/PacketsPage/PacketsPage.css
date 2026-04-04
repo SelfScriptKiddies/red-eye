@@ -125,6 +125,39 @@
     transition: 0.15s;
 }
 
+.filter-buttons-row {
+    display: flex;
+    gap: 6px;
+    margin: 10px;
+}
+
+.filter-action-btn {
+    flex: 1;
+    background: var(--re-bg-input) !important;
+    border: none !important;
+    border-radius: 6px;
+    color: var(--re-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 6px 8px !important;
+    transition: color 0.15s;
+    outline: none;
+}
+
+.filter-action-btn:hover {
+    color: var(--re-text);
+}
+
+.filter-action-btn:focus,
+.filter-action-btn:focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
+.filter-action-btn--active {
+    color: var(--re-warning);
+}
+
 /* Filter indicator in streams column */
 .filter-indicator {
     background: var(--re-bg-highlight);

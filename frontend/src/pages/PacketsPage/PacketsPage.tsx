@@ -403,16 +403,17 @@ export function PacketsPage() {
     return (
         <div className="packetsPage">
             <div className="filterTape">
-                <button className="clear-button" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); }}>
-                    Очистить очередь
-                </button>
-                <button
-                  className={`clear-button ${showFavoritesOnly ? 'active' : ''}`}
-                  onClick={() => setShowFavoritesOnly(prev => !prev)}
-                  style={showFavoritesOnly ? { borderColor: 'var(--re-warning)', color: 'var(--re-warning)' } : {}}
-                >
-                  ★ Избранные
-                </button>
+                <div className="filter-buttons-row">
+                    <button className="filter-action-btn" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false); }}>
+                        Сброс
+                    </button>
+                    <button
+                      className={`filter-action-btn ${showFavoritesOnly ? 'filter-action-btn--active' : ''}`}
+                      onClick={() => setShowFavoritesOnly(prev => !prev)}
+                    >
+                      ★ Избранные
+                    </button>
+                </div>
                 {(usedTags.length > 0 || usedServices.length > 0) && (
                     <div className={`filter-mode-badge ${filterMode === 'or' ? 'filter-mode-or' : 'filter-mode-and'}`}>
                         {filterMode === 'or' ? 'OR' : 'AND'}
