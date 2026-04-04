@@ -232,6 +232,79 @@
     border-radius: 2px;
 }
 
+/* Flag Balance */
+.flag-balance-card {
+    background: var(--re-bg-deep);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+    border-left: 3px solid var(--re-accent);
+}
+
+.flag-balance-title {
+    font-size: 13px;
+    color: var(--re-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 2px solid var(--re-accent);
+}
+
+.flag-balance-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.flag-balance-table th {
+    text-align: left;
+    color: var(--re-text-dim);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 4px 8px 8px 0;
+}
+
+.flag-balance-table th:not(:first-child) {
+    text-align: right;
+}
+
+.flag-balance-table tr + tr td {
+    border-top: 1px solid var(--re-border-light);
+}
+
+.flag-balance-table td {
+    padding: 5px 8px 5px 0;
+    color: var(--re-text-secondary);
+}
+
+.fb-service {
+    font-weight: 500;
+}
+
+.fb-num {
+    text-align: right;
+    font-family: monospace;
+    color: var(--re-text-dim);
+}
+
+.fb-balance {
+    text-align: right;
+    font-weight: bold;
+    font-family: monospace;
+    color: var(--re-text-muted);
+}
+
+.fb-ok {
+    color: var(--re-success);
+}
+
+.fb-leak {
+    color: var(--re-error);
+}
+
 /* Focus mode */
 body:has(.eye__apple__focus) .MainPage {
     border-top-color: var(--re-danger);

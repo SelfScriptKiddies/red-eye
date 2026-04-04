@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fetchApi } from '../../lib/api';
 import './MainPage.css';
 
 interface Agent {
@@ -38,12 +39,14 @@ export function MainPage() {
     const [metrics, setMetrics] = useState<TagMetric[]>([]);
     const [streams, setStreams] = useState<StreamSummary[]>([]);
     const [farmStatus, setFarmStatus] = useState<FarmStatus>({ farm_url: '', farm_enabled: 'false' });
+    const [flagBalance, setFlagBalance] = useState<any[]>([]);
 
     const fetchAll = () => {
         fetch('/api/agent').then(r => r.json()).then(d => setAgents(Array.isArray(d) ? d : [])).catch(() => {});
         fetch('/api/tag/metrics?minutes=30').then(r => r.json()).then(d => setMetrics(Array.isArray(d) ? d : [])).catch(() => {});
         fetch('/api/stream?limit=10&offset=0').then(r => r.json()).then(d => setStreams(Array.isArray(d) ? d : [])).catch(() => {});
         fetch('/api/settings').then(r => r.json()).then(d => setFarmStatus(d)).catch(() => {});
+        fetchApi('/api/tag/flag-balance?minutes=5').then(d => { if (d) setFlagBalance(Array.isArray(d) ? d : []); });
     };
 
     useEffect(() => {
@@ -116,6 +119,40 @@ export function MainPage() {
                     <div className="stat-label">Flag Farm</div>
                 </div>
             </div>
+
+            {/* Flag Balance */}
+            {flagBalance.length > 0 && (
+                <div className="flag-balance-card">
+                    <div className="flag-balance-title">Флаг баланс (5 мин)</div>
+                    <table className="flag-balance-table">
+                        <thead>
+                            <tr>
+                                <th>Сервис</th>
+                                <th>Вх</th>
+                                <th>Исх</th>
+                                <th>Баланс</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {flagBalance.map((row: any) => {
+                                const balance = (row.incoming ?? 0) - (row.outgoing ?? 0);
+                                const isLeak = balance > 0 && (row.outgoing ?? 0) < (row.incoming ?? 0);
+                                const isOk = Math.abs(balance) <= 1;
+                                return (
+                                    <tr key={row.service}>
+                                        <td className="fb-service">{row.service}</td>
+                                        <td className="fb-num">{row.incoming ?? 0}</td>
+                                        <td className="fb-num">{row.outgoing ?? 0}</td>
+                                        <td className={`fb-balance ${isOk ? 'fb-ok' : isLeak ? 'fb-leak' : ''}`}>
+                                            {isOk ? 'OK' : isLeak ? `⚠ -${balance}` : balance > 0 ? `+${balance}` : `${balance}`}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
 
             <div className="dashboard-columns">
                 {/* Tag Metrics */}
