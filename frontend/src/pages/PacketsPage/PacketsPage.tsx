@@ -33,6 +33,7 @@ export function PacketsPage() {
     const clearTimeSelection = () => { setStartTime(null); setEndTime(null); timelineClearRef.current?.(); };
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string, exclude?: boolean}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
+    const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
     const [headerSearching, setHeaderSearching] = useState(false);
     const [diffLeft, setDiffLeft] = useState<any | null>(null);
     const [diffRight, setDiffRight] = useState<any | null>(null);
@@ -165,8 +166,6 @@ export function PacketsPage() {
             setHeaderExcludeIds(new Set());
         }
     };
-
-    const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
 
     const runHeaderSearch = async (filters: {name: string, value: string, exclude?: boolean}[]) => {
         setHeaderSearching(true);
