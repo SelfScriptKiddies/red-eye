@@ -102,7 +102,16 @@ export function PacketsPage() {
             const params = new URLSearchParams(window.location.search);
             const streamParam = params.get('stream');
             if (streamParam) {
-                setTimeout(() => handleStreamClick(parseInt(streamParam)), 500);
+                const ids = streamParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                if (ids.length > 0) {
+                    // Load first stream normally, then shift-click the rest
+                    setTimeout(async () => {
+                        await handleStreamClick(ids[0]);
+                        for (let i = 1; i < ids.length; i++) {
+                            await handleStreamClick(ids[i], { shiftKey: true });
+                        }
+                    }, 500);
+                }
             }
         }
     }, [isRedEyeActive, servicesLoaded, tagsLoaded]);

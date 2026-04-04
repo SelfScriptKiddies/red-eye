@@ -76,6 +76,8 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         allPackets.sort((a, b) => {
             const tsDiff = (a.timestamp ?? 0) - (b.timestamp ?? 0);
             if (tsDiff !== 0) return tsDiff;
+            const usDiff = (a.timestamp_microseconds ?? 0) - (b.timestamp_microseconds ?? 0);
+            if (usDiff !== 0) return usDiff;
             return (a.id ?? 0) - (b.id ?? 0);
         });
         return allPackets.slice(0, MAX_PACKETS);

@@ -564,7 +564,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                             </button>
                         )}
                         {onQuickBlock && (
-                            <button className="block-btn" onClick={() => {
+                            <button className="block-btn" onMouseDown={e => e.preventDefault()} onClick={() => {
                                 const sel = window.getSelection()?.toString();
                                 if (sel && sel.length > 0) {
                                     onQuickBlock(sel);
