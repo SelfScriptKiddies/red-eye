@@ -12,6 +12,7 @@ interface PacketProps {
     isHttp?: boolean;
     isGrpc?: boolean;
     onHeaderSearch?: (name: string, value: string) => void;
+    onHeaderExclude?: (name: string, value: string) => void;
     onQuickBlock?: (pattern: string) => void;
     onDiffSelect?: (packet: { id: number; packet_data: string; direction: string }) => void;
     diffSelected?: boolean;
@@ -268,7 +269,7 @@ interface TagTrigger {
     color: number;
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onHeaderExclude, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isGrpc ? 'grpc' : isHttp ? 'http' : 'text');
     const [grpcData, setGrpcData] = useState<any[] | null>(null);
     const [grpcLoading, setGrpcLoading] = useState(false);
@@ -428,6 +429,16 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                                     </svg>
                                 </button>
                             )}
+                            {onHeaderExclude && httpData.path && (
+                                <button className="header-search-btn header-exclude-btn path-search" title={`Скрыть запросы на ${httpData.path}`}
+                                    onClick={() => onHeaderExclude('_path', httpData.path!)}>
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                                        <line x1="1" y1="1" x2="23" y2="23"/>
+                                    </svg>
+                                </button>
+                            )}
                             {' '}
                             <span className="http-ver">HTTP/{httpData.http_version}</span>
                         </>
@@ -462,6 +473,16 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                                                     </svg>
                                                 </button>
                                             )}
+                                            {onHeaderExclude && (
+                                                <button className="header-search-btn header-exclude-btn" title={`Скрыть: cookie ${cName.trim()}`}
+                                                    onClick={() => onHeaderExclude('Cookie', `${cName.trim()}=${cValue}`)}>
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                                                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                                                        <line x1="1" y1="1" x2="23" y2="23"/>
+                                                    </svg>
+                                                </button>
+                                            )}
                                         </div>
                                     );
                                 })
@@ -476,6 +497,16 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                                         onClick={() => onHeaderSearch(h.name, h.value)}>
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                        </svg>
+                                    </button>
+                                )}
+                                {onHeaderExclude && (
+                                    <button className="header-search-btn header-exclude-btn" title={`Скрыть: ${h.name}: ${h.value}`}
+                                        onClick={() => onHeaderExclude(h.name, h.value)}>
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                                            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                                            <line x1="1" y1="1" x2="23" y2="23"/>
                                         </svg>
                                     </button>
                                 )}

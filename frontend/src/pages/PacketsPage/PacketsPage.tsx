@@ -31,7 +31,7 @@ export function PacketsPage() {
     const [endTime, setEndTime] = useState<number | null>(null);
     const timelineClearRef = useRef<(() => void) | null>(null);
     const clearTimeSelection = () => { setStartTime(null); setEndTime(null); timelineClearRef.current?.(); };
-    const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
+    const [headerFilters, setHeaderFilters] = useState<{name: string, value: string, exclude?: boolean}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
     const [diffLeft, setDiffLeft] = useState<any | null>(null);
@@ -138,14 +138,18 @@ export function PacketsPage() {
         }
     }, [headerSearchResults]);
 
-    const filteredStreams = headerSearchResults
-        ? headerFilteredStreams
-        : streamsArray;
+    const filteredStreams = (() => {
+        let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
+        if (headerExcludeIds.size > 0) {
+            streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
+        }
+        return streams;
+    })();
 
-    const addHeaderFilter = (name: string, value: string) => {
-        const exists = headerFilters.some(f => f.name === name && f.value === value);
+    const addHeaderFilter = (name: string, value: string, exclude: boolean = false) => {
+        const exists = headerFilters.some(f => f.name === name && f.value === value && f.exclude === exclude);
         if (!exists) {
-            const updated = [...headerFilters, { name, value }];
+            const updated = [...headerFilters, { name, value, exclude }];
             setHeaderFilters(updated);
             runHeaderSearch(updated);
         }
@@ -158,20 +162,41 @@ export function PacketsPage() {
             runHeaderSearch(updated);
         } else {
             setHeaderSearchResults(null);
+            setHeaderExcludeIds(new Set());
         }
     };
 
-    const runHeaderSearch = async (filters: {name: string, value: string}[]) => {
+    const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
+
+    const runHeaderSearch = async (filters: {name: string, value: string, exclude?: boolean}[]) => {
         setHeaderSearching(true);
         try {
-            const data = await fetch('/api/http/search/multi', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(filters.map(f => ({ name: f.name, value: f.value }))),
-            }).then(r => r.json());
-            setHeaderSearchResults(data);
+            const includeFilters = filters.filter(f => !f.exclude);
+            const excludeFilters = filters.filter(f => f.exclude);
+
+            let includeResult = null;
+            if (includeFilters.length > 0) {
+                includeResult = await fetch('/api/http/search/multi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(includeFilters.map(f => ({ name: f.name, value: f.value }))),
+                }).then(r => r.json());
+            }
+            setHeaderSearchResults(includeResult);
+
+            if (excludeFilters.length > 0) {
+                const excludeResult = await fetch('/api/http/search/multi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(excludeFilters.map(f => ({ name: f.name, value: f.value }))),
+                }).then(r => r.json());
+                setHeaderExcludeIds(new Set(excludeResult?.stream_ids ?? []));
+            } else {
+                setHeaderExcludeIds(new Set());
+            }
         } catch {
             setHeaderSearchResults(null);
+            setHeaderExcludeIds(new Set());
         }
         setHeaderSearching(false);
     };
@@ -376,15 +401,15 @@ export function PacketsPage() {
                         {headerFilters.length > 0 && (
                             <div className="filter-indicator-chips">
                                 {headerFilters.map((f, i) => (
-                                    <span key={i} className="filter-indicator-chip">
-                                        {f.name}: {f.value.length > 25 ? f.value.slice(0, 25) + '...' : f.value}
+                                    <span key={i} className="filter-indicator-chip" style={f.exclude ? { borderColor: 'var(--re-text-dim)' } : undefined}>
+                                        {f.exclude ? '⊘ ' : ''}{f.name}: {f.value.length > 25 ? f.value.slice(0, 25) + '...' : f.value}
                                         <button onClick={() => removeHeaderFilter(i)}>✕</button>
                                     </span>
                                 ))}
                             </div>
                         )}
                         {headerFilters.length > 0 && (
-                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); }}>
+                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set()); }}>
                                 Сбросить HTTP фильтры
                             </button>
                         )}
@@ -482,6 +507,7 @@ export function PacketsPage() {
                         isHttp={selectedStreamL7 === 'http1'}
                         isGrpc={selectedStreamL7 === 'grpc'}
                         onHeaderSearch={addHeaderFilter}
+                        onHeaderExclude={(name: string, value: string) => addHeaderFilter(name, value, true)}
                         diffSelected={diffLeft?.id === packet.id}
                         onDiffSelect={(pkt) => {
                             if (!diffLeft) {
