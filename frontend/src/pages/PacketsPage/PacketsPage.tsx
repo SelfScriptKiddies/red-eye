@@ -161,8 +161,13 @@ export function PacketsPage() {
             streams = streams.filter((s: any) => s.favorite);
         }
         if (filterMode === 'or' && (usedTags.length > 0 || usedServices.length > 0)) {
+            // usedTags contains tag IDs (strings), s.tags contains tag names — convert IDs to names
+            const selectedTagNames = usedTags.map((id: string) => {
+                const tag = tagsArray.find((t: any) => String(t.id) === id);
+                return tag?.name;
+            }).filter(Boolean);
             streams = streams.filter((s: any) => {
-                const matchesTag = usedTags.length > 0 && s.tags?.some((t: string) => usedTags.includes(t));
+                const matchesTag = selectedTagNames.length > 0 && s.tags?.some((t: string) => selectedTagNames.includes(t));
                 const matchesService = usedServices.length > 0 && usedServices.includes(String(s.service_id));
                 return matchesTag || matchesService;
             });
