@@ -219,24 +219,46 @@ export function PacketsPage() {
     // Export generators
     const exportPwntools = (): string => {
         if (!packetData || packetData.length === 0) return '';
-        const stream = streamsArray.find((s: any) => s.id === (typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId));
-        const host = stream ? `TARGET_IP` : 'TARGET_IP';
-        const port = stream?.service_name ? '????' : '????';
-        const lines = [`from pwn import *\n`, `r = remote('${host}', ${port})\n`];
-        for (const pkt of packetData) {
-            const raw = atob(pkt.packet_data);
-            const pyBytes = Array.from(raw).map((c: string) => {
-                const code = c.charCodeAt(0);
-                if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
-                return `\\x${code.toString(16).padStart(2, '0')}`;
-            }).join('');
-            if (pkt.direction === 'dest') {
-                lines.push(`r.send(b'${pyBytes}')`);
-            } else {
-                lines.push(`r.recv(${raw.length})  # ${raw.length} bytes`);
+        const lines = [`from pwn import *\n`];
+
+        if (isMultiSelect) {
+            // Create a remote per stream
+            for (const sid of selectedStreamIds) {
+                lines.push(`r_${sid} = remote('TARGET_IP', '????')  # stream #${sid}`);
             }
+            lines.push('');
+            for (const pkt of packetData) {
+                const sid = pkt._stream_id ?? pkt.stream_id;
+                const varName = `r_${sid}`;
+                const raw = atob(pkt.packet_data);
+                const pyBytes = Array.from(raw).map((c: string) => {
+                    const code = c.charCodeAt(0);
+                    if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
+                    return `\\x${code.toString(16).padStart(2, '0')}`;
+                }).join('');
+                if (pkt.direction === 'dest') {
+                    lines.push(`${varName}.send(b'${pyBytes}')`);
+                } else {
+                    lines.push(`${varName}.recv(${raw.length})  # ${raw.length} bytes`);
+                }
+            }
+        } else {
+            lines.push(`r = remote('TARGET_IP', '????')\n`);
+            for (const pkt of packetData) {
+                const raw = atob(pkt.packet_data);
+                const pyBytes = Array.from(raw).map((c: string) => {
+                    const code = c.charCodeAt(0);
+                    if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
+                    return `\\x${code.toString(16).padStart(2, '0')}`;
+                }).join('');
+                if (pkt.direction === 'dest') {
+                    lines.push(`r.send(b'${pyBytes}')`);
+                } else {
+                    lines.push(`r.recv(${raw.length})  # ${raw.length} bytes`);
+                }
+            }
+            lines.push(`\nr.interactive()`);
         }
-        lines.push(`\nr.interactive()`);
         return lines.join('\n');
     };
 
