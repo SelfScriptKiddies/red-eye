@@ -145,16 +145,12 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
             ticks.push({ time: t, pct: (i / tickCount) * 100 });
         }
 
-        // Can we scroll left/right?
-        const canScrollLeft = dataMin < viewLeft;
-        const canScrollRight = viewOffset < 0;
-
-        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow, canScrollLeft, canScrollRight };
+        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow };
     }, [data, viewOffset]);
 
-    // Pan buttons — shift viewport by 5 minutes
+    // Pan buttons — shift viewport by 5 minutes, always scrollable ±30 min beyond data
     const scrollLeft = useCallback(() => setViewOffset(prev => prev - 300), []);
-    const scrollRight = useCallback(() => setViewOffset(prev => Math.min(0, prev + 300)), []);
+    const scrollRight = useCallback(() => setViewOffset(prev => prev + 300), []);
 
     // Convert client X to percentage
     const pxToPct = useCallback((clientX: number): number => {
@@ -291,12 +287,8 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
                     onMouseDown={handleMouseDown}
                 >
                     <div className="timeline-bar-controls" onMouseDown={e => e.stopPropagation()}>
-                        {chartData?.canScrollLeft && (
-                            <button className="timeline-bar-scroll" onClick={scrollLeft} title="Scroll left 5 min">◀</button>
-                        )}
-                        {chartData?.canScrollRight && (
-                            <button className="timeline-bar-scroll" onClick={scrollRight} title="Scroll right 5 min">▶</button>
-                        )}
+                        <button className="timeline-bar-scroll" onClick={scrollLeft} title="Scroll left 5 min">◀</button>
+                        <button className="timeline-bar-scroll" onClick={scrollRight} title="Scroll right 5 min">▶</button>
                         <button className="timeline-bar-toggle" onClick={toggleCollapsed} title="Collapse timeline">▲</button>
                     </div>
 
