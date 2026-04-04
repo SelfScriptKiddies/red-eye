@@ -6,12 +6,21 @@ const MAX_PACKETS = 500;
 export function usePackets(streamsArray: any[], servicesArray: any[]) {
     const [packetsByStream, setPacketsByStream] = useState<Record<number, any[]>>({});
     const [selectedStreamIds, setSelectedStreamIds] = useState<number[]>([]);
-    const [selectedStreamL7, setSelectedStreamL7] = useState<string>('unknown');
     const [mergeOverride, setMergeOverride] = useState<boolean | null>(null);
 
-    // For backwards compat
-    const selectedStreamId = selectedStreamIds.length === 1 ? selectedStreamIds[0] : (selectedStreamIds.length > 0 ? selectedStreamIds[0] : null);
+    const selectedStreamId = selectedStreamIds.length >= 1 ? selectedStreamIds[0] : null;
     const isMultiSelect = selectedStreamIds.length > 1;
+
+    // Derive L7 protocol from all selected streams — if all same, use it; if mixed, 'unknown'
+    const selectedStreamL7 = useMemo(() => {
+        if (selectedStreamIds.length === 0) return 'unknown';
+        const protocols = selectedStreamIds.map(id => {
+            const s = streamsArray.find((s: any) => s.id === id);
+            return s?.l7_protocol || 'unknown';
+        });
+        const unique = [...new Set(protocols)];
+        return unique.length === 1 ? unique[0] : 'unknown';
+    }, [selectedStreamIds, streamsArray]);
 
     const loadPacketsForStream = useCallback(async (streamId: number): Promise<any[]> => {
         try {
@@ -39,11 +48,6 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
                     delete next[numericId];
                     return next;
                 });
-                // Update L7 from first remaining stream
-                if (newIds.length > 0) {
-                    const first = streamsArray.find((s: any) => s.id === newIds[0]);
-                    setSelectedStreamL7(first?.l7_protocol || 'unknown');
-                }
             } else {
                 setSelectedStreamIds(prev => [...prev, numericId]);
                 const packets = await loadPacketsForStream(numericId);
@@ -54,16 +58,6 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
             // Normal click: single select
             setSelectedStreamIds([numericId]);
             setMergeOverride(null);
-
-            const localStream = streamsArray.find((s: any) => s.id === numericId);
-            setSelectedStreamL7(localStream?.l7_protocol || 'unknown');
-            if (!localStream?.l7_protocol) {
-                try {
-                    const streamData = await fetchApi(`/api/stream/${numericId}`);
-                    setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
-                } catch { setSelectedStreamL7('unknown'); }
-            }
-
             const packets = await loadPacketsForStream(numericId);
             setPacketsByStream({ [numericId]: packets });
         }

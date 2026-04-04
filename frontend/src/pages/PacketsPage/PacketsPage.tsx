@@ -447,8 +447,8 @@ export function PacketsPage() {
                         key={`${packet._stream_id ?? packet.stream_id}-${packet.id}`}
                         {...packet}
                         showStreamId={isMultiSelect}
-                        isHttp={!isMultiSelect && selectedStreamL7 === 'http1'}
-                        isGrpc={!isMultiSelect && selectedStreamL7 === 'grpc'}
+                        isHttp={selectedStreamL7 === 'http1'}
+                        isGrpc={selectedStreamL7 === 'grpc'}
                         onHeaderSearch={addHeaderFilter}
                         diffSelected={diffLeft?.id === packet.id}
                         onDiffSelect={(pkt) => {
