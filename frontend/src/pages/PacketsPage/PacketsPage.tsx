@@ -1,11 +1,15 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
 import { Timeline } from '../../components/Timeline/Timeline';
+import { fetchApi, copyText } from '../../lib/api';
+import { useStreams } from '../../lib/useStreams';
+import { usePackets } from '../../lib/usePackets';
+import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
 
 interface PacketEvent {
     packet_id: number;
@@ -15,268 +19,88 @@ interface PacketEvent {
     direction: string;
 }
 
-function copyText(text: string) {
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text);
-    } else {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-    }
-}
-
 export function PacketsPage() {
-    const [streamsArray, setStreams] = useState([]);
     const [servicesArray, setServices] = useState([]);
     const [tagsArray, setTags] = useState([]);
     const [tagColors, setTagColors] = useState({});
-    const [packetData, setPacketData] = useState<any[]>([]);
-    const [selectedStreamL7, setSelectedStreamL7] = useState<string>('unknown');
-    const [selectedStreamId, setSelectedStreamId] = useState<number | null>(null);
-    const [pageLoaded, setPageLoaded] = useState(null);
     const [servicesLoaded, setServicesLoaded] = useState(false);
     const [tagsLoaded, setTagsLoaded] = useState(false);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
-    const [currentOffset, setCurrentOffset] = useState(0);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [hasMoreStreams, setHasMoreStreams] = useState(true);
     const [showTimeline, setShowTimeline] = useState(false);
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
-    const [mergeOverride, setMergeOverride] = useState<boolean | null>(null); // null = auto
     const [diffLeft, setDiffLeft] = useState<any | null>(null);
     const [diffRight, setDiffRight] = useState<any | null>(null);
     const [diffOpen, setDiffOpen] = useState(false);
-    const wsRef = useRef<WebSocket | null>(null);
-    const selectedStreamIdRef = useRef<number | null>(null);
-    const streamsContainerRef = useRef<HTMLDivElement | null>(null);
-    
+    const [shareCopied, setShareCopied] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
 
-    const getUrl = async (url) => {
-        const data = await fetch(url, {
-            method: 'GET'
-        })
-            .catch((reason) => {
-                document.querySelector(".errorMessage").innerText = `Fuck you, lol. Reason: ${reason}`;
-            })
-            .then((response) => {
-                if (parseInt(response.status / 100) == 5) {
-                    document.querySelector(".errorMessage").innerText = "Что-то с сервером";
-                    return;
-                }
-                else
-                    return response.json();
-            });
-        return data;
-    };
-    const getStreams = async () => {
-        let data = await getUrl("/api/stream?limit=20&offset=0");
-        // console.log(data);
-        const streams = Object.values(data);
-        await setStreams(streams);
-        setCurrentOffset(20);
-        setHasMoreStreams(streams.length === 20);
-    };
+    const {
+        streams: streamsArray,
+        isLoadingMore,
+        hasMoreStreams,
+        scrollRef: streamsContainerRef,
+        refresh,
+        updateStream,
+        clearStreams,
+        loadStreams,
+    } = useStreams({ tags: usedTags, services: usedServices, enabled: !isRedEyeActive });
+
+    const {
+        packetData,
+        selectedStreamId,
+        selectedStreamL7,
+        mergeOverride,
+        shouldMerge,
+        mergedPackets,
+        setMergeOverride,
+        handleStreamClick,
+    } = usePackets(streamsArray, servicesArray);
+
+    useRealtimeUpdates(refresh, !isRedEyeActive);
+
     const getServices = async () => {
-        if (servicesLoaded) return; // Prevent multiple calls
+        if (servicesLoaded) return;
         setServicesLoaded(true);
-        let data = await getUrl("/api/service");
-        await setServices(Object.values(data));
+        const data = await fetchApi("/api/service");
+        if (data) setServices(Object.values(data));
     };
     const getTags = async () => {
-        if (tagsLoaded) return; // Prevent multiple calls
+        if (tagsLoaded) return;
         setTagsLoaded(true);
-        let data = await getUrl("/api/tag/names");
-        const tagsData = Object.values(data);
-        await setTags(tagsData);
-        
-        // Create a map of tag names to colors for easy lookup
-        const colorMap = {};
-        tagsData.forEach(tag => {
-            colorMap[tag.name] = tag.color;
-        });
-        setTagColors(colorMap);
-    };
-    const getFilteredStreams = async (reset: boolean = false) => {
-        const offset = reset ? 0 : currentOffset;
-        let req_url = `/api/stream?limit=20&offset=${offset}`;
-        // let usedTags = this.state.usedTags;
-        if (usedTags && usedTags.length > 0)
-            req_url += "&tags="+usedTags.join(',')
-        if (usedServices && usedServices.length > 0)
-            req_url += "&services="+usedServices.join(',')
-        
-        setIsLoadingMore(true);
-        try {
-            let data = await getUrl(req_url);
-            const newStreams = Object.values(data);
-            
-            const MAX_STREAMS = 200;
-            if (reset) {
-                await setStreams(newStreams.slice(0, MAX_STREAMS));
-                setCurrentOffset(20);
-            } else {
-                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams].slice(0, MAX_STREAMS));
-                setCurrentOffset(prev => prev + 20);
-            }
-            
-            // If we got less than 20 streams, there are no more to load
-            setHasMoreStreams(newStreams.length === 20);
-        } catch (error) {
-            console.error('Error loading streams:', error);
-        } finally {
-            setIsLoadingMore(false);
+        const data = await fetchApi("/api/tag/names");
+        if (data) {
+            const tagsData = Object.values(data) as any[];
+            setTags(tagsData as any);
+            const colorMap = {};
+            tagsData.forEach((tag: any) => {
+                colorMap[tag.name] = tag.color;
+            });
+            setTagColors(colorMap);
         }
     };
-    
-    // Handle scroll event for infinite scroll
-    useEffect(() => {
-        const handleScroll = () => {
-            if (!streamsContainerRef.current || isLoadingMore || !hasMoreStreams || isRedEyeActive) return;
-            
-            const container = streamsContainerRef.current;
-            const scrollTop = container.scrollTop;
-            const scrollHeight = container.scrollHeight;
-            const clientHeight = container.clientHeight;
-            
-            // Load more when user is within 200px of the bottom
-            if (scrollTop + clientHeight >= scrollHeight - 200) {
-                getFilteredStreams(false);
-            }
-        };
-        
-        const container = streamsContainerRef.current;
-        if (container) {
-            container.addEventListener('scroll', handleScroll);
-            return () => container.removeEventListener('scroll', handleScroll);
-        }
-    }, [isLoadingMore, hasMoreStreams, isRedEyeActive, currentOffset, usedTags, usedServices]);
-    // Initial data loading + handle ?stream=ID from URL
+
+    // Initial service/tag load + handle ?stream=ID from URL
+    const pageBootRef = useRef(false);
     useEffect(() => {
         if (isRedEyeActive) return;
+        if (!servicesLoaded) getServices();
+        if (!tagsLoaded) getTags();
 
-        if (!pageLoaded) {
-            setPageLoaded(true);
-            getStreams();
-
-            // Auto-select stream from URL query param
+        if (!pageBootRef.current) {
+            pageBootRef.current = true;
             const params = new URLSearchParams(window.location.search);
             const streamParam = params.get('stream');
             if (streamParam) {
                 setTimeout(() => handleStreamClick(parseInt(streamParam)), 500);
             }
         }
-
-        if (!servicesLoaded) {
-            getServices();
-        }
-
-        if (!tagsLoaded) {
-            getTags();
-        }
-    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]);
-
-    // WebSocket connection for real-time packet updates (throttled)
-    const wsRefreshPending = useRef(false);
-    const wsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const WS_THROTTLE_MS = 2000; // Max 1 refresh per 2 seconds
-
-    useEffect(() => {
-        if (isRedEyeActive) return;
-        let reconnectTimeout: ReturnType<typeof setTimeout>;
-
-        const scheduleRefresh = () => {
-            if (wsRefreshPending.current) return; // Already scheduled
-            wsRefreshPending.current = true;
-            wsRefreshTimer.current = setTimeout(() => {
-                wsRefreshPending.current = false;
-                setCurrentOffset(0);
-                setHasMoreStreams(true);
-                getFilteredStreams(true);
-            }, WS_THROTTLE_MS);
-        };
-
-        const connectWs = () => {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onmessage = () => {
-                scheduleRefresh(); // Throttled — at most 1 refresh per 2s
-            };
-
-            ws.onclose = () => {
-                reconnectTimeout = setTimeout(() => {
-                    if (wsRef.current?.readyState === WebSocket.CLOSED) {
-                        connectWs();
-                    }
-                }, 3000);
-            };
-        };
-
-        connectWs();
-
-        return () => {
-            clearTimeout(reconnectTimeout);
-            if (wsRefreshTimer.current) clearTimeout(wsRefreshTimer.current);
-            if (wsRef.current) {
-                wsRef.current.onclose = null;
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-        };
-    }, [isRedEyeActive]);
-
-    // Determine if merge should be active
-    const shouldMerge = (() => {
-        if (mergeOverride !== null) return mergeOverride;
-        // Auto: merge for HTTP services, or if service has merge_adjacent_packets
-        if (selectedStreamL7 === 'http1') return true;
-        // Check service flags from the selected stream
-        if (selectedStreamId) {
-            const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
-            const stream = streamsArray.find((s: any) => s.id === numId);
-            if (stream) {
-                const svc = servicesArray.find((s: any) => s.id === stream.service_id);
-                if (svc?.merge_adjacent_packets) return true;
-            }
-        }
-        return false;
-    })();
-
-    // Merge adjacent packets with the same direction (when enabled) — memoized
-    const mergedPackets = useMemo(() => {
-        if (!packetData || packetData.length === 0) return [];
-        if (!shouldMerge) return packetData.map(p => ({ ...p, _merged_count: 1 }));
-        const groups: any[] = [];
-        for (const pkt of packetData) {
-            const last = groups[groups.length - 1];
-            if (last && last.direction === pkt.direction) {
-                const a = atob(last.packet_data);
-                const b = atob(pkt.packet_data);
-                const merged = new Uint8Array(a.length + b.length);
-                for (let i = 0; i < a.length; i++) merged[i] = a.charCodeAt(i);
-                for (let i = 0; i < b.length; i++) merged[a.length + i] = b.charCodeAt(i);
-                let binary = '';
-                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
-                last.packet_data = btoa(binary);
-                last._merged_count = (last._merged_count || 1) + 1;
-            } else {
-                groups.push({ ...pkt, _merged_count: 1 });
-            }
-        }
-        return groups;
-    }, [packetData, shouldMerge]);
+    }, [isRedEyeActive, servicesLoaded, tagsLoaded]);
 
     // When header search is active, load matching streams individually
     const [headerFilteredStreams, setHeaderFilteredStreams] = useState<any[]>([]);
@@ -286,14 +110,12 @@ export function PacketsPage() {
             setHeaderFilteredStreams([]);
             return;
         }
-        // Try to find in already-loaded streams first
         const ids = new Set(headerSearchResults.stream_ids);
         const found = streamsArray.filter((s: any) => ids.has(s.id));
         if (found.length > 0) {
             setHeaderFilteredStreams(found);
         } else {
-            // Load more streams (bigger window) and filter
-            getUrl(`/api/stream?limit=200&offset=0`)
+            fetchApi(`/api/stream?limit=200&offset=0`)
                 .then(data => {
                     if (data) {
                         const all = Object.values(data) as any[];
@@ -343,39 +165,8 @@ export function PacketsPage() {
         setHeaderSearching(false);
     };
 
-    const handleStreamClick = async (streamId) => {
-        selectedStreamIdRef.current = streamId;
-        setSelectedStreamId(streamId);
-        setMergeOverride(null);
-
-        // Get l7_protocol: try local array first, fallback to API
-        const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
-        const localStream = streamsArray.find((s: any) => s.id === numericId);
-        if (localStream?.l7_protocol) {
-            setSelectedStreamL7(localStream.l7_protocol);
-        } else {
-            // Fetch from API for shared/external links
-            try {
-                const streamData = await getUrl(`/api/stream/${numericId}`);
-                setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
-            } catch {
-                setSelectedStreamL7('unknown');
-            }
-        }
-
-        try {
-            const data = await getUrl(`/api/packet/stream_id/${streamId}`);
-            const packets = Object.values(data);
-            const MAX_PACKETS = 500;
-            setPacketData(packets.slice(0, MAX_PACKETS));
-        } catch (error) {
-            console.error('Ошибка при получении данных пакета:', error);
-        }
-    };
-
     const handleStreamNavigate = (streamId: number) => {
         handleStreamClick(streamId);
-        // Scroll to stream in list
         const streamEl = document.querySelector(`[data-stream-id="${streamId}"]`);
         if (streamEl) streamEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
@@ -384,22 +175,14 @@ export function PacketsPage() {
         try {
             const response = await fetch(`/api/stream/${streamId}/favorite`, {
                 method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ favorite: !currentFavorite })
             });
-
             if (!response.ok) {
                 console.error('Не удалось обновить избранное:', await response.text());
                 return;
             }
-
-            setStreams((prevStreams: any[]) =>
-                prevStreams.map((stream: any) =>
-                    stream.id === streamId ? { ...stream, favorite: !currentFavorite } : stream
-                )
-            );
+            updateStream(streamId, (s: any) => ({ ...s, favorite: !currentFavorite }));
         } catch (error) {
             console.error('Ошибка при обновлении избранного:', error);
         }
@@ -410,7 +193,6 @@ export function PacketsPage() {
         if (!selectedStreamId) return;
         const url = `${window.location.origin}/packets?stream=${selectedStreamId}`;
         copyText(url);
-        // Auto-favorite so it survives cleanup
         const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
         const stream = streamsArray.find((s: any) => s.id === numId);
         if (stream && !stream.favorite) {
@@ -447,14 +229,12 @@ export function PacketsPage() {
     const exportRequests = (): string => {
         if (!packetData || packetData.length === 0) return '';
         const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
-        // Parse merged packets for HTTP messages
         for (const pkt of mergedPackets) {
             if (pkt.direction !== 'dest') continue;
             const text = atob(pkt.packet_data);
             const methodMatch = text.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\S+)\s+HTTP/);
             if (!methodMatch) continue;
             const [, method, path] = methodMatch;
-            // Extract headers
             const headerSection = text.split('\r\n\r\n')[0];
             const headerLines = headerSection.split('\r\n').slice(1);
             const headers: Record<string, string> = {};
@@ -509,27 +289,6 @@ export function PacketsPage() {
         return lines.join('\n');
     };
 
-    const [shareCopied, setShareCopied] = useState(false);
-    const [exportMenuOpen, setExportMenuOpen] = useState(false);
-
-    const handleClearStreams = () => {
-        setStreams([]);
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-    };
-    // Re-fetch streams when tag/service/header filters change
-    const filtersVersion = useRef(0);
-    useEffect(() => {
-        // Skip initial render
-        if (filtersVersion.current === 0) {
-            filtersVersion.current = 1;
-            return;
-        }
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-        getFilteredStreams(true);
-    }, [usedTags, usedServices, headerSearchResults]);
-
     const handleTagClick = (e) => {
         const tagName = e.target.dataset.service;
         setUsedTags(prev => {
@@ -548,7 +307,7 @@ export function PacketsPage() {
     return (
         <div className="packetsPage">
             <div className="filterTape">
-                <button className="clear-button" onClick={handleClearStreams}>
+                <button className="clear-button" onClick={clearStreams}>
                     Очистить очередь
                 </button>
                 <div className="tag-filter d-inline-block">
@@ -700,7 +459,6 @@ export function PacketsPage() {
                         }}
                         onQuickBlock={(pattern: string) => {
                             if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
-                            // Detect if hex pattern (from hex dump context menu)
                             const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
                             fetch('/api/tag/names', {
                                 method: 'POST',
