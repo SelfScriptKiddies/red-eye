@@ -279,6 +279,42 @@ async fn get_tag_metrics(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/tag/flag-balance",
+    params(("minutes" = Option<i32>, Query, description = "Lookback window in minutes")),
+    responses(
+        (status = 200, description = "Flag balance per service"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "tag"
+)]
+#[get("/tag/flag-balance")]
+async fn get_flag_balance(
+    _identity: Identity,
+    tag_service: web::Data<TagService>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let minutes = query.get("minutes")
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(5);
+
+    match tag_service.get_flag_balance(minutes).await {
+        Ok(data) => {
+            let result: Vec<serde_json::Value> = data.iter().map(|(service_id, service_name, incoming, outgoing)| {
+                serde_json::json!({
+                    "service_id": service_id,
+                    "service_name": service_name,
+                    "incoming": incoming,
+                    "outgoing": outgoing
+                })
+            }).collect();
+            HttpResponse::Ok().json(result)
+        }
+        Err(_) => HttpResponse::InternalServerError().finish()
+    }
+}
+
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
     cfg
         .service(get_tags_by_stream_id)
@@ -287,5 +323,6 @@ pub fn tag_config(cfg: &mut web::ServiceConfig) {
         .service(create_tag_name)
         .service(update_tag_name)
         .service(delete_tag_name)
-        .service(get_tag_metrics);
+        .service(get_tag_metrics)
+        .service(get_flag_balance);
 }

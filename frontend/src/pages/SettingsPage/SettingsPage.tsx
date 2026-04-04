@@ -13,6 +13,7 @@ interface Service {
     decrypt_tls: boolean;
     http_parse: boolean;
     http2_parse: boolean;
+    alert_flag_leak?: boolean;
 }
 
 interface Filter {
@@ -35,8 +36,8 @@ export function SettingsPage() {
     const [services, setServices] = useState<Service[]>([]);
     const [serviceModalOpen, setServiceModalOpen] = useState(false);
     const [editingService, setEditingService] = useState<Service | null>(null);
-    const [serviceForm, setServiceForm] = useState<Service>({ 
-        name: '', 
+    const [serviceForm, setServiceForm] = useState<Service>({
+        name: '',
         port: 8080,
         chunked_transfer_encoding: false,
         urldecode: false,
@@ -44,7 +45,8 @@ export function SettingsPage() {
         inflate_websockets: false,
         decrypt_tls: false,
         http_parse: false,
-        http2_parse: false
+        http2_parse: false,
+        alert_flag_leak: false
     });
     
     // Filters state
@@ -142,14 +144,17 @@ export function SettingsPage() {
             setServiceForm(service);
         } else {
             setEditingService(null);
-            setServiceForm({ 
-                name: '', 
+            setServiceForm({
+                name: '',
                 port: 8080,
                 chunked_transfer_encoding: false,
                 urldecode: false,
                 merge_adjacent_packets: false,
                 inflate_websockets: false,
-                decrypt_tls: false
+                decrypt_tls: false,
+                http_parse: false,
+                http2_parse: false,
+                alert_flag_leak: false
             });
         }
         setServiceModalOpen(true);
@@ -181,7 +186,8 @@ export function SettingsPage() {
                     inflate_websockets: serviceForm.inflate_websockets,
                     decrypt_tls: serviceForm.decrypt_tls,
                     http_parse: serviceForm.http_parse,
-                    http2_parse: serviceForm.http2_parse
+                    http2_parse: serviceForm.http2_parse,
+                    alert_flag_leak: serviceForm.alert_flag_leak ?? false
                 })
             });
             
@@ -315,6 +321,7 @@ export function SettingsPage() {
                                         {service.decrypt_tls && <span className="option-badge">TLS</span>}
                                         {service.http_parse && <span className="option-badge">HTTP</span>}
                                         {service.http2_parse && <span className="option-badge">HTTP/2</span>}
+                                        {(service.alert_flag_leak ?? false) && <span className="option-badge">FlagAlert</span>}
                                     </div>
                                 </div>
                                 <div className="card-actions">
@@ -531,6 +538,14 @@ export function SettingsPage() {
                                         onChange={(e) => setServiceForm({ ...serviceForm, http2_parse: e.target.checked })}
                                     />
                                     HTTP/2 Parse
+                                </label>
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={serviceForm.alert_flag_leak ?? false}
+                                        onChange={(e) => setServiceForm({ ...serviceForm, alert_flag_leak: e.target.checked })}
+                                    />
+                                    Алерт при утечке флагов
                                 </label>
                             </div>
                         </div>

@@ -54,4 +54,8 @@ impl TagService {
     pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
         self.repository.get_tag_metrics(minutes).await
     }
+
+    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
+        self.repository.get_flag_balance(minutes).await
+    }
 }
