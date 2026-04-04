@@ -102,6 +102,27 @@ impl TagRepository {
         .await
     }
 
+    /// Get flag incoming/outgoing counts per service for the last N minutes
+    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (i32, String, i64, i64)>(
+            "SELECT s.id as service_id, s.name as service_name,
+                    COUNT(*) FILTER (WHERE p.direction = 'dest') as incoming,
+                    COUNT(*) FILTER (WHERE p.direction = 'orig') as outgoing
+             FROM tag t
+             JOIN tag_name tn ON tn.id = t.tag_id
+             JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
+             JOIN stream str ON str.id = p.stream_id
+             JOIN service s ON s.id = str.service_id
+             WHERE tn.special_type = 'flag'
+               AND t.timestamp >= (EXTRACT(EPOCH FROM NOW())::BIGINT - ($1 * 60))
+             GROUP BY s.id, s.name
+             ORDER BY s.name ASC"
+        )
+        .bind(minutes)
+        .fetch_all(&self.pool)
+        .await
+    }
+
     /// Get tag trigger counts aggregated by minute for the last N minutes
     pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
         sqlx::query_as::<_, (i32, String, i64, i64)>(
