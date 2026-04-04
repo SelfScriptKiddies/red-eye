@@ -65,6 +65,7 @@ export function PacketsPage() {
         mergedPackets,
         setMergeOverride,
         handleStreamClick,
+        loadMultipleStreams,
     } = usePackets(streamsArray, servicesArray);
 
     useRealtimeUpdates(refresh, !isRedEyeActive);
@@ -103,14 +104,10 @@ export function PacketsPage() {
             const streamParam = params.get('stream');
             if (streamParam) {
                 const ids = streamParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-                if (ids.length > 0) {
-                    // Load first stream normally, then shift-click the rest
-                    setTimeout(async () => {
-                        await handleStreamClick(ids[0]);
-                        for (let i = 1; i < ids.length; i++) {
-                            await handleStreamClick(ids[i], { shiftKey: true });
-                        }
-                    }, 500);
+                if (ids.length === 1) {
+                    setTimeout(() => handleStreamClick(ids[0]), 500);
+                } else if (ids.length > 1) {
+                    setTimeout(() => loadMultipleStreams(ids), 500);
                 }
             }
         }

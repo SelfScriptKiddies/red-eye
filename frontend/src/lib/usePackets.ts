@@ -63,6 +63,18 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         }
     }, [streamsArray, selectedStreamIds, loadPacketsForStream]);
 
+    // Load multiple streams at once (for shared URLs)
+    const loadMultipleStreams = useCallback(async (ids: number[]) => {
+        if (ids.length === 0) return;
+        setSelectedStreamIds(ids);
+        setMergeOverride(null);
+        const results: Record<number, any[]> = {};
+        await Promise.all(ids.map(async (id) => {
+            results[id] = await loadPacketsForStream(id);
+        }));
+        setPacketsByStream(results);
+    }, [loadPacketsForStream]);
+
     // Combine packets — single stream keeps server order, multi-select sorts by time+id
     const packetData = useMemo(() => {
         if (selectedStreamIds.length === 1) {
@@ -131,5 +143,6 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         mergedPackets,
         setMergeOverride,
         handleStreamClick,
+        loadMultipleStreams,
     };
 }
