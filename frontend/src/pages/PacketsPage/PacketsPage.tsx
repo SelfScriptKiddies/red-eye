@@ -193,15 +193,18 @@ export function PacketsPage() {
         }
     };
 
-    // Share: copy link + auto-favorite
+    // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
-        if (!selectedStreamId) return;
-        const url = `${window.location.origin}/packets?stream=${selectedStreamId}`;
+        if (selectedStreamIds.length === 0) return;
+        const streamParam = selectedStreamIds.join(',');
+        const url = `${window.location.origin}/packets?stream=${streamParam}`;
         copyText(url);
-        const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
-        const stream = streamsArray.find((s: any) => s.id === numId);
-        if (stream && !stream.favorite) {
-            handleFavoriteToggle(numId, false);
+        // Auto-favorite all selected streams
+        for (const id of selectedStreamIds) {
+            const stream = streamsArray.find((s: any) => s.id === id);
+            if (stream && !stream.favorite) {
+                handleFavoriteToggle(id, false);
+            }
         }
         setShareCopied(true);
         setTimeout(() => setShareCopied(false), 2000);
@@ -364,6 +367,7 @@ export function PacketsPage() {
                     return < StreamCard
                         key={stream.id}
                         streamObj={stream}
+                        selected={selectedStreamIds.includes(stream.id)}
                         onStreamClick={handleStreamClick}
                         onFavoriteToggle={handleFavoriteToggle}
                         onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}

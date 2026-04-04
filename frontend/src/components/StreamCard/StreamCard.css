@@ -18,6 +18,10 @@
     background-color: var(--re-bg-card-hover);
 }
 
+.stream-card--selected {
+    background-color: var(--re-bg-card-hover);
+}
+
 /* Left column: star + arrow + tags */
 .stream-card > div.row {
     width: 55%;

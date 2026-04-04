@@ -63,22 +63,23 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         }
     }, [streamsArray, selectedStreamIds, loadPacketsForStream]);
 
-    // Merge all selected streams' packets, sorted by timestamp
+    // Combine packets — single stream keeps server order, multi-select sorts by time+id
     const packetData = useMemo(() => {
+        if (selectedStreamIds.length === 1) {
+            return (packetsByStream[selectedStreamIds[0]] ?? []).slice(0, MAX_PACKETS);
+        }
         const allPackets: any[] = [];
         for (const id of selectedStreamIds) {
             const packets = packetsByStream[id];
             if (packets) allPackets.push(...packets);
         }
-        if (isMultiSelect) {
-            allPackets.sort((a, b) => {
-                const tsDiff = (a.timestamp ?? 0) - (b.timestamp ?? 0);
-                if (tsDiff !== 0) return tsDiff;
-                return (a.id ?? 0) - (b.id ?? 0);
-            });
-        }
+        allPackets.sort((a, b) => {
+            const tsDiff = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+            if (tsDiff !== 0) return tsDiff;
+            return (a.id ?? 0) - (b.id ?? 0);
+        });
         return allPackets.slice(0, MAX_PACKETS);
-    }, [packetsByStream, selectedStreamIds, isMultiSelect]);
+    }, [packetsByStream, selectedStreamIds]);
 
     const shouldMerge = (() => {
         if (isMultiSelect) return false; // Don't merge across streams
