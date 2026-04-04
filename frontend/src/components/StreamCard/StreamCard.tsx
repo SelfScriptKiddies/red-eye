@@ -1,7 +1,7 @@
 import "./StreamCard.css"
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
+export function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {
@@ -10,7 +10,7 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFil
         {
             e = e.parentElement;
         }
-        onStreamClick(e.dataset.streamid);
+        onStreamClick(e.dataset.streamid, event);
     }
 
     const handleFavoriteClick = (event) => {
@@ -51,7 +51,7 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFil
     };
     
     return (
-        <div className="stream-card d-flex jc-sb" onClick={clickHandler} data-streamid={streamObj.id}>
+        <div className={`stream-card d-flex jc-sb${selected ? ' stream-card--selected' : ''}`} onClick={clickHandler} data-streamid={streamObj.id}>
             <div className="row">
                 <button 
                     className={`favorite-btn ${isFavorite ? 'favorite-btn--active' : ''}`}

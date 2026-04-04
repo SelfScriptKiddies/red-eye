@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct Packet {
     pub id: i32,
     pub timestamp: i64,
+    pub timestamp_microseconds: i64,
     pub direction: String,
     pub stream_id: i32,
     pub packet_data: Vec<u8>, // BYTEA PostgreSQL
@@ -14,6 +15,7 @@ pub(crate) struct Packet {
 pub(crate) struct PacketResponse {
     pub id: i32,
     pub timestamp: i64,
+    pub timestamp_microseconds: i64,
     pub direction: String,
     pub stream_id: i32,
     pub packet_data: String, // base64 string
@@ -26,6 +28,7 @@ impl Packet {
         PacketResponse {
             id: self.id,
             timestamp: self.timestamp,
+            timestamp_microseconds: self.timestamp_microseconds,
             direction: self.direction.clone(),
             stream_id: self.stream_id,
             packet_data: packet_data_base64,

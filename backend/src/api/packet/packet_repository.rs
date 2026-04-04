@@ -16,7 +16,7 @@ impl PacketRepository {
     pub async fn get_packet_by_id(&self, packet_id: i32) -> Result<Packet, sqlx::Error> {
         sqlx::query_as::<_, Packet>(
             r#"
-            SELECT id, timestamp, direction, stream_id, packet_data
+            SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
             FROM packets
             WHERE id = $1
             "#)
@@ -28,7 +28,7 @@ impl PacketRepository {
     pub async fn get_packet_by_stream_id(&self, stream_id: i32, limit: i32) -> Result<Vec<Packet>, sqlx::Error> {
         sqlx::query_as::<_, Packet>(
             r#"
-            SELECT id, timestamp, direction, stream_id, packet_data
+            SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
             FROM packets
             WHERE stream_id = $1
             ORDER BY timestamp, timestamp_microseconds

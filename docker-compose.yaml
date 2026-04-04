@@ -55,3 +55,36 @@ services:
       - "3000:80"
     depends_on:
       - backend
+
+  # --- Monitoring (optional) ---
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    ports:
+      - "9099:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./volume/prometheus:/prometheus
+    depends_on:
+      - backend
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=redeye
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./volume/grafana:/var/lib/grafana
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring

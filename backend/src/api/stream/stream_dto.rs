@@ -54,6 +54,14 @@ pub struct StreamListResponse {
     pub dst_ip: String,
 }
 
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct HistogramBucket {
+    pub timestamp: i64,
+    pub service_id: i32,
+    pub service_name: String,
+    pub count: i64,
+}
+
 impl Stream {
     pub(crate) async fn to_response(&self, service: &PacketService) -> StreamResponse {
         StreamResponse {

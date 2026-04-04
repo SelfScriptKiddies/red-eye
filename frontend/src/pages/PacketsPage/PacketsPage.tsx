@@ -1,11 +1,17 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
-import { Timeline } from '../../components/Timeline/Timeline';
+
+import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
+import { fetchApi, copyText } from '../../lib/api';
+import { useStreams } from '../../lib/useStreams';
+import { usePackets } from '../../lib/usePackets';
+import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
+
 
 interface PacketEvent {
     packet_id: number;
@@ -15,268 +21,100 @@ interface PacketEvent {
     direction: string;
 }
 
-function copyText(text: string) {
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text);
-    } else {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-    }
-}
-
 export function PacketsPage() {
-    const [streamsArray, setStreams] = useState([]);
     const [servicesArray, setServices] = useState([]);
     const [tagsArray, setTags] = useState([]);
     const [tagColors, setTagColors] = useState({});
-    const [packetData, setPacketData] = useState<any[]>([]);
-    const [selectedStreamL7, setSelectedStreamL7] = useState<string>('unknown');
-    const [selectedStreamId, setSelectedStreamId] = useState<number | null>(null);
-    const [pageLoaded, setPageLoaded] = useState(null);
     const [servicesLoaded, setServicesLoaded] = useState(false);
     const [tagsLoaded, setTagsLoaded] = useState(false);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
-    const [currentOffset, setCurrentOffset] = useState(0);
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
-    const [hasMoreStreams, setHasMoreStreams] = useState(true);
-    const [showTimeline, setShowTimeline] = useState(false);
-    const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
+    const [startTime, setStartTime] = useState<number | null>(null);
+    const [endTime, setEndTime] = useState<number | null>(null);
+    const timelineClearRef = useRef<(() => void) | null>(null);
+    const clearTimeSelection = () => { setStartTime(null); setEndTime(null); timelineClearRef.current?.(); };
+    const [headerFilters, setHeaderFilters] = useState<{name: string, value: string, exclude?: boolean}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
+    const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
     const [headerSearching, setHeaderSearching] = useState(false);
-    const [mergeOverride, setMergeOverride] = useState<boolean | null>(null); // null = auto
     const [diffLeft, setDiffLeft] = useState<any | null>(null);
     const [diffRight, setDiffRight] = useState<any | null>(null);
     const [diffOpen, setDiffOpen] = useState(false);
-    const wsRef = useRef<WebSocket | null>(null);
-    const selectedStreamIdRef = useRef<number | null>(null);
-    const streamsContainerRef = useRef<HTMLDivElement | null>(null);
-    
+    const [shareCopied, setShareCopied] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
 
-    const getUrl = async (url) => {
-        const data = await fetch(url, {
-            method: 'GET'
-        })
-            .catch((reason) => {
-                document.querySelector(".errorMessage").innerText = `Fuck you, lol. Reason: ${reason}`;
-            })
-            .then((response) => {
-                if (parseInt(response.status / 100) == 5) {
-                    document.querySelector(".errorMessage").innerText = "Что-то с сервером";
-                    return;
-                }
-                else
-                    return response.json();
-            });
-        return data;
-    };
-    const getStreams = async () => {
-        let data = await getUrl("/api/stream?limit=20&offset=0");
-        // console.log(data);
-        const streams = Object.values(data);
-        await setStreams(streams);
-        setCurrentOffset(20);
-        setHasMoreStreams(streams.length === 20);
-    };
+    const {
+        streams: streamsArray,
+        isLoadingMore,
+        hasMoreStreams,
+        scrollRef: streamsContainerRef,
+        refresh,
+        updateStream,
+        clearStreams,
+        loadStreams,
+    } = useStreams({ tags: usedTags, services: usedServices, startTime, endTime, enabled: !isRedEyeActive });
+
+    const {
+        packetData,
+        selectedStreamId,
+        selectedStreamIds,
+        isMultiSelect,
+        selectedStreamL7,
+        mergeOverride,
+        shouldMerge,
+        mergedPackets,
+        setMergeOverride,
+        handleStreamClick,
+        loadMultipleStreams,
+    } = usePackets(streamsArray, servicesArray);
+
+    useRealtimeUpdates(refresh, !isRedEyeActive);
+
     const getServices = async () => {
-        if (servicesLoaded) return; // Prevent multiple calls
+        if (servicesLoaded) return;
         setServicesLoaded(true);
-        let data = await getUrl("/api/service");
-        await setServices(Object.values(data));
+        const data = await fetchApi("/api/service");
+        if (data) setServices(Object.values(data));
     };
     const getTags = async () => {
-        if (tagsLoaded) return; // Prevent multiple calls
+        if (tagsLoaded) return;
         setTagsLoaded(true);
-        let data = await getUrl("/api/tag/names");
-        const tagsData = Object.values(data);
-        await setTags(tagsData);
-        
-        // Create a map of tag names to colors for easy lookup
-        const colorMap = {};
-        tagsData.forEach(tag => {
-            colorMap[tag.name] = tag.color;
-        });
-        setTagColors(colorMap);
-    };
-    const getFilteredStreams = async (reset: boolean = false) => {
-        const offset = reset ? 0 : currentOffset;
-        let req_url = `/api/stream?limit=20&offset=${offset}`;
-        // let usedTags = this.state.usedTags;
-        if (usedTags && usedTags.length > 0)
-            req_url += "&tags="+usedTags.join(',')
-        if (usedServices && usedServices.length > 0)
-            req_url += "&services="+usedServices.join(',')
-        
-        setIsLoadingMore(true);
-        try {
-            let data = await getUrl(req_url);
-            const newStreams = Object.values(data);
-            
-            const MAX_STREAMS = 200;
-            if (reset) {
-                await setStreams(newStreams.slice(0, MAX_STREAMS));
-                setCurrentOffset(20);
-            } else {
-                await setStreams((prevStreams: any[]) => [...prevStreams, ...newStreams].slice(0, MAX_STREAMS));
-                setCurrentOffset(prev => prev + 20);
-            }
-            
-            // If we got less than 20 streams, there are no more to load
-            setHasMoreStreams(newStreams.length === 20);
-        } catch (error) {
-            console.error('Error loading streams:', error);
-        } finally {
-            setIsLoadingMore(false);
+        const data = await fetchApi("/api/tag/names");
+        if (data) {
+            const tagsData = Object.values(data) as any[];
+            setTags(tagsData as any);
+            const colorMap = {};
+            tagsData.forEach((tag: any) => {
+                colorMap[tag.name] = tag.color;
+            });
+            setTagColors(colorMap);
         }
     };
-    
-    // Handle scroll event for infinite scroll
-    useEffect(() => {
-        const handleScroll = () => {
-            if (!streamsContainerRef.current || isLoadingMore || !hasMoreStreams || isRedEyeActive) return;
-            
-            const container = streamsContainerRef.current;
-            const scrollTop = container.scrollTop;
-            const scrollHeight = container.scrollHeight;
-            const clientHeight = container.clientHeight;
-            
-            // Load more when user is within 200px of the bottom
-            if (scrollTop + clientHeight >= scrollHeight - 200) {
-                getFilteredStreams(false);
-            }
-        };
-        
-        const container = streamsContainerRef.current;
-        if (container) {
-            container.addEventListener('scroll', handleScroll);
-            return () => container.removeEventListener('scroll', handleScroll);
-        }
-    }, [isLoadingMore, hasMoreStreams, isRedEyeActive, currentOffset, usedTags, usedServices]);
-    // Initial data loading + handle ?stream=ID from URL
+
+    // Initial service/tag load + handle ?stream=ID from URL
+    const pageBootRef = useRef(false);
     useEffect(() => {
         if (isRedEyeActive) return;
+        if (!servicesLoaded) getServices();
+        if (!tagsLoaded) getTags();
 
-        if (!pageLoaded) {
-            setPageLoaded(true);
-            getStreams();
-
-            // Auto-select stream from URL query param
+        if (!pageBootRef.current) {
+            pageBootRef.current = true;
             const params = new URLSearchParams(window.location.search);
             const streamParam = params.get('stream');
             if (streamParam) {
-                setTimeout(() => handleStreamClick(parseInt(streamParam)), 500);
+                const ids = streamParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                if (ids.length === 1) {
+                    setTimeout(() => handleStreamClick(ids[0]), 500);
+                } else if (ids.length > 1) {
+                    setTimeout(() => loadMultipleStreams(ids), 500);
+                }
             }
         }
-
-        if (!servicesLoaded) {
-            getServices();
-        }
-
-        if (!tagsLoaded) {
-            getTags();
-        }
-    }, [isRedEyeActive, pageLoaded, servicesLoaded, tagsLoaded]);
-
-    // WebSocket connection for real-time packet updates (throttled)
-    const wsRefreshPending = useRef(false);
-    const wsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const WS_THROTTLE_MS = 2000; // Max 1 refresh per 2 seconds
-
-    useEffect(() => {
-        if (isRedEyeActive) return;
-        let reconnectTimeout: ReturnType<typeof setTimeout>;
-
-        const scheduleRefresh = () => {
-            if (wsRefreshPending.current) return; // Already scheduled
-            wsRefreshPending.current = true;
-            wsRefreshTimer.current = setTimeout(() => {
-                wsRefreshPending.current = false;
-                setCurrentOffset(0);
-                setHasMoreStreams(true);
-                getFilteredStreams(true);
-            }, WS_THROTTLE_MS);
-        };
-
-        const connectWs = () => {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onmessage = () => {
-                scheduleRefresh(); // Throttled — at most 1 refresh per 2s
-            };
-
-            ws.onclose = () => {
-                reconnectTimeout = setTimeout(() => {
-                    if (wsRef.current?.readyState === WebSocket.CLOSED) {
-                        connectWs();
-                    }
-                }, 3000);
-            };
-        };
-
-        connectWs();
-
-        return () => {
-            clearTimeout(reconnectTimeout);
-            if (wsRefreshTimer.current) clearTimeout(wsRefreshTimer.current);
-            if (wsRef.current) {
-                wsRef.current.onclose = null;
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-        };
-    }, [isRedEyeActive]);
-
-    // Determine if merge should be active
-    const shouldMerge = (() => {
-        if (mergeOverride !== null) return mergeOverride;
-        // Auto: merge for HTTP services, or if service has merge_adjacent_packets
-        if (selectedStreamL7 === 'http1') return true;
-        // Check service flags from the selected stream
-        if (selectedStreamId) {
-            const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
-            const stream = streamsArray.find((s: any) => s.id === numId);
-            if (stream) {
-                const svc = servicesArray.find((s: any) => s.id === stream.service_id);
-                if (svc?.merge_adjacent_packets) return true;
-            }
-        }
-        return false;
-    })();
-
-    // Merge adjacent packets with the same direction (when enabled) — memoized
-    const mergedPackets = useMemo(() => {
-        if (!packetData || packetData.length === 0) return [];
-        if (!shouldMerge) return packetData.map(p => ({ ...p, _merged_count: 1 }));
-        const groups: any[] = [];
-        for (const pkt of packetData) {
-            const last = groups[groups.length - 1];
-            if (last && last.direction === pkt.direction) {
-                const a = atob(last.packet_data);
-                const b = atob(pkt.packet_data);
-                const merged = new Uint8Array(a.length + b.length);
-                for (let i = 0; i < a.length; i++) merged[i] = a.charCodeAt(i);
-                for (let i = 0; i < b.length; i++) merged[a.length + i] = b.charCodeAt(i);
-                let binary = '';
-                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
-                last.packet_data = btoa(binary);
-                last._merged_count = (last._merged_count || 1) + 1;
-            } else {
-                groups.push({ ...pkt, _merged_count: 1 });
-            }
-        }
-        return groups;
-    }, [packetData, shouldMerge]);
+    }, [isRedEyeActive, servicesLoaded, tagsLoaded]);
 
     // When header search is active, load matching streams individually
     const [headerFilteredStreams, setHeaderFilteredStreams] = useState<any[]>([]);
@@ -286,14 +124,12 @@ export function PacketsPage() {
             setHeaderFilteredStreams([]);
             return;
         }
-        // Try to find in already-loaded streams first
         const ids = new Set(headerSearchResults.stream_ids);
         const found = streamsArray.filter((s: any) => ids.has(s.id));
         if (found.length > 0) {
             setHeaderFilteredStreams(found);
         } else {
-            // Load more streams (bigger window) and filter
-            getUrl(`/api/stream?limit=200&offset=0`)
+            fetchApi(`/api/stream?limit=200&offset=0`)
                 .then(data => {
                     if (data) {
                         const all = Object.values(data) as any[];
@@ -305,14 +141,18 @@ export function PacketsPage() {
         }
     }, [headerSearchResults]);
 
-    const filteredStreams = headerSearchResults
-        ? headerFilteredStreams
-        : streamsArray;
+    const filteredStreams = (() => {
+        let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
+        if (headerExcludeIds.size > 0) {
+            streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
+        }
+        return streams;
+    })();
 
-    const addHeaderFilter = (name: string, value: string) => {
-        const exists = headerFilters.some(f => f.name === name && f.value === value);
+    const addHeaderFilter = (name: string, value: string, exclude: boolean = false) => {
+        const exists = headerFilters.some(f => f.name === name && f.value === value && f.exclude === exclude);
         if (!exists) {
-            const updated = [...headerFilters, { name, value }];
+            const updated = [...headerFilters, { name, value, exclude }];
             setHeaderFilters(updated);
             runHeaderSearch(updated);
         }
@@ -325,57 +165,45 @@ export function PacketsPage() {
             runHeaderSearch(updated);
         } else {
             setHeaderSearchResults(null);
+            setHeaderExcludeIds(new Set());
         }
     };
 
-    const runHeaderSearch = async (filters: {name: string, value: string}[]) => {
+    const runHeaderSearch = async (filters: {name: string, value: string, exclude?: boolean}[]) => {
         setHeaderSearching(true);
         try {
-            const data = await fetch('/api/http/search/multi', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(filters.map(f => ({ name: f.name, value: f.value }))),
-            }).then(r => r.json());
-            setHeaderSearchResults(data);
+            const includeFilters = filters.filter(f => !f.exclude);
+            const excludeFilters = filters.filter(f => f.exclude);
+
+            let includeResult = null;
+            if (includeFilters.length > 0) {
+                includeResult = await fetch('/api/http/search/multi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(includeFilters.map(f => ({ name: f.name, value: f.value }))),
+                }).then(r => r.json());
+            }
+            setHeaderSearchResults(includeResult);
+
+            if (excludeFilters.length > 0) {
+                const excludeResult = await fetch('/api/http/search/multi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(excludeFilters.map(f => ({ name: f.name, value: f.value }))),
+                }).then(r => r.json());
+                setHeaderExcludeIds(new Set(excludeResult?.stream_ids ?? []));
+            } else {
+                setHeaderExcludeIds(new Set());
+            }
         } catch {
             setHeaderSearchResults(null);
+            setHeaderExcludeIds(new Set());
         }
         setHeaderSearching(false);
     };
 
-    const handleStreamClick = async (streamId) => {
-        selectedStreamIdRef.current = streamId;
-        setSelectedStreamId(streamId);
-        setMergeOverride(null);
-
-        // Get l7_protocol: try local array first, fallback to API
-        const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
-        const localStream = streamsArray.find((s: any) => s.id === numericId);
-        if (localStream?.l7_protocol) {
-            setSelectedStreamL7(localStream.l7_protocol);
-        } else {
-            // Fetch from API for shared/external links
-            try {
-                const streamData = await getUrl(`/api/stream/${numericId}`);
-                setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
-            } catch {
-                setSelectedStreamL7('unknown');
-            }
-        }
-
-        try {
-            const data = await getUrl(`/api/packet/stream_id/${streamId}`);
-            const packets = Object.values(data);
-            const MAX_PACKETS = 500;
-            setPacketData(packets.slice(0, MAX_PACKETS));
-        } catch (error) {
-            console.error('Ошибка при получении данных пакета:', error);
-        }
-    };
-
     const handleStreamNavigate = (streamId: number) => {
         handleStreamClick(streamId);
-        // Scroll to stream in list
         const streamEl = document.querySelector(`[data-stream-id="${streamId}"]`);
         if (streamEl) streamEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
@@ -384,37 +212,31 @@ export function PacketsPage() {
         try {
             const response = await fetch(`/api/stream/${streamId}/favorite`, {
                 method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ favorite: !currentFavorite })
             });
-
             if (!response.ok) {
                 console.error('Не удалось обновить избранное:', await response.text());
                 return;
             }
-
-            setStreams((prevStreams: any[]) =>
-                prevStreams.map((stream: any) =>
-                    stream.id === streamId ? { ...stream, favorite: !currentFavorite } : stream
-                )
-            );
+            updateStream(streamId, (s: any) => ({ ...s, favorite: !currentFavorite }));
         } catch (error) {
             console.error('Ошибка при обновлении избранного:', error);
         }
     };
 
-    // Share: copy link + auto-favorite
+    // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
-        if (!selectedStreamId) return;
-        const url = `${window.location.origin}/packets?stream=${selectedStreamId}`;
+        if (selectedStreamIds.length === 0) return;
+        const streamParam = selectedStreamIds.join(',');
+        const url = `${window.location.origin}/packets?stream=${streamParam}`;
         copyText(url);
-        // Auto-favorite so it survives cleanup
-        const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId;
-        const stream = streamsArray.find((s: any) => s.id === numId);
-        if (stream && !stream.favorite) {
-            handleFavoriteToggle(numId, false);
+        // Auto-favorite all selected streams
+        for (const id of selectedStreamIds) {
+            const stream = streamsArray.find((s: any) => s.id === id);
+            if (stream && !stream.favorite) {
+                handleFavoriteToggle(id, false);
+            }
         }
         setShareCopied(true);
         setTimeout(() => setShareCopied(false), 2000);
@@ -423,38 +245,58 @@ export function PacketsPage() {
     // Export generators
     const exportPwntools = (): string => {
         if (!packetData || packetData.length === 0) return '';
-        const stream = streamsArray.find((s: any) => s.id === (typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as string) : selectedStreamId));
-        const host = stream ? `TARGET_IP` : 'TARGET_IP';
-        const port = stream?.service_name ? '????' : '????';
-        const lines = [`from pwn import *\n`, `r = remote('${host}', ${port})\n`];
-        for (const pkt of packetData) {
-            const raw = atob(pkt.packet_data);
-            const pyBytes = Array.from(raw).map((c: string) => {
-                const code = c.charCodeAt(0);
-                if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
-                return `\\x${code.toString(16).padStart(2, '0')}`;
-            }).join('');
-            if (pkt.direction === 'dest') {
-                lines.push(`r.send(b'${pyBytes}')`);
-            } else {
-                lines.push(`r.recv(${raw.length})  # ${raw.length} bytes`);
+        const lines = [`from pwn import *\n`];
+
+        if (isMultiSelect) {
+            // Create a remote per stream
+            for (const sid of selectedStreamIds) {
+                lines.push(`r_${sid} = remote('TARGET_IP', '????')  # stream #${sid}`);
             }
+            lines.push('');
+            for (const pkt of packetData) {
+                const sid = pkt._stream_id ?? pkt.stream_id;
+                const varName = `r_${sid}`;
+                const raw = atob(pkt.packet_data);
+                const pyBytes = Array.from(raw).map((c: string) => {
+                    const code = c.charCodeAt(0);
+                    if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
+                    return `\\x${code.toString(16).padStart(2, '0')}`;
+                }).join('');
+                if (pkt.direction === 'dest') {
+                    lines.push(`${varName}.send(b'${pyBytes}')`);
+                } else {
+                    lines.push(`${varName}.recv(${raw.length})  # ${raw.length} bytes`);
+                }
+            }
+        } else {
+            lines.push(`r = remote('TARGET_IP', '????')\n`);
+            for (const pkt of packetData) {
+                const raw = atob(pkt.packet_data);
+                const pyBytes = Array.from(raw).map((c: string) => {
+                    const code = c.charCodeAt(0);
+                    if (code >= 0x20 && code <= 0x7e && c !== '\\' && c !== "'") return c;
+                    return `\\x${code.toString(16).padStart(2, '0')}`;
+                }).join('');
+                if (pkt.direction === 'dest') {
+                    lines.push(`r.send(b'${pyBytes}')`);
+                } else {
+                    lines.push(`r.recv(${raw.length})  # ${raw.length} bytes`);
+                }
+            }
+            lines.push(`\nr.interactive()`);
         }
-        lines.push(`\nr.interactive()`);
         return lines.join('\n');
     };
 
     const exportRequests = (): string => {
         if (!packetData || packetData.length === 0) return '';
         const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
-        // Parse merged packets for HTTP messages
         for (const pkt of mergedPackets) {
             if (pkt.direction !== 'dest') continue;
             const text = atob(pkt.packet_data);
             const methodMatch = text.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(\S+)\s+HTTP/);
             if (!methodMatch) continue;
             const [, method, path] = methodMatch;
-            // Extract headers
             const headerSection = text.split('\r\n\r\n')[0];
             const headerLines = headerSection.split('\r\n').slice(1);
             const headers: Record<string, string> = {};
@@ -509,27 +351,6 @@ export function PacketsPage() {
         return lines.join('\n');
     };
 
-    const [shareCopied, setShareCopied] = useState(false);
-    const [exportMenuOpen, setExportMenuOpen] = useState(false);
-
-    const handleClearStreams = () => {
-        setStreams([]);
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-    };
-    // Re-fetch streams when tag/service/header filters change
-    const filtersVersion = useRef(0);
-    useEffect(() => {
-        // Skip initial render
-        if (filtersVersion.current === 0) {
-            filtersVersion.current = 1;
-            return;
-        }
-        setCurrentOffset(0);
-        setHasMoreStreams(true);
-        getFilteredStreams(true);
-    }, [usedTags, usedServices, headerSearchResults]);
-
     const handleTagClick = (e) => {
         const tagName = e.target.dataset.service;
         setUsedTags(prev => {
@@ -548,7 +369,7 @@ export function PacketsPage() {
     return (
         <div className="packetsPage">
             <div className="filterTape">
-                <button className="clear-button" onClick={handleClearStreams}>
+                <button className="clear-button" onClick={clearStreams}>
                     Очистить очередь
                 </button>
                 <div className="tag-filter d-inline-block">
@@ -563,22 +384,33 @@ export function PacketsPage() {
                 </div>
             </div>
             <div className="streams-wrapper">
+                <TimelineBar
+                    onSelect={(start, end) => { setStartTime(Math.floor(start)); setEndTime(Math.ceil(end)); }}
+                    onClear={clearTimeSelection}
+                    clearRef={timelineClearRef}
+                />
                 {/* Filter indicator — above scroll area */}
-                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0) && (
+                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null) && (
                     <div className="filter-indicator">
                         <span>Фильтр активен</span>
+                        {startTime != null && (
+                            <div style={{ color: 'var(--re-text-secondary)', fontSize: '11px', marginTop: '4px' }}>
+                                {new Date(startTime * 1000).toLocaleTimeString()} — {new Date(endTime! * 1000).toLocaleTimeString()}
+                                <button onClick={clearTimeSelection} style={{ background: 'none', border: 'none', color: 'var(--re-text-muted)', cursor: 'pointer', marginLeft: '6px', fontSize: '11px', padding: '0' }}>✕</button>
+                            </div>
+                        )}
                         {headerFilters.length > 0 && (
                             <div className="filter-indicator-chips">
                                 {headerFilters.map((f, i) => (
-                                    <span key={i} className="filter-indicator-chip">
-                                        {f.name}: {f.value.length > 25 ? f.value.slice(0, 25) + '...' : f.value}
+                                    <span key={i} className="filter-indicator-chip" style={f.exclude ? { borderColor: 'var(--re-text-dim)' } : undefined}>
+                                        {f.exclude ? '⊘ ' : ''}{f.name}: {f.value.length > 25 ? f.value.slice(0, 25) + '...' : f.value}
                                         <button onClick={() => removeHeaderFilter(i)}>✕</button>
                                     </span>
                                 ))}
                             </div>
                         )}
                         {headerFilters.length > 0 && (
-                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); }}>
+                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set()); }}>
                                 Сбросить HTTP фильтры
                             </button>
                         )}
@@ -605,6 +437,7 @@ export function PacketsPage() {
                     return < StreamCard
                         key={stream.id}
                         streamObj={stream}
+                        selected={selectedStreamIds.includes(stream.id)}
                         onStreamClick={handleStreamClick}
                         onFavoriteToggle={handleFavoriteToggle}
                         onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
@@ -640,6 +473,9 @@ export function PacketsPage() {
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
                         <div className="toolbar-left">
+                            {isMultiSelect && (
+                                <span style={{ fontSize: '11px', color: 'var(--re-text-muted)', marginRight: '4px' }}>{selectedStreamIds.length} streams</span>
+                            )}
                             <button
                                 className={`merge-toggle-btn ${shouldMerge ? 'active' : ''}`}
                                 onClick={() => setMergeOverride(shouldMerge ? false : true)}
@@ -682,11 +518,13 @@ export function PacketsPage() {
                 )}
                 {mergedPackets.map(packet => (
                     <PacketCard
-                        key={packet.id}
+                        key={`${packet._stream_id ?? packet.stream_id}-${packet.id}`}
                         {...packet}
+                        showStreamId={isMultiSelect}
                         isHttp={selectedStreamL7 === 'http1'}
                         isGrpc={selectedStreamL7 === 'grpc'}
                         onHeaderSearch={addHeaderFilter}
+                        onHeaderExclude={(name: string, value: string) => addHeaderFilter(name, value, true)}
                         diffSelected={diffLeft?.id === packet.id}
                         onDiffSelect={(pkt) => {
                             if (!diffLeft) {
@@ -700,7 +538,6 @@ export function PacketsPage() {
                         }}
                         onQuickBlock={(pattern: string) => {
                             if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
-                            // Detect if hex pattern (from hex dump context menu)
                             const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
                             fetch('/api/tag/names', {
                                 method: 'POST',
