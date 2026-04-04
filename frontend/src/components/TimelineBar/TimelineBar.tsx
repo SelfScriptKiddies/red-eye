@@ -148,9 +148,45 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
         return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow };
     }, [data, viewOffset]);
 
-    // Pan buttons — shift viewport by 5 minutes, always scrollable ±30 min beyond data
+    // Pan buttons — shift viewport by 5 minutes
     const scrollLeft = useCallback(() => setViewOffset(prev => prev - 300), []);
     const scrollRight = useCallback(() => setViewOffset(prev => prev + 300), []);
+    const resetToLive = useCallback(() => setViewOffset(0), []);
+    const isLive = viewOffset === 0;
+
+    // Middle-click drag panning
+    const panRef = useRef<{ startX: number; startOffset: number } | null>(null);
+
+    useEffect(() => {
+        const chart = chartRef.current;
+        if (!chart) return;
+
+        const handleMidDown = (e: MouseEvent) => {
+            if (e.button !== 1) return; // middle click only
+            e.preventDefault();
+            panRef.current = { startX: e.clientX, startOffset: viewOffset };
+        };
+
+        const handleMidMove = (e: MouseEvent) => {
+            if (!panRef.current || !chartData) return;
+            const dx = e.clientX - panRef.current.startX;
+            const chartWidth = chart.getBoundingClientRect().width;
+            const pctShift = (dx / chartWidth) * 100;
+            const timeShift = (pctShift / 100) * chartData.viewWindow;
+            setViewOffset(panRef.current.startOffset + timeShift);
+        };
+
+        const handleMidUp = () => { panRef.current = null; };
+
+        chart.addEventListener('mousedown', handleMidDown);
+        window.addEventListener('mousemove', handleMidMove);
+        window.addEventListener('mouseup', handleMidUp);
+        return () => {
+            chart.removeEventListener('mousedown', handleMidDown);
+            window.removeEventListener('mousemove', handleMidMove);
+            window.removeEventListener('mouseup', handleMidUp);
+        };
+    }, [viewOffset, chartData]);
 
     // Convert client X to percentage
     const pxToPct = useCallback((clientX: number): number => {
@@ -288,6 +324,7 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
                 >
                     <div className="timeline-bar-controls" onMouseDown={e => e.stopPropagation()}>
                         <button className="timeline-bar-scroll" onClick={scrollLeft} title="Scroll left 5 min">◀</button>
+                        {!isLive && <button className="timeline-bar-live" onClick={resetToLive} title="Reset to live">Live</button>}
                         <button className="timeline-bar-scroll" onClick={scrollRight} title="Scroll right 5 min">▶</button>
                         <button className="timeline-bar-toggle" onClick={toggleCollapsed} title="Collapse timeline">▲</button>
                     </div>

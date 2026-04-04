@@ -45,6 +45,27 @@
     color: var(--re-text-secondary);
 }
 
+.timeline-bar-live {
+    background: none !important;
+    border: 1px solid var(--re-error) !important;
+    border-radius: 3px;
+    color: var(--re-error);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px !important;
+    transition: all 0.2s;
+}
+
+.timeline-bar-live:hover {
+    background: var(--re-error) !important;
+    color: white;
+}
+
+.timeline-bar-container.panning {
+    cursor: grabbing;
+}
+
 .timeline-bar-chart {
     position: absolute;
     top: 4px;
