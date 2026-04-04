@@ -5,6 +5,7 @@ import { MainPage } from '../pages/MainPage';
 import { PacketsPage } from "../pages/PacketsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import AgentsPage from "../pages/AgentsPage";
+import { TimelinePage } from "../pages/TimelinePage";
 
 function getCookie(name) {
     const value = `; ${document.cookie}`;
@@ -20,6 +21,7 @@ export const RenderPage = (): ReactNode => {
         "/packets": <PacketsPage />,
         "/settings": <SettingsPage />,
         "/agents": <AgentsPage />,
+        "/timeline": <TimelinePage />,
     };
     if(!getCookie('id') && name !== "/login")
         window.location.href = '/login';

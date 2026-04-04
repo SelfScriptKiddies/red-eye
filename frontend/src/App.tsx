@@ -45,6 +45,14 @@ export function App() {
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
               </svg>
             </NavIcon>
+            <NavIcon to="/timeline" label="Timeline">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="2" y1="20" x2="22" y2="20"/>
+                <rect x="4" y="10" width="3" height="10" rx="1"/>
+                <rect x="10" y="6" width="3" height="14" rx="1"/>
+                <rect x="16" y="12" width="3" height="8" rx="1"/>
+              </svg>
+            </NavIcon>
           </nav>
         </div>
         ) : ''}
