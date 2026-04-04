@@ -54,11 +54,26 @@ pub struct AgentConfig {
 
 impl AgentConfig {
     pub fn resolved_agent_id(&self) -> String {
-        self.agent_id.clone().unwrap_or_else(|| {
-            hostname::get()
-                .ok()
-                .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
-        })
+        if let Some(id) = &self.agent_id {
+            return id.clone();
+        }
+
+        // Build "hostname-ip" to avoid collisions across machines with the same hostname
+        // (e.g. 3 VMs all named "debian").  Fall back to just the IP if hostname is
+        // unavailable, and finally to a random UUID if even the IP is unset.
+        let ip = &self.machine_ip;
+        match hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+        {
+            Some(host) => format!("{}-{}", host, ip),
+            None => {
+                if ip != "0.0.0.0" {
+                    ip.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                }
+            }
+        }
     }
 }

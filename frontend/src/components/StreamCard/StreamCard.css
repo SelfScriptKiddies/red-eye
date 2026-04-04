@@ -25,8 +25,9 @@
 
 /* Left column: star + arrow + tags */
 .stream-card > div.row {
-    width: 55%;
+    flex: 1 1 0;
     min-width: 0;
+    overflow: hidden;
 }
 
 .stream-card > div.row > p {
@@ -79,27 +80,36 @@
     align-items: flex-end;
     gap: 2px;
     flex-shrink: 0;
+    max-width: 48%;
+    min-width: 0;
 }
 
 /* IP address */
 .stream-ip {
-    font-size: 0.8rem;
-    color: var(--re-accent);
+    font-size: 0.78rem;
+    color: var(--re-text-secondary);
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
     border-radius: 4px;
     padding: 1px 5px;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
 }
 
 .stream-ip:hover {
-    background: rgba(100, 108, 255, 0.15);
+    background: rgba(100, 108, 255, 0.12);
+    color: var(--re-accent);
 }
 
 .stream-ip-group {
     display: flex;
     align-items: center;
     gap: 4px;
+    max-width: 100%;
+    min-width: 0;
 }
 
 .ip-ban-btn {
@@ -170,6 +180,7 @@
     font-size: 0.75rem;
     color: var(--re-text-dim);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Tags */
