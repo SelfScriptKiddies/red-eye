@@ -23,10 +23,59 @@ const toText = (bytes: Uint8Array): string => {
     catch { return Array.from(bytes).map(b => b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.').join(''); }
 };
 
+interface CharToken {
+    char: string;
+    changed: boolean;
+}
+
 interface DiffLine {
     left: string;
     right: string;
     type: 'same' | 'changed' | 'added' | 'removed';
+    // Populated for 'changed' lines only
+    leftTokens?: CharToken[];
+    rightTokens?: CharToken[];
+}
+
+// Character-level LCS diff between two strings
+function charDiff(oldStr: string, newStr: string): { left: CharToken[], right: CharToken[] } {
+    const a = Array.from(oldStr);
+    const b = Array.from(newStr);
+    const n = a.length, m = b.length;
+
+    const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = 1; i <= n; i++) {
+        for (let j = 1; j <= m; j++) {
+            dp[i][j] = a[i - 1] === b[j - 1]
+                ? dp[i - 1][j - 1] + 1
+                : Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+    }
+
+    const leftTokens: CharToken[] = [];
+    const rightTokens: CharToken[] = [];
+    let i = n, j = m;
+    const leftStack: CharToken[] = [];
+    const rightStack: CharToken[] = [];
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+            leftStack.push({ char: a[i - 1], changed: false });
+            rightStack.push({ char: b[j - 1], changed: false });
+            i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            rightStack.push({ char: b[j - 1], changed: true });
+            j--;
+        } else {
+            leftStack.push({ char: a[i - 1], changed: true });
+            i--;
+        }
+    }
+
+    for (let k = leftStack.length - 1; k >= 0; k--) leftTokens.push(leftStack[k]);
+    for (let k = rightStack.length - 1; k >= 0; k--) rightTokens.push(rightStack[k]);
+
+    return { left: leftTokens, right: rightTokens };
 }
 
 // LCS-based line diff (like git)
@@ -65,7 +114,32 @@ function computeLineDiff(leftText: string, rightText: string): DiffLine[] {
     for (let k = stack.length - 1; k >= 0; k--) {
         result.push(stack[k]);
     }
-    return result;
+
+    // Second pass: pair adjacent removed+added lines as 'changed' with char-level diff
+    const paired: DiffLine[] = [];
+    let p = 0;
+    while (p < result.length) {
+        if (
+            result[p].type === 'removed' &&
+            p + 1 < result.length &&
+            result[p + 1].type === 'added'
+        ) {
+            const { left: leftTokens, right: rightTokens } = charDiff(result[p].left, result[p + 1].right);
+            paired.push({
+                left: result[p].left,
+                right: result[p + 1].right,
+                type: 'changed',
+                leftTokens,
+                rightTokens,
+            });
+            p += 2;
+        } else {
+            paired.push(result[p]);
+            p++;
+        }
+    }
+
+    return paired;
 }
 
 interface HexDiffByte {
@@ -169,14 +243,26 @@ export default function DiffView({ leftData, rightData, leftLabel, rightLabel, o
                             <pre className="diff-text-panel diff-left">
                                 {lineDiff.map((d, i) => (
                                     <div key={i} className={`diff-line diff-${d.type}`}>
-                                        {d.type === 'added' ? '\u00A0' : (d.left || '\u00A0')}
+                                        {d.type === 'added'
+                                            ? '\u00A0'
+                                            : d.type === 'changed' && d.leftTokens
+                                                ? d.leftTokens.map((t, j) => (
+                                                    <span key={j} className={t.changed ? 'diff-char-changed diff-char-removed' : ''}>{t.char}</span>
+                                                ))
+                                                : (d.left || '\u00A0')}
                                     </div>
                                 ))}
                             </pre>
                             <pre className="diff-text-panel diff-right">
                                 {lineDiff.map((d, i) => (
                                     <div key={i} className={`diff-line diff-${d.type}`}>
-                                        {d.type === 'removed' ? '\u00A0' : (d.right || '\u00A0')}
+                                        {d.type === 'removed'
+                                            ? '\u00A0'
+                                            : d.type === 'changed' && d.rightTokens
+                                                ? d.rightTokens.map((t, j) => (
+                                                    <span key={j} className={t.changed ? 'diff-char-changed diff-char-added' : ''}>{t.char}</span>
+                                                ))
+                                                : (d.right || '\u00A0')}
                                     </div>
                                 ))}
                             </pre>

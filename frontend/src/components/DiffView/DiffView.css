@@ -102,6 +102,16 @@
 .diff-added { background: rgba(0, 180, 0, 0.12); }
 .diff-removed { background: rgba(255, 60, 60, 0.12); }
 
+.diff-char-changed {
+    border-radius: 2px;
+}
+.diff-char-removed {
+    background: rgba(255, 80, 80, 0.4);
+}
+.diff-char-added {
+    background: rgba(80, 255, 80, 0.4);
+}
+
 .diff-left .diff-changed { border-left: 2px solid var(--re-warning); }
 .diff-left .diff-removed { border-left: 2px solid #e00000; }
 .diff-right .diff-changed { border-left: 2px solid var(--re-warning); }
