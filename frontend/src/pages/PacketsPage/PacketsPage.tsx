@@ -317,6 +317,7 @@ export function PacketsPage() {
     const exportRequests = (): string => {
         if (!packetData || packetData.length === 0) return '';
         const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
+        let reqIdx = 0;
         for (const pkt of mergedPackets) {
             if (pkt.direction !== 'dest') continue;
             const text = atob(pkt.packet_data);
@@ -325,22 +326,43 @@ export function PacketsPage() {
             const [, method, path] = methodMatch;
             const headerSection = text.split('\r\n\r\n')[0];
             const headerLines = headerSection.split('\r\n').slice(1);
-            const headers: Record<string, string> = {};
+            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+
+            const headerEntries: string[] = [];
+            const cookieEntries: string[] = [];
             for (const line of headerLines) {
                 const idx = line.indexOf(':');
-                if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                if (idx <= 0) continue;
+                const name = line.slice(0, idx).trim();
+                const value = line.slice(idx + 1).trim();
+                if (['Host', 'Content-Length', 'Connection'].includes(name)) continue;
+                if (name.toLowerCase() === 'cookie') {
+                    const cookies = value.split(';').map(c => c.trim()).filter(c => c.includes('='));
+                    for (const cookie of cookies) {
+                        const [k, ...v] = cookie.split('=');
+                        cookieEntries.push(`    '${k.trim()}': '${v.join('=')}'`);
+                    }
+                } else {
+                    headerEntries.push(`    '${name}': '${value}'`);
+                }
             }
-            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
-            const headersStr = Object.entries(headers)
-                .filter(([k]) => !['Host', 'Content-Length', 'Connection'].includes(k))
-                .map(([k, v]) => `        '${k}': '${v}'`).join(',\n');
+
+            const suffix = reqIdx > 0 ? `_${reqIdx}` : '';
+            if (headerEntries.length > 0) {
+                lines.push(`headers${suffix} = {\n${headerEntries.join(',\n')}\n}`);
+            }
+            if (cookieEntries.length > 0) {
+                lines.push(`cookies${suffix} = {\n${cookieEntries.join(',\n')}\n}`);
+            }
 
             let call = `resp = s.${method.toLowerCase()}(f'{BASE}${path}'`;
-            if (headersStr) call += `,\n    headers={\n${headersStr}\n    }`;
-            if (body && method !== 'GET') call += `,\n    data=${JSON.stringify(body)}`;
+            if (headerEntries.length > 0) call += `, headers=headers${suffix}`;
+            if (cookieEntries.length > 0) call += `, cookies=cookies${suffix}`;
+            if (body && method !== 'GET') call += `, data=${JSON.stringify(body)}`;
             call += ')';
             lines.push(call);
             lines.push(`print(resp.status_code, resp.text[:200])\n`);
+            reqIdx++;
         }
         return lines.join('\n');
     };
