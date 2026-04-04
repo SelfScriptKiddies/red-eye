@@ -1,6 +1,6 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
@@ -48,6 +48,9 @@ export function PacketsPage() {
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
 
+    const streamTags = useMemo(() => filterMode === 'and' ? usedTags : [], [filterMode, usedTags]);
+    const streamServices = useMemo(() => filterMode === 'and' ? usedServices : [], [filterMode, usedServices]);
+
     const {
         streams: streamsArray,
         isLoadingMore,
@@ -58,8 +61,8 @@ export function PacketsPage() {
         clearStreams,
         loadStreams,
     } = useStreams({
-        tags: filterMode === 'and' ? usedTags : [],
-        services: filterMode === 'and' ? usedServices : [],
+        tags: streamTags,
+        services: streamServices,
         startTime,
         endTime,
         enabled: !isRedEyeActive,
@@ -404,14 +407,14 @@ export function PacketsPage() {
         <div className="packetsPage">
             <div className="filterTape">
                 <div className="filter-buttons-row">
-                    <button className="filter-action-btn" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false); }}>
-                        Сброс
-                    </button>
                     <button
                       className={`filter-action-btn ${showFavoritesOnly ? 'filter-action-btn--active' : ''}`}
                       onClick={() => setShowFavoritesOnly(prev => !prev)}
                     >
                       ★ Избранные
+                    </button>
+                    <button className="filter-action-btn" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false); }}>
+                        Сброс
                     </button>
                 </div>
                 {(usedTags.length > 0 || usedServices.length > 0) && (
