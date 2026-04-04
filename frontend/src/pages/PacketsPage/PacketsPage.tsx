@@ -5,7 +5,7 @@ import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
-import { Timeline } from '../../components/Timeline/Timeline';
+import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
 import { fetchApi, copyText } from '../../lib/api';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
@@ -27,7 +27,8 @@ export function PacketsPage() {
     const [tagsLoaded, setTagsLoaded] = useState(false);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
-    const [showTimeline, setShowTimeline] = useState(false);
+    const [startTime, setStartTime] = useState<number | null>(null);
+    const [endTime, setEndTime] = useState<number | null>(null);
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
@@ -49,7 +50,7 @@ export function PacketsPage() {
         updateStream,
         clearStreams,
         loadStreams,
-    } = useStreams({ tags: usedTags, services: usedServices, enabled: !isRedEyeActive });
+    } = useStreams({ tags: usedTags, services: usedServices, startTime, endTime, enabled: !isRedEyeActive });
 
     const {
         packetData,
@@ -322,10 +323,20 @@ export function PacketsPage() {
                 </div>
             </div>
             <div className="streams-wrapper">
+                <TimelineBar
+                    onSelect={(start, end) => { setStartTime(Math.floor(start)); setEndTime(Math.ceil(end)); }}
+                    onClear={() => { setStartTime(null); setEndTime(null); }}
+                />
                 {/* Filter indicator — above scroll area */}
-                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0) && (
+                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null) && (
                     <div className="filter-indicator">
                         <span>Фильтр активен</span>
+                        {startTime != null && (
+                            <div style={{ color: 'var(--re-text-secondary)', fontSize: '11px', marginTop: '4px' }}>
+                                {new Date(startTime * 1000).toLocaleTimeString()} — {new Date(endTime! * 1000).toLocaleTimeString()}
+                                <button onClick={() => { setStartTime(null); setEndTime(null); }} style={{ background: 'none', border: 'none', color: 'var(--re-text-muted)', cursor: 'pointer', marginLeft: '6px', fontSize: '11px', padding: '0' }}>✕</button>
+                            </div>
+                        )}
                         {headerFilters.length > 0 && (
                             <div className="filter-indicator-chips">
                                 {headerFilters.map((f, i) => (
@@ -342,22 +353,6 @@ export function PacketsPage() {
                             </button>
                         )}
                     </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 10px' }}>
-                    <button
-                        className={`view-mode-btn ${showTimeline ? 'active' : ''}`}
-                        onClick={() => setShowTimeline(!showTimeline)}
-                        style={{ fontSize: '11px', padding: '3px 10px' }}
-                    >
-                        Timeline
-                    </button>
-                </div>
-                {showTimeline && (
-                    <Timeline
-                        streams={filteredStreams}
-                        selectedStreamId={selectedStreamId ? Number(selectedStreamId) : undefined}
-                        onStreamClick={handleStreamClick}
-                    />
                 )}
                 <div id="streams" className="streams" ref={streamsContainerRef}>
                 {filteredStreams.map((stream, index) => {

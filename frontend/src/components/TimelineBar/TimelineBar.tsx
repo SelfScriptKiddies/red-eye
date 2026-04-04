@@ -104,47 +104,33 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
         }
         if (maxStack === 0) maxStack = 1;
 
-        // Build SVG paths per service (stacked area)
-        // Each path goes: left-to-right top edge, then right-to-left bottom edge
-        const paths: { color: string; d: string }[] = [];
+        // Build stacked bar rects per bucket
+        const bucketSecs = 60;
+        const barWidthPct = Math.max(0.5, (bucketSecs / range) * 100 * 0.8); // 80% of bucket width
+        const bars: { x: number; y: number; height: number; color: string }[] = [];
 
-        for (let si = 0; si < serviceIds.length; si++) {
-            const sid = serviceIds[si];
-            const color = SERVICE_COLORS[si % SERVICE_COLORS.length];
+        for (const ts of timestamps) {
+            const centerX = ((ts - minTime) / range) * 100;
+            let bottom = 0;
 
-            // For each timestamp, compute bottom and top of this service's band
-            const points: { x: number; bottom: number; top: number }[] = [];
+            for (let si = 0; si < serviceIds.length; si++) {
+                const sid = serviceIds[si];
+                const count = countMap.get(`${ts}_${sid}`) ?? 0;
+                if (count === 0) continue;
 
-            for (const ts of timestamps) {
-                const x = ((ts - minTime) / range) * 100;
-                let bottom = 0;
-                for (let prev = 0; prev < si; prev++) {
-                    bottom += countMap.get(`${ts}_${serviceIds[prev]}`) ?? 0;
-                }
-                const own = countMap.get(`${ts}_${sid}`) ?? 0;
-                const top = bottom + own;
+                const color = SERVICE_COLORS[si % SERVICE_COLORS.length];
+                const barHeight = (count / maxStack) * 100;
+                const y = 100 - bottom - barHeight; // SVG y = top of rect
 
-                // Convert to SVG Y coords (100 = bottom, 0 = top)
-                const svgBottom = 100 - (bottom / maxStack) * 100;
-                const svgTop = 100 - (top / maxStack) * 100;
+                bars.push({
+                    x: centerX - barWidthPct / 2,
+                    y,
+                    height: barHeight,
+                    color,
+                });
 
-                points.push({ x, bottom: svgBottom, top: svgTop });
+                bottom += barHeight;
             }
-
-            if (points.length === 0) continue;
-
-            // Build path: forward along top edge, backward along bottom edge
-            let d = `M ${points[0].x} ${points[0].bottom}`;
-            d += ` L ${points[0].x} ${points[0].top}`;
-            for (let i = 1; i < points.length; i++) {
-                d += ` L ${points[i].x} ${points[i].top}`;
-            }
-            for (let i = points.length - 1; i >= 0; i--) {
-                d += ` L ${points[i].x} ${points[i].bottom}`;
-            }
-            d += ' Z';
-
-            paths.push({ color, d });
         }
 
         // Time axis ticks
@@ -156,7 +142,7 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
             ticks.push({ time: t, pct: ((t - minTime) / range) * 100 });
         }
 
-        return { paths, ticks, minTime, maxTime, range };
+        return { bars, barWidthPct, ticks, minTime, maxTime, range };
     }, [data]);
 
     // Convert client X to percentage
@@ -303,19 +289,23 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
                     </button>
 
                     <div className="timeline-bar-chart">
-                        {chartData && chartData.paths.length > 0 && (
+                        {chartData && chartData.bars.length > 0 && (
                             <svg
                                 width="100%"
                                 height="100%"
                                 viewBox="0 0 100 100"
                                 preserveAspectRatio="none"
                             >
-                                {chartData.paths.map((p, i) => (
-                                    <path
+                                {chartData.bars.map((bar, i) => (
+                                    <rect
                                         key={i}
-                                        d={p.d}
-                                        fill={p.color}
+                                        x={bar.x}
+                                        y={bar.y}
+                                        width={chartData.barWidthPct}
+                                        height={bar.height}
+                                        fill={bar.color}
                                         opacity={0.7}
+                                        rx={0.3}
                                     />
                                 ))}
                             </svg>
