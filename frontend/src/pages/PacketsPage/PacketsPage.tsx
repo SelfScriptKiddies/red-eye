@@ -29,6 +29,8 @@ export function PacketsPage() {
     const [usedServices, setUsedServices] = useState([]);
     const [startTime, setStartTime] = useState<number | null>(null);
     const [endTime, setEndTime] = useState<number | null>(null);
+    const timelineClearRef = useRef<(() => void) | null>(null);
+    const clearTimeSelection = () => { setStartTime(null); setEndTime(null); timelineClearRef.current?.(); };
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerSearching, setHeaderSearching] = useState(false);
@@ -325,7 +327,8 @@ export function PacketsPage() {
             <div className="streams-wrapper">
                 <TimelineBar
                     onSelect={(start, end) => { setStartTime(Math.floor(start)); setEndTime(Math.ceil(end)); }}
-                    onClear={() => { setStartTime(null); setEndTime(null); }}
+                    onClear={clearTimeSelection}
+                    clearRef={timelineClearRef}
                 />
                 {/* Filter indicator — above scroll area */}
                 {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null) && (
@@ -334,7 +337,7 @@ export function PacketsPage() {
                         {startTime != null && (
                             <div style={{ color: 'var(--re-text-secondary)', fontSize: '11px', marginTop: '4px' }}>
                                 {new Date(startTime * 1000).toLocaleTimeString()} — {new Date(endTime! * 1000).toLocaleTimeString()}
-                                <button onClick={() => { setStartTime(null); setEndTime(null); }} style={{ background: 'none', border: 'none', color: 'var(--re-text-muted)', cursor: 'pointer', marginLeft: '6px', fontSize: '11px', padding: '0' }}>✕</button>
+                                <button onClick={clearTimeSelection} style={{ background: 'none', border: 'none', color: 'var(--re-text-muted)', cursor: 'pointer', marginLeft: '6px', fontSize: '11px', padding: '0' }}>✕</button>
                             </div>
                         )}
                         {headerFilters.length > 0 && (

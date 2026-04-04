@@ -23,6 +23,7 @@ interface HistogramBucket {
 interface TimelineBarProps {
     onSelect: (startTime: number, endTime: number) => void;
     onClear: () => void;
+    clearRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 type DragState =
@@ -37,7 +38,7 @@ function formatHHMM(ts: number): string {
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
+export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
     const [data, setData] = useState<HistogramBucket[]>([]);
     const [collapsed, setCollapsed] = useState<boolean>(() => {
         try {
@@ -242,6 +243,12 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
     const dragRef = useRef(drag);
     dragRef.current = drag;
     const [selectionRect, setSelectionRect] = useState<{ left: number; right: number; interactive: boolean } | null>(null);
+
+    // Expose clear function to parent
+    useEffect(() => {
+        if (clearRef) clearRef.current = () => { setDrag({ kind: 'idle' }); setSelectionRect(null); };
+        return () => { if (clearRef) clearRef.current = null; };
+    }, [clearRef]);
 
     // Update selection rect from drag state
     useEffect(() => {
