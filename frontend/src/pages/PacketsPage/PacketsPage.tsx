@@ -416,22 +416,6 @@ export function PacketsPage() {
                         )}
                     </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 10px' }}>
-                    <button
-                        className={`view-mode-btn ${showTimeline ? 'active' : ''}`}
-                        onClick={() => setShowTimeline(!showTimeline)}
-                        style={{ fontSize: '11px', padding: '3px 10px' }}
-                    >
-                        Timeline
-                    </button>
-                </div>
-                {showTimeline && (
-                    <Timeline
-                        streams={filteredStreams}
-                        selectedStreamId={selectedStreamId ? Number(selectedStreamId) : undefined}
-                        onStreamClick={handleStreamClick}
-                    />
-                )}
                 <div id="streams" className="streams" ref={streamsContainerRef}>
                 {filteredStreams.map((stream, index) => {
                     return < StreamCard
