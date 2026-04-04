@@ -47,7 +47,10 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
         }
     });
     const [drag, setDrag] = useState<DragState>({ kind: 'idle' });
+    const [viewOffset, setViewOffset] = useState(0); // seconds to shift viewport left (negative = past)
     const chartRef = useRef<HTMLDivElement>(null);
+    const MIN_WINDOW_SECS = 30 * 60; // 30 minutes minimum viewport
+    const MAX_BAR_WIDTH_PCT = 6; // max bar width in % of chart
 
     // Fetch histogram data
     useEffect(() => {
@@ -73,19 +76,25 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
         });
     }, []);
 
-    // Build chart data
+    // Build chart data with viewport windowing
     const chartData = useMemo(() => {
         if (data.length === 0) return null;
 
-        // Collect all timestamps and service ids
-        const timestamps = [...new Set(data.map(d => d.timestamp))].sort((a, b) => a - b);
+        const allTimestamps = [...new Set(data.map(d => d.timestamp))].sort((a, b) => a - b);
         const serviceIds = [...new Set(data.map(d => d.service_id))];
-        const serviceNames = new Map<number, string>();
-        for (const d of data) serviceNames.set(d.service_id, d.service_name);
 
-        const minTime = timestamps[0];
-        const maxTime = timestamps[timestamps.length - 1];
-        const range = Math.max(maxTime - minTime, 1);
+        const dataMin = allTimestamps[0];
+        const dataMax = allTimestamps[allTimestamps.length - 1];
+        const dataRange = dataMax - dataMin;
+
+        // Viewport: at least MIN_WINDOW_SECS, right edge = now + viewOffset
+        const now = Math.floor(Date.now() / 1000);
+        const viewRight = now + viewOffset;
+        const viewWindow = Math.max(MIN_WINDOW_SECS, dataRange + 120); // pad 2 min
+        const viewLeft = viewRight - viewWindow;
+
+        // Filter timestamps to viewport
+        const timestamps = allTimestamps.filter(ts => ts >= viewLeft && ts <= viewRight);
 
         // Count per (timestamp, service_id)
         const countMap = new Map<string, number>();
@@ -93,9 +102,9 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
             countMap.set(`${d.timestamp}_${d.service_id}`, d.count);
         }
 
-        // Max stacked count (for Y scale)
+        // Max stacked count (for Y scale) — use all data for consistent scale
         let maxStack = 0;
-        for (const ts of timestamps) {
+        for (const ts of allTimestamps) {
             let total = 0;
             for (const sid of serviceIds) {
                 total += countMap.get(`${ts}_${sid}`) ?? 0;
@@ -104,13 +113,13 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
         }
         if (maxStack === 0) maxStack = 1;
 
-        // Build stacked bar rects per bucket
+        // Build stacked bar rects
         const bucketSecs = 60;
-        const barWidthPct = Math.max(0.5, (bucketSecs / range) * 100 * 0.8); // 80% of bucket width
+        const barWidthPct = Math.min(MAX_BAR_WIDTH_PCT, Math.max(0.5, (bucketSecs / viewWindow) * 100 * 0.8));
         const bars: { x: number; y: number; height: number; color: string }[] = [];
 
         for (const ts of timestamps) {
-            const centerX = ((ts - minTime) / range) * 100;
+            const centerX = ((ts - viewLeft) / viewWindow) * 100;
             let bottom = 0;
 
             for (let si = 0; si < serviceIds.length; si++) {
@@ -120,30 +129,32 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
 
                 const color = SERVICE_COLORS[si % SERVICE_COLORS.length];
                 const barHeight = (count / maxStack) * 100;
-                const y = 100 - bottom - barHeight; // SVG y = top of rect
+                const y = 100 - bottom - barHeight;
 
-                bars.push({
-                    x: centerX - barWidthPct / 2,
-                    y,
-                    height: barHeight,
-                    color,
-                });
-
+                bars.push({ x: centerX - barWidthPct / 2, y, height: barHeight, color });
                 bottom += barHeight;
             }
         }
 
         // Time axis ticks
-        const tickCount = Math.min(8, Math.max(3, Math.floor(range / 60)));
-        const tickStep = range / tickCount;
+        const tickCount = Math.min(8, Math.max(3, Math.floor(viewWindow / 300))); // tick every ~5 min
+        const tickStep = viewWindow / tickCount;
         const ticks: { time: number; pct: number }[] = [];
         for (let i = 0; i <= tickCount; i++) {
-            const t = minTime + i * tickStep;
-            ticks.push({ time: t, pct: ((t - minTime) / range) * 100 });
+            const t = viewLeft + i * tickStep;
+            ticks.push({ time: t, pct: (i / tickCount) * 100 });
         }
 
-        return { bars, barWidthPct, ticks, minTime, maxTime, range };
-    }, [data]);
+        // Can we scroll left/right?
+        const canScrollLeft = dataMin < viewLeft;
+        const canScrollRight = viewOffset < 0;
+
+        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow, canScrollLeft, canScrollRight };
+    }, [data, viewOffset]);
+
+    // Pan buttons — shift viewport by 5 minutes
+    const scrollLeft = useCallback(() => setViewOffset(prev => prev - 300), []);
+    const scrollRight = useCallback(() => setViewOffset(prev => Math.min(0, prev + 300)), []);
 
     // Convert client X to percentage
     const pxToPct = useCallback((clientX: number): number => {
@@ -155,7 +166,7 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
     // Convert percentage to time
     const pctToTime = useCallback((pct: number): number => {
         if (!chartData) return 0;
-        return chartData.minTime + (pct / 100) * chartData.range;
+        return chartData.viewLeft + (pct / 100) * chartData.viewWindow;
     }, [chartData]);
 
     // Fire onSelect with current selection bounds
@@ -279,14 +290,15 @@ export function TimelineBar({ onSelect, onClear }: TimelineBarProps) {
                     ref={chartRef}
                     onMouseDown={handleMouseDown}
                 >
-                    <button
-                        className="timeline-bar-toggle"
-                        onMouseDown={e => e.stopPropagation()}
-                        onClick={toggleCollapsed}
-                        title="Collapse timeline"
-                    >
-                        ▲
-                    </button>
+                    <div className="timeline-bar-controls" onMouseDown={e => e.stopPropagation()}>
+                        {chartData?.canScrollLeft && (
+                            <button className="timeline-bar-scroll" onClick={scrollLeft} title="Scroll left 5 min">◀</button>
+                        )}
+                        {chartData?.canScrollRight && (
+                            <button className="timeline-bar-scroll" onClick={scrollRight} title="Scroll right 5 min">▶</button>
+                        )}
+                        <button className="timeline-bar-toggle" onClick={toggleCollapsed} title="Collapse timeline">▲</button>
+                    </div>
 
                     <div className="timeline-bar-chart">
                         {chartData && chartData.bars.length > 0 && (

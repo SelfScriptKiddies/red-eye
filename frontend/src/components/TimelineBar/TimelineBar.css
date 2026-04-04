@@ -20,21 +20,28 @@
     user-select: none;
 }
 
-.timeline-bar-toggle {
+.timeline-bar-controls {
     position: absolute;
     top: 4px;
     right: 6px;
+    display: flex;
+    gap: 2px;
+    z-index: 2;
+}
+
+.timeline-bar-toggle,
+.timeline-bar-scroll {
     background: none !important;
     border: none !important;
     color: var(--re-text-dim);
     cursor: pointer;
-    font-size: 14px;
+    font-size: 12px;
     padding: 2px 6px !important;
-    z-index: 2;
-    transition: transform 0.3s;
+    transition: color 0.2s;
 }
 
-.timeline-bar-toggle:hover {
+.timeline-bar-toggle:hover,
+.timeline-bar-scroll:hover {
     color: var(--re-text-secondary);
 }
 
