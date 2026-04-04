@@ -16,6 +16,8 @@ interface PacketProps {
     onDiffSelect?: (packet: { id: number; packet_data: string; direction: string }) => void;
     diffSelected?: boolean;
     _merged_count?: number;
+    _stream_id?: number;
+    showStreamId?: boolean;
 }
 
 interface HttpHeader {
@@ -266,7 +268,7 @@ interface TagTrigger {
     color: number;
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onQuickBlock, onDiffSelect, diffSelected, _merged_count }: PacketProps) {
+export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isGrpc ? 'grpc' : isHttp ? 'http' : 'text');
     const [grpcData, setGrpcData] = useState<any[] | null>(null);
     const [grpcLoading, setGrpcLoading] = useState(false);
@@ -527,6 +529,9 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                     )}
                 </div>
                 <span className="packet-time">{formattedTime}</span>
+                {showStreamId && _stream_id && (
+                    <span style={{ fontSize: '10px', color: 'var(--re-text-dim)', fontFamily: 'var(--re-font-mono, monospace)' }}>#{_stream_id}</span>
+                )}
                 <span className={`packet-direction ${direction}`}>
                     {direction === 'orig' ? '← Исходящий' : '→ Входящий'}
                 </span>

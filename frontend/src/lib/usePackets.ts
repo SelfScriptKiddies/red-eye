@@ -4,39 +4,94 @@ import { fetchApi } from './api';
 const MAX_PACKETS = 500;
 
 export function usePackets(streamsArray: any[], servicesArray: any[]) {
-    const [packetData, setPacketData] = useState<any[]>([]);
-    const [selectedStreamId, setSelectedStreamId] = useState<number | null>(null);
+    const [packetsByStream, setPacketsByStream] = useState<Record<number, any[]>>({});
+    const [selectedStreamIds, setSelectedStreamIds] = useState<number[]>([]);
     const [selectedStreamL7, setSelectedStreamL7] = useState<string>('unknown');
     const [mergeOverride, setMergeOverride] = useState<boolean | null>(null);
 
-    const handleStreamClick = useCallback(async (streamId: number) => {
-        setSelectedStreamId(streamId);
-        setMergeOverride(null);
-        const numericId = typeof streamId === 'string' ? parseInt(streamId as any) : streamId;
-        const localStream = streamsArray.find((s: any) => s.id === numericId);
-        if (localStream?.l7_protocol) {
-            setSelectedStreamL7(localStream.l7_protocol);
-        } else {
-            try {
-                const streamData = await fetchApi(`/api/stream/${numericId}`);
-                setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
-            } catch { setSelectedStreamL7('unknown'); }
-        }
+    // For backwards compat
+    const selectedStreamId = selectedStreamIds.length === 1 ? selectedStreamIds[0] : (selectedStreamIds.length > 0 ? selectedStreamIds[0] : null);
+    const isMultiSelect = selectedStreamIds.length > 1;
+
+    const loadPacketsForStream = useCallback(async (streamId: number): Promise<any[]> => {
         try {
             const data = await fetchApi(`/api/packet/stream_id/${streamId}`);
             if (data) {
-                const packets = Object.values(data);
-                setPacketData(packets.slice(0, MAX_PACKETS) as any[]);
+                const packets = Object.values(data) as any[];
+                return packets.slice(0, MAX_PACKETS).map(p => ({ ...p, _stream_id: streamId }));
             }
         } catch (error) { console.error('Error fetching packets:', error); }
-    }, [streamsArray]);
+        return [];
+    }, []);
+
+    const handleStreamClick = useCallback(async (streamId: number | string, event?: any) => {
+        const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
+        const shiftKey = event?.shiftKey ?? false;
+
+        if (shiftKey && selectedStreamIds.length > 0) {
+            // Shift+click: toggle stream in multi-selection
+            const alreadySelected = selectedStreamIds.includes(numericId);
+            if (alreadySelected) {
+                const newIds = selectedStreamIds.filter(id => id !== numericId);
+                setSelectedStreamIds(newIds);
+                setPacketsByStream(prev => {
+                    const next = { ...prev };
+                    delete next[numericId];
+                    return next;
+                });
+                // Update L7 from first remaining stream
+                if (newIds.length > 0) {
+                    const first = streamsArray.find((s: any) => s.id === newIds[0]);
+                    setSelectedStreamL7(first?.l7_protocol || 'unknown');
+                }
+            } else {
+                setSelectedStreamIds(prev => [...prev, numericId]);
+                const packets = await loadPacketsForStream(numericId);
+                setPacketsByStream(prev => ({ ...prev, [numericId]: packets }));
+            }
+            setMergeOverride(null);
+        } else {
+            // Normal click: single select
+            setSelectedStreamIds([numericId]);
+            setMergeOverride(null);
+
+            const localStream = streamsArray.find((s: any) => s.id === numericId);
+            setSelectedStreamL7(localStream?.l7_protocol || 'unknown');
+            if (!localStream?.l7_protocol) {
+                try {
+                    const streamData = await fetchApi(`/api/stream/${numericId}`);
+                    setSelectedStreamL7(streamData?.l7_protocol || 'unknown');
+                } catch { setSelectedStreamL7('unknown'); }
+            }
+
+            const packets = await loadPacketsForStream(numericId);
+            setPacketsByStream({ [numericId]: packets });
+        }
+    }, [streamsArray, selectedStreamIds, loadPacketsForStream]);
+
+    // Merge all selected streams' packets, sorted by timestamp
+    const packetData = useMemo(() => {
+        const allPackets: any[] = [];
+        for (const id of selectedStreamIds) {
+            const packets = packetsByStream[id];
+            if (packets) allPackets.push(...packets);
+        }
+        if (isMultiSelect) {
+            allPackets.sort((a, b) => {
+                const tsDiff = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+                if (tsDiff !== 0) return tsDiff;
+                return (a.id ?? 0) - (b.id ?? 0);
+            });
+        }
+        return allPackets.slice(0, MAX_PACKETS);
+    }, [packetsByStream, selectedStreamIds, isMultiSelect]);
 
     const shouldMerge = (() => {
+        if (isMultiSelect) return false; // Don't merge across streams
         if (mergeOverride !== null) return mergeOverride;
         if (selectedStreamL7 === 'http1') return true;
         if (selectedStreamId) {
-            const numId = typeof selectedStreamId === 'string' ? parseInt(selectedStreamId as any) : selectedStreamId;
-            const stream = streamsArray.find((s: any) => s.id === numId);
+            const stream = streamsArray.find((s: any) => s.id === selectedStreamId);
             if (stream) {
                 const svc = servicesArray.find((s: any) => s.id === stream.service_id);
                 if (svc?.merge_adjacent_packets) return true;
@@ -51,7 +106,7 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         const groups: any[] = [];
         for (const pkt of packetData) {
             const last = groups[groups.length - 1];
-            if (last && last.direction === pkt.direction) {
+            if (last && last.direction === pkt.direction && last._stream_id === pkt._stream_id) {
                 const a = atob(last.packet_data);
                 const b = atob(pkt.packet_data);
                 const merged = new Uint8Array(a.length + b.length);
@@ -68,5 +123,16 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         return groups;
     }, [packetData, shouldMerge]);
 
-    return { packetData, selectedStreamId, selectedStreamL7, mergeOverride, shouldMerge, mergedPackets, setMergeOverride, handleStreamClick };
+    return {
+        packetData,
+        selectedStreamId,
+        selectedStreamIds,
+        isMultiSelect,
+        selectedStreamL7,
+        mergeOverride,
+        shouldMerge,
+        mergedPackets,
+        setMergeOverride,
+        handleStreamClick,
+    };
 }

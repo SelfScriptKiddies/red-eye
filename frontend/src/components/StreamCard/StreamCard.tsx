@@ -10,7 +10,7 @@ export function StreamCard({ streamObj, onStreamClick, onFavoriteToggle, onIpFil
         {
             e = e.parentElement;
         }
-        onStreamClick(e.dataset.streamid);
+        onStreamClick(e.dataset.streamid, event);
     }
 
     const handleFavoriteClick = (event) => {

@@ -57,6 +57,8 @@ export function PacketsPage() {
     const {
         packetData,
         selectedStreamId,
+        selectedStreamIds,
+        isMultiSelect,
         selectedStreamL7,
         mergeOverride,
         shouldMerge,
@@ -397,6 +399,9 @@ export function PacketsPage() {
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
                         <div className="toolbar-left">
+                            {isMultiSelect && (
+                                <span style={{ fontSize: '11px', color: 'var(--re-text-muted)', marginRight: '4px' }}>{selectedStreamIds.length} streams</span>
+                            )}
                             <button
                                 className={`merge-toggle-btn ${shouldMerge ? 'active' : ''}`}
                                 onClick={() => setMergeOverride(shouldMerge ? false : true)}
@@ -439,10 +444,11 @@ export function PacketsPage() {
                 )}
                 {mergedPackets.map(packet => (
                     <PacketCard
-                        key={packet.id}
+                        key={`${packet._stream_id ?? packet.stream_id}-${packet.id}`}
                         {...packet}
-                        isHttp={selectedStreamL7 === 'http1'}
-                        isGrpc={selectedStreamL7 === 'grpc'}
+                        showStreamId={isMultiSelect}
+                        isHttp={!isMultiSelect && selectedStreamL7 === 'http1'}
+                        isGrpc={!isMultiSelect && selectedStreamL7 === 'grpc'}
                         onHeaderSearch={addHeaderFilter}
                         diffSelected={diffLeft?.id === packet.id}
                         onDiffSelect={(pkt) => {
