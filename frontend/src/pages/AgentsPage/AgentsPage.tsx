@@ -50,6 +50,7 @@ interface ReplayForm {
   name: string;
   listen_port: string;
   target_addr: string;
+  protocol: string;
 }
 
 const defaultProxy: ProxyForm = {
@@ -62,7 +63,7 @@ const defaultFilter: FilterForm = {
 };
 
 const defaultReplay: ReplayForm = {
-  name: '', listen_port: '', target_addr: ''
+  name: '', listen_port: '', target_addr: '', protocol: 'tcp'
 };
 
 function formatUptime(secs: number): string {
@@ -251,7 +252,8 @@ export default function AgentsPage() {
       type: 'ReplayForward',
       name: replayForm.name,
       listen_port: parseInt(replayForm.listen_port),
-      target_addr: replayForm.target_addr
+      target_addr: replayForm.target_addr,
+      protocol: replayForm.protocol,
     });
     setReplayModal(false);
     setReplayForm(defaultReplay);
@@ -543,6 +545,11 @@ export default function AgentsPage() {
             <div className="modal-body">
               <input placeholder="Имя" value={replayForm.name}
                 onChange={e => setReplayForm({...replayForm, name: e.target.value})} />
+              <select value={replayForm.protocol}
+                onChange={e => setReplayForm({...replayForm, protocol: e.target.value})}>
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
               <input placeholder="Listen Port (29000)" value={replayForm.listen_port}
                 onChange={e => setReplayForm({...replayForm, listen_port: e.target.value})} />
               <input placeholder="Target (10.80.2.1:8080)" value={replayForm.target_addr}

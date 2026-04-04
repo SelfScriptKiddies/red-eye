@@ -36,6 +36,8 @@ fn default_action() -> String {
     "drop".to_string()
 }
 
+fn default_tcp() -> String { "tcp".to_string() }
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 #[allow(dead_code)]
@@ -81,11 +83,13 @@ pub enum AgentCommand {
         filters: Vec<FilterDef>,
     },
 
-    // Replay: TCP forward to another team
+    // Replay: forward to another team
     ReplayForward {
         name: String,
         listen_port: u16,
         target_addr: String,
+        #[serde(default = "default_tcp")]
+        protocol: String,
     },
     ReplayStop {
         name: String,
@@ -268,6 +272,7 @@ async fn handle_command(
             name,
             listen_port,
             target_addr,
+            protocol,
         } => {
             let target: SocketAddr = match target_addr.parse() {
                 Ok(a) => a,
@@ -276,19 +281,20 @@ async fn handle_command(
                     return;
                 }
             };
+            let proto = if protocol.eq_ignore_ascii_case("udp") { Protocol::Udp } else { Protocol::Tcp };
             let spec = ProxyRuleSpec {
                 name: format!("replay-{}", name),
                 listen: format!("0.0.0.0:{}", listen_port).parse().unwrap(),
                 target,
-                protocol: Protocol::Tcp,
+                protocol: proto,
                 tls_mode: None,
                 nft_redirect_port: None,
                 duplicate_to: None,
                 http2: false,
             };
             info!(
-                "Starting replay forward '{}': :{} -> {}",
-                name, listen_port, target_addr
+                "Starting replay forward '{}' ({}): :{} -> {}",
+                name, protocol, listen_port, target_addr
             );
             if let Err(e) = harpoon.lock().await.add_rule(spec).await {
                 error!("Failed to start replay '{}': {}", name, e);
