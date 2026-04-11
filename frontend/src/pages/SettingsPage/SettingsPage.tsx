@@ -545,7 +545,7 @@ export function SettingsPage() {
                                         checked={serviceForm.alert_flag_leak ?? false}
                                         onChange={(e) => setServiceForm({ ...serviceForm, alert_flag_leak: e.target.checked })}
                                     />
-                                    Алерт при утечке флагов
+                                    Flag leak alert
                                 </label>
                             </div>
                         </div>

@@ -9,7 +9,8 @@ else:
 
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('0.0.0.0', 31338)); s.listen(100)
+s.bind(('0.0.0.0', 31338))
+s.listen(100)
 print('TCP echo on :31338')
 while True:
     c, _ = s.accept()

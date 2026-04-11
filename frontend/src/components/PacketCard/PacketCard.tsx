@@ -257,9 +257,44 @@ function renderHighlightedText(text: string, triggers: TagTrigger[]): (string | 
 function generateCurl(msg: HttpMessageData): string {
     const parts = [`curl -X ${msg.method} '<HOST>${msg.path}'`];
     for (const h of msg.headers) {
-        parts.push(`  -H '${h.name}: ${h.value}'`);
+        if (!['Host', 'Content-Length', 'Connection'].includes(h.name)) {
+            parts.push(`  -H '${h.name}: ${h.value}'`);
+        }
     }
     return parts.join(' \\\n');
+}
+
+function generateRequests(msg: HttpMessageData): string {
+    const lines = [`import requests\n`];
+    const headerEntries: string[] = [];
+    const cookieEntries: string[] = [];
+
+    for (const h of msg.headers) {
+        if (['Host', 'Content-Length', 'Connection'].includes(h.name)) continue;
+        if (h.name.toLowerCase() === 'cookie') {
+            const cookies = h.value.split(';').map(c => c.trim()).filter(c => c.includes('='));
+            for (const cookie of cookies) {
+                const [k, ...v] = cookie.split('=');
+                cookieEntries.push(`    '${k.trim()}': '${v.join('=')}'`);
+            }
+        } else {
+            headerEntries.push(`    '${h.name}': '${h.value}'`);
+        }
+    }
+
+    if (headerEntries.length > 0) {
+        lines.push(`headers = {\n${headerEntries.join(',\n')}\n}\n`);
+    }
+    if (cookieEntries.length > 0) {
+        lines.push(`cookies = {\n${cookieEntries.join(',\n')}\n}\n`);
+    }
+
+    lines.push(`resp = requests.${(msg.method || 'GET').toLowerCase()}(`);
+    lines.push(`    'http://<HOST>${msg.path}',`);
+    if (headerEntries.length > 0) lines.push(`    headers=headers,`);
+    if (cookieEntries.length > 0) lines.push(`    cookies=cookies,`);
+    lines.push(`)`, `print(resp.status_code, resp.text[:200])`);
+    return lines.join('\n');
 }
 
 interface TagTrigger {
@@ -520,11 +555,12 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                     <pre className="http-body">{toUtf8Preview(bytes).split('\r\n\r\n').slice(1).join('\r\n\r\n') || ''}</pre>
                 )}
 
-                {/* CURL button for requests */}
+                {/* Export buttons for requests */}
                 {httpData.is_request && (
-                    <button className="curl-copy-btn" onClick={() => copyText(generateCurl(httpData))}>
-                        CURL
-                    </button>
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+                        <button className="curl-copy-btn" onClick={() => copyText(generateCurl(httpData))}>CURL</button>
+                        <button className="curl-copy-btn" onClick={() => copyText(generateRequests(httpData))}>Requests</button>
+                    </div>
                 )}
             </div>
         );

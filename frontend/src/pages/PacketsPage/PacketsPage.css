@@ -25,10 +25,18 @@
     flex: 1;
     overflow-y: auto;
 }
-.tag-filter {
+.tag-filter,
+.service-filter {
     width: 100%;
     margin: 0;
     padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-content: flex-start;
+}
+
+.tag-filter {
     height: 50%;
 }
 .packetData {
@@ -123,6 +131,39 @@
     margin: 10px;
     width: calc(100% - 20px);
     transition: 0.15s;
+}
+
+.filter-buttons-row {
+    display: flex;
+    gap: 6px;
+    margin: 10px;
+}
+
+.filter-action-btn {
+    flex: 1;
+    background: var(--re-bg-input) !important;
+    border: none !important;
+    border-radius: 6px;
+    color: var(--re-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 6px 8px !important;
+    transition: color 0.15s;
+    outline: none;
+}
+
+.filter-action-btn:hover {
+    color: var(--re-text);
+}
+
+.filter-action-btn:focus,
+.filter-action-btn:focus-visible {
+    outline: none;
+    box-shadow: none;
+}
+
+.filter-action-btn--active {
+    color: var(--re-warning);
 }
 
 /* Filter indicator in streams column */
@@ -394,4 +435,32 @@
 
 .merge-reset-btn:hover {
     color: var(--re-accent);
+}
+/* OR filter mode */
+.filter-mode-badge {
+    display: inline-block;
+    margin: 6px 10px 2px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.filter-mode-and {
+    border: 1px solid var(--re-accent);
+    color: var(--re-accent);
+    background: transparent;
+}
+
+.filter-mode-or {
+    border: 1px solid var(--re-warning);
+    color: var(--re-warning);
+    background: transparent;
+}
+
+.filter-or-mode .service-card.active {
+    border-color: var(--re-warning) !important;
+    color: var(--re-warning) !important;
 }

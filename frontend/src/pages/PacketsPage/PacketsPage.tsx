@@ -1,6 +1,6 @@
 import { ReactElement } from "react";
 import './PacketsPage.css'
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
@@ -29,6 +29,7 @@ export function PacketsPage() {
     const [tagsLoaded, setTagsLoaded] = useState(false);
     const [usedTags, setUsedTags] = useState([]);
     const [usedServices, setUsedServices] = useState([]);
+    const [filterMode, setFilterMode] = useState<'and' | 'or'>('and');
     const [startTime, setStartTime] = useState<number | null>(null);
     const [endTime, setEndTime] = useState<number | null>(null);
     const timelineClearRef = useRef<(() => void) | null>(null);
@@ -42,9 +43,13 @@ export function PacketsPage() {
     const [diffOpen, setDiffOpen] = useState(false);
     const [shareCopied, setShareCopied] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 
     // Получаем состояние RedEye из localStorage
     const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
+
+    const streamTags = useMemo(() => filterMode === 'and' ? usedTags : [], [filterMode, usedTags]);
+    const streamServices = useMemo(() => filterMode === 'and' ? usedServices : [], [filterMode, usedServices]);
 
     const {
         streams: streamsArray,
@@ -55,7 +60,13 @@ export function PacketsPage() {
         updateStream,
         clearStreams,
         loadStreams,
-    } = useStreams({ tags: usedTags, services: usedServices, startTime, endTime, enabled: !isRedEyeActive });
+    } = useStreams({
+        tags: streamTags,
+        services: streamServices,
+        startTime,
+        endTime,
+        enabled: !isRedEyeActive,
+    });
 
     const {
         packetData,
@@ -145,6 +156,21 @@ export function PacketsPage() {
         let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
         if (headerExcludeIds.size > 0) {
             streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
+        }
+        if (showFavoritesOnly) {
+            streams = streams.filter((s: any) => s.favorite);
+        }
+        if (filterMode === 'or' && (usedTags.length > 0 || usedServices.length > 0)) {
+            // usedTags contains tag IDs (strings), s.tags contains tag names — convert IDs to names
+            const selectedTagNames = usedTags.map((id: string) => {
+                const tag = tagsArray.find((t: any) => String(t.id) === id);
+                return tag?.name;
+            }).filter(Boolean);
+            streams = streams.filter((s: any) => {
+                const matchesTag = selectedTagNames.length > 0 && s.tags?.some((t: string) => selectedTagNames.includes(t));
+                const matchesService = usedServices.length > 0 && usedServices.includes(String(s.service_id));
+                return matchesTag || matchesService;
+            });
         }
         return streams;
     })();
@@ -291,6 +317,7 @@ export function PacketsPage() {
     const exportRequests = (): string => {
         if (!packetData || packetData.length === 0) return '';
         const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
+        let reqIdx = 0;
         for (const pkt of mergedPackets) {
             if (pkt.direction !== 'dest') continue;
             const text = atob(pkt.packet_data);
@@ -299,22 +326,43 @@ export function PacketsPage() {
             const [, method, path] = methodMatch;
             const headerSection = text.split('\r\n\r\n')[0];
             const headerLines = headerSection.split('\r\n').slice(1);
-            const headers: Record<string, string> = {};
+            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
+
+            const headerEntries: string[] = [];
+            const cookieEntries: string[] = [];
             for (const line of headerLines) {
                 const idx = line.indexOf(':');
-                if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+                if (idx <= 0) continue;
+                const name = line.slice(0, idx).trim();
+                const value = line.slice(idx + 1).trim();
+                if (['Host', 'Content-Length', 'Connection'].includes(name)) continue;
+                if (name.toLowerCase() === 'cookie') {
+                    const cookies = value.split(';').map(c => c.trim()).filter(c => c.includes('='));
+                    for (const cookie of cookies) {
+                        const [k, ...v] = cookie.split('=');
+                        cookieEntries.push(`    '${k.trim()}': '${v.join('=')}'`);
+                    }
+                } else {
+                    headerEntries.push(`    '${name}': '${value}'`);
+                }
             }
-            const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
-            const headersStr = Object.entries(headers)
-                .filter(([k]) => !['Host', 'Content-Length', 'Connection'].includes(k))
-                .map(([k, v]) => `        '${k}': '${v}'`).join(',\n');
+
+            const suffix = reqIdx > 0 ? `_${reqIdx}` : '';
+            if (headerEntries.length > 0) {
+                lines.push(`headers${suffix} = {\n${headerEntries.join(',\n')}\n}`);
+            }
+            if (cookieEntries.length > 0) {
+                lines.push(`cookies${suffix} = {\n${cookieEntries.join(',\n')}\n}`);
+            }
 
             let call = `resp = s.${method.toLowerCase()}(f'{BASE}${path}'`;
-            if (headersStr) call += `,\n    headers={\n${headersStr}\n    }`;
-            if (body && method !== 'GET') call += `,\n    data=${JSON.stringify(body)}`;
+            if (headerEntries.length > 0) call += `, headers=headers${suffix}`;
+            if (cookieEntries.length > 0) call += `, cookies=cookies${suffix}`;
+            if (body && method !== 'GET') call += `, data=${JSON.stringify(body)}`;
             call += ')';
             lines.push(call);
             lines.push(`print(resp.status_code, resp.text[:200])\n`);
+            reqIdx++;
         }
         return lines.join('\n');
     };
@@ -353,15 +401,31 @@ export function PacketsPage() {
 
     const handleTagClick = (e) => {
         const tagName = e.target.dataset.service;
+        const isAlt = e.altKey;
         setUsedTags(prev => {
-            if (prev.includes(tagName)) return prev.filter(t => t !== tagName);
+            if (prev.includes(tagName)) {
+                const next = prev.filter(t => t !== tagName);
+                if (next.length === 0) setFilterMode('and');
+                return next;
+            }
+            if (prev.length === 0 && usedServices.length === 0) {
+                setFilterMode(isAlt ? 'or' : 'and');
+            }
             return [...prev, tagName];
         });
     };
     const handleServiceClick = (e) => {
         const serviceName = e.target.dataset.service;
+        const isAlt = e.altKey;
         setUsedServices(prev => {
-            if (prev.includes(serviceName)) return prev.filter(s => s !== serviceName);
+            if (prev.includes(serviceName)) {
+                const next = prev.filter(s => s !== serviceName);
+                if (next.length === 0 && usedTags.length === 0) setFilterMode('and');
+                return next;
+            }
+            if (prev.length === 0 && usedTags.length === 0) {
+                setFilterMode(isAlt ? 'or' : 'and');
+            }
             return [...prev, serviceName];
         });
     };
@@ -369,15 +433,28 @@ export function PacketsPage() {
     return (
         <div className="packetsPage">
             <div className="filterTape">
-                <button className="clear-button" onClick={clearStreams}>
-                    Очистить очередь
-                </button>
-                <div className="tag-filter d-inline-block">
+                <div className="filter-buttons-row">
+                    <button
+                      className={`filter-action-btn ${showFavoritesOnly ? 'filter-action-btn--active' : ''}`}
+                      onClick={() => setShowFavoritesOnly(prev => !prev)}
+                    >
+                      ★ Избранные
+                    </button>
+                    <button className="filter-action-btn" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false); }}>
+                        Сброс
+                    </button>
+                </div>
+                {(usedTags.length > 0 || usedServices.length > 0) && (
+                    <div className={`filter-mode-badge ${filterMode === 'or' ? 'filter-mode-or' : 'filter-mode-and'}`}>
+                        {filterMode === 'or' ? 'OR' : 'AND'}
+                    </div>
+                )}
+                <div className={`tag-filter d-inline-block${filterMode === 'or' ? ' filter-or-mode' : ''}`}>
                     {tagsArray.map((service, index) => {
                         return < ServiceCard service={service} onTagClick={handleTagClick}/>
                     })}
                     </div>
-                <div className="service-filter d-inline-block">
+                <div className={`service-filter d-inline-block${filterMode === 'or' ? ' filter-or-mode' : ''}`}>
                     {servicesArray.map((service, index) => {
                         return < ServiceCard service={service} onTagClick={handleServiceClick}/>
                     })}
@@ -390,7 +467,7 @@ export function PacketsPage() {
                     clearRef={timelineClearRef}
                 />
                 {/* Filter indicator — above scroll area */}
-                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null) && (
+                {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null || showFavoritesOnly) && (
                     <div className="filter-indicator">
                         <span>Фильтр активен</span>
                         {startTime != null && (
