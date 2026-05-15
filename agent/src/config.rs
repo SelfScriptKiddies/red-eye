@@ -53,7 +53,13 @@ pub struct AgentConfig {
 }
 
 fn sanitize_nats_token(s: &str) -> String {
-    s.replace('.', "-")
+    s.chars()
+        .map(|c| match c {
+            '.' | '*' | '>' | ' ' | '\t' | '\n' | '\r' => '-',
+            c if c.is_ascii_control() => '-',
+            _ => c,
+        })
+        .collect()
 }
 
 impl AgentConfig {

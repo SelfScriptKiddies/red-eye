@@ -74,6 +74,7 @@ pub async fn run() {
     let (restart_tx, restart_rx) = create_restart_notifier();
 
     // Harpoon engine with TLS certs and nftables manager
+    let tls_available = tls_certs.is_some();
     let harpoon_engine = HarpoonEngine::new(
         ports_cache.clone(),
         restart_tx.clone(),
@@ -96,7 +97,7 @@ pub async fn run() {
         ports_cache.clone(),
         restart_tx.clone(),
     );
-    heartbeat::spawn_heartbeat(nats.clone(), &config, ports_cache.clone(), harpoon.clone());
+    heartbeat::spawn_heartbeat(nats.clone(), &config, ports_cache.clone(), harpoon.clone(), tls_available);
     commands::spawn_command_listener(
         nats.clone(),
         ports_cache.clone(),

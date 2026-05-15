@@ -15,7 +15,7 @@ pub async fn establish_connection(config: &ApplicationConfig) -> Pool<Postgres> 
 
     debug!("postgresql: {:?}", database_url);
     PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(25)
         .connect(database_url.as_str())
         .await
         .unwrap_or_else(|error: Error| {

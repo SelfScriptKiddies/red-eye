@@ -313,7 +313,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
     const [triggers, setTriggers] = useState<TagTrigger[]>([]);
 
     const bytes = base64ToBytes(packet_data);
-    const formattedTime = new Date(timestamp).toLocaleTimeString();
+    const formattedTime = new Date(timestamp * 1000).toLocaleTimeString();
 
     // Load triggers for highlight
     useEffect(() => {

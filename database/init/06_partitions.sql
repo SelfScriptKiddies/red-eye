@@ -95,15 +95,19 @@ BEGIN
     dropped := dropped + drop_old_partitions('packets', cutoff_ts);
 
     -- Cleanup orphaned header/body sets
-    DELETE FROM header_set
-    WHERE id NOT IN (SELECT DISTINCT header_set_id FROM http_message WHERE header_set_id IS NOT NULL);
-    DELETE FROM grpc_body_set
-    WHERE id NOT IN (SELECT DISTINCT body_set_id FROM grpc_message WHERE body_set_id IS NOT NULL);
+    DELETE FROM header_set hs
+    WHERE NOT EXISTS (
+        SELECT 1 FROM http_message hm WHERE hm.header_set_id = hs.id
+    );
+    DELETE FROM grpc_body_set gbs
+    WHERE NOT EXISTS (
+        SELECT 1 FROM grpc_message gm WHERE gm.body_set_id = gbs.id
+    );
 
     -- Delete streams with no remaining packets (excluding favorites)
-    DELETE FROM stream
-    WHERE NOT favorite
-      AND id NOT IN (SELECT DISTINCT stream_id FROM packets);
+    DELETE FROM stream s
+    WHERE NOT s.favorite
+      AND NOT EXISTS (SELECT 1 FROM packets p WHERE p.stream_id = s.id);
     GET DIAGNOSTICS streams_removed = ROW_COUNT;
 
     partitions_dropped := dropped;

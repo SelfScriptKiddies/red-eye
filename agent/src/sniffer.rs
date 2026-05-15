@@ -50,7 +50,7 @@ impl SnifferEngine {
         let config = DatalinkConfig {
             promiscuous: true,
             read_timeout: Some(Duration::from_millis(1000)),
-            read_buffer_size: 65536,
+            read_buffer_size: 2 * 1024 * 1024,
             ..Default::default()
         };
 
@@ -77,14 +77,26 @@ impl SnifferEngine {
 
         let nats = self.nats.clone();
         let ports = self.ports.clone();
-        let (tx, mpsc_rx) = mpsc::channel::<Vec<u8>>();
+        let (tx, mpsc_rx) = mpsc::sync_channel::<Vec<u8>>(4096);
         self.active.store(true, Ordering::SeqCst);
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
             eprintln!("[SNIFFER] Capture thread spawned!");
             info!("Capture thread started, waiting for packets...");
+            let mut ports_snapshot: Vec<u16> =
+                ports.read().unwrap().iter().cloned().collect();
+            let mut pkt_count: u64 = 0;
+
             while active.load(Ordering::SeqCst) {
+                // Refresh ports cache periodically
+                pkt_count += 1;
+                if pkt_count % 1000 == 0 {
+                    if let Ok(guard) = ports.try_read() {
+                        ports_snapshot = guard.iter().cloned().collect();
+                    }
+                }
+
                 let frame = match rx.next() {
                     Ok(frame) => frame,
                     Err(e) => {
@@ -98,8 +110,6 @@ impl SnifferEngine {
                     }
                 };
 
-                let ports_snapshot: Vec<u16> =
-                    ports.read().unwrap().iter().cloned().collect();
                 if !packet_matches_filter(frame, &ports_snapshot) {
                     continue;
                 }
@@ -121,12 +131,16 @@ impl SnifferEngine {
                 };
 
                 let payload_len = payload.len();
-                if tx.send(payload).is_err() {
-                    warn!("Receiver dropped, stopping capture");
-                    break;
+                match tx.try_send(payload) {
+                    Ok(_) => trace!("Packet captured, {} bytes", payload_len),
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        warn!("Packet queue full, dropping packet ({} bytes)", payload_len);
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        warn!("Receiver dropped, stopping capture");
+                        break;
+                    }
                 }
-
-                info!("Packet captured, {} bytes", payload_len);
             }
             info!("Capture thread stopped");
             drop(tx);
