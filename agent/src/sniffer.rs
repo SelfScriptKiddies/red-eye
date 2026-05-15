@@ -1,9 +1,20 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use log::{debug, error, info, trace, warn};
-use pcap::{Capture, Error};
+use anyhow::{anyhow, Result};
+use log::{debug, info, trace, warn};
+use pnet::datalink::{self, Channel, Config as DatalinkConfig};
+use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
+use pnet::packet::ip::IpNextHeaderProtocol;
+use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::ipv4::Ipv4Packet;
+use pnet::packet::ipv6::Ipv6Packet;
+use pnet::packet::tcp::TcpPacket;
+use pnet::packet::udp::UdpPacket;
+use pnet::packet::vlan::VlanPacket;
+use pnet::packet::Packet;
 
 use crate::config::AgentConfig;
 use crate::nats::NatsClient;
@@ -28,63 +39,78 @@ impl SnifferEngine {
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), Error> {
+    pub async fn start(&mut self) -> Result<()> {
         let device_name = self.interface.clone();
 
-        let mut cap = Capture::from_device(device_name.as_str())?
-            .promisc(true)
-            .snaplen(65535)
-            .timeout(1000)
-            .open()?;
+        let interface = datalink::interfaces()
+            .into_iter()
+            .find(|i| i.name == device_name)
+            .ok_or_else(|| anyhow!("Interface '{}' not found", device_name))?;
+
+        let config = DatalinkConfig {
+            promiscuous: true,
+            read_timeout: Some(Duration::from_millis(1000)),
+            read_buffer_size: 65536,
+            ..Default::default()
+        };
+
+        let mut rx = match datalink::channel(&interface, config) {
+            Ok(Channel::Ethernet(_tx, rx)) => rx,
+            Ok(_) => return Err(anyhow!("Unsupported channel type for {}", device_name)),
+            Err(e) => return Err(anyhow!("Failed to open channel on {}: {}", device_name, e)),
+        };
 
         let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
-        let ports_filter = if initial_ports.is_empty() {
-            "tcp or udp".to_string()
+        let ports_desc = if initial_ports.is_empty() {
+            "tcp or udp (all)".to_string()
         } else {
             initial_ports
                 .iter()
-                .map(|port| format!("tcp port {} or udp port {}", port, port))
+                .map(|p| p.to_string())
                 .collect::<Vec<_>>()
-                .join(" or ")
+                .join(", ")
         };
-
-        cap.filter(&ports_filter, true).unwrap_or_else(|e| {
-            warn!("Failed to set filter on {}: {}", self.interface, e);
-        });
-
         info!(
-            "Sniffer started on {} with filter: {}",
-            self.interface, ports_filter
+            "Sniffer started on {} with filter: {} (AF_PACKET, promiscuous)",
+            self.interface, ports_desc
         );
 
         let nats = self.nats.clone();
-        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let ports = self.ports.clone();
+        let (tx, mpsc_rx) = mpsc::channel::<Vec<u8>>();
         self.active.store(true, Ordering::SeqCst);
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
             eprintln!("[SNIFFER] Capture thread spawned!");
-            let mut capture = cap;
             info!("Capture thread started, waiting for packets...");
             while active.load(Ordering::SeqCst) {
-                let packet = match capture.next_packet() {
-                    Ok(packet) => packet,
-                    Err(pcap::Error::NoMorePackets) | Err(pcap::Error::TimeoutExpired) => {
-                        std::thread::sleep(std::time::Duration::from_millis(5));
-                        continue;
-                    }
+                let frame = match rx.next() {
+                    Ok(frame) => frame,
                     Err(e) => {
+                        if e.kind() == std::io::ErrorKind::TimedOut
+                            || e.kind() == std::io::ErrorKind::WouldBlock
+                        {
+                            continue;
+                        }
                         warn!("Capture error: {}", e);
                         break;
                     }
                 };
 
+                let ports_snapshot: Vec<u16> =
+                    ports.read().unwrap().iter().cloned().collect();
+                if !packet_matches_filter(frame, &ports_snapshot) {
+                    continue;
+                }
+
+                let (tv_sec, tv_usec) = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(d) => (d.as_secs() as i64, d.subsec_micros() as i32),
+                    Err(_) => (0, 0),
+                };
+
                 let payload = match bincode::encode_to_vec(
-                    (
-                        packet.header.ts.tv_usec,
-                        packet.header.ts.tv_sec,
-                        packet.to_vec(),
-                    ),
+                    (tv_usec, tv_sec, frame.to_vec()),
                     bincode::config::standard(),
                 ) {
                     Ok(bytes) => bytes,
@@ -107,7 +133,7 @@ impl SnifferEngine {
         }));
 
         tokio::spawn(async move {
-            while let Ok(packet_data) = rx.recv() {
+            while let Ok(packet_data) = mpsc_rx.recv() {
                 nats.send_packet(packet_data).await;
             }
             trace!("NATS sender task finished");
@@ -123,7 +149,64 @@ impl SnifferEngine {
     }
 }
 
-/// Main sniffer loop with restart support on port changes
+/// Match TCP/UDP packets against a port filter.
+/// Empty filter = all TCP/UDP traffic passes.
+fn packet_matches_filter(frame: &[u8], ports: &[u16]) -> bool {
+    let eth = match EthernetPacket::new(frame) {
+        Some(e) => e,
+        None => return false,
+    };
+    match_l3(eth.get_ethertype(), eth.payload(), ports)
+}
+
+fn match_l3(ethertype: pnet::packet::ethernet::EtherType, payload: &[u8], ports: &[u16]) -> bool {
+    match ethertype {
+        EtherTypes::Ipv4 => {
+            let ipv4 = match Ipv4Packet::new(payload) {
+                Some(p) => p,
+                None => return false,
+            };
+            match_l4(ipv4.get_next_level_protocol(), ipv4.payload(), ports)
+        }
+        EtherTypes::Ipv6 => {
+            let ipv6 = match Ipv6Packet::new(payload) {
+                Some(p) => p,
+                None => return false,
+            };
+            match_l4(ipv6.get_next_header(), ipv6.payload(), ports)
+        }
+        EtherTypes::Vlan => {
+            let vlan = match VlanPacket::new(payload) {
+                Some(v) => v,
+                None => return false,
+            };
+            match_l3(vlan.get_ethertype(), vlan.payload(), ports)
+        }
+        _ => false,
+    }
+}
+
+fn match_l4(proto: IpNextHeaderProtocol, payload: &[u8], ports: &[u16]) -> bool {
+    let (src, dst) = if proto == IpNextHeaderProtocols::Tcp {
+        match TcpPacket::new(payload) {
+            Some(t) => (t.get_source(), t.get_destination()),
+            None => return false,
+        }
+    } else if proto == IpNextHeaderProtocols::Udp {
+        match UdpPacket::new(payload) {
+            Some(u) => (u.get_source(), u.get_destination()),
+            None => return false,
+        }
+    } else {
+        return false;
+    };
+
+    if ports.is_empty() {
+        return true;
+    }
+    ports.contains(&src) || ports.contains(&dst)
+}
+
 pub async fn run_sniffer_loop(
     nats: NatsClient,
     config: &AgentConfig,
@@ -158,7 +241,7 @@ pub async fn run_sniffer_loop(
                 sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
                 match sniffer.start().await {
                     Ok(_) => info!("Sniffer restarted with updated ports"),
-                    Err(e) => error!("Failed to restart sniffer: {}", e),
+                    Err(e) => log::error!("Failed to restart sniffer: {}", e),
                 }
             }
         }

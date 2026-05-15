@@ -52,17 +52,18 @@ pub struct AgentConfig {
     pub logging_level: String,
 }
 
+fn sanitize_nats_token(s: &str) -> String {
+    s.replace('.', "-")
+}
+
 impl AgentConfig {
     pub fn resolved_agent_id(&self) -> String {
         if let Some(id) = &self.agent_id {
-            return id.clone();
+            return sanitize_nats_token(id);
         }
 
-        // Build "hostname-ip" to avoid collisions across machines with the same hostname
-        // (e.g. 3 VMs all named "debian").  Fall back to just the IP if hostname is
-        // unavailable, and finally to a random UUID if even the IP is unset.
         let ip = &self.machine_ip;
-        match hostname::get()
+        let raw = match hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
         {
@@ -74,6 +75,7 @@ impl AgentConfig {
                     uuid::Uuid::new_v4().to_string()
                 }
             }
-        }
+        };
+        sanitize_nats_token(&raw)
     }
 }
