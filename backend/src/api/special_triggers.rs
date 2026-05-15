@@ -286,7 +286,6 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
             let mut q = flag_queue.write().await;
             q.submitted.insert(matched);
             if q.submitted.len() > MAX_SUBMITTED_CACHE {
-                // Evict oldest entries (HashSet doesn't preserve order, so just clear half)
                 let drain_count = q.submitted.len() / 2;
                 let to_remove: Vec<String> = q.submitted.iter().take(drain_count).cloned().collect();
                 for key in to_remove {
