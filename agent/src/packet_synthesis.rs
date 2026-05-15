@@ -14,6 +14,10 @@ fn rewrite_ip(ip: IpAddr, machine_ip: IpAddr) -> IpAddr {
 
 /// Synthesizes a raw Ethernet frame from a CapturedPacket so that the analyzer's
 /// parse_packet() can process it without any changes.
+///
+/// TODO: Currently always generates TCP headers (protocol=6). UDP packets from
+/// harpoon UDP proxy rules will have incorrect transport headers. Fixing this
+/// requires adding protocol info to harpoon-core's CapturedPacket type.
 pub fn synthesize_raw_frame(packet: &CapturedPacket, machine_ip: IpAddr) -> Vec<u8> {
     let src_ip = rewrite_ip(packet.src.ip(), machine_ip);
     let dst_ip = rewrite_ip(packet.dst.ip(), machine_ip);

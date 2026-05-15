@@ -7,6 +7,12 @@ use serde::Deserialize;
 const TABLE_NAME: &str = "red-eye-agent";
 const CHAIN_NAME: &str = "prerouting";
 
+fn validate_ip(ip: &str) -> Result<()> {
+    use std::net::IpAddr;
+    ip.parse::<IpAddr>().map_err(|_| anyhow::anyhow!("Invalid IP address: {}", ip))?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedirectRule {
     pub protocol: String,
@@ -101,6 +107,7 @@ impl NftablesManager {
 
     /// Ban an IP address (drop all traffic from it).
     pub fn ban_ip(&mut self, ip: &str) -> Result<()> {
+        validate_ip(ip)?;
         self.ensure_table()?;
         // Add drop rule for this IP
         run_nft(&format!(
@@ -116,6 +123,7 @@ impl NftablesManager {
 
     /// Unban an IP address.
     pub fn unban_ip(&mut self, ip: &str) -> Result<()> {
+        validate_ip(ip)?;
         self.banned_ips.retain(|i| i != ip);
         // Re-apply all rules (flush chain, re-add redirects + remaining bans)
         if self.initialized {
@@ -181,6 +189,9 @@ impl NftablesManager {
     }
 
     fn add_redirect_rule(&self, rule: &RedirectRule) -> Result<()> {
+        if rule.protocol != "tcp" && rule.protocol != "udp" {
+            bail!("Invalid protocol: {}", rule.protocol);
+        }
         run_nft(&format!(
             "add rule inet {} {} {} dport {} redirect to :{}",
             TABLE_NAME, CHAIN_NAME, rule.protocol, rule.original_port, rule.redirect_port

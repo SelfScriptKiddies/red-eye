@@ -37,6 +37,7 @@ pub fn spawn_heartbeat(
     config: &AgentConfig,
     ports_cache: PortsCache,
     harpoon: Arc<Mutex<HarpoonEngine>>,
+    tls_available: bool,
 ) {
     let interval_secs = config.heartbeat_interval_secs;
     let agent_id = nats.agent_id.clone();
@@ -76,7 +77,7 @@ pub fn spawn_heartbeat(
                 active_filters,
                 nft_redirects,
                 banned_ips,
-                tls_available: true,
+                tls_available,
                 broadcast_drops,
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

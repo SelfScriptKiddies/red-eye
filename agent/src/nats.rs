@@ -1,5 +1,5 @@
 use async_nats::{Client, ConnectOptions};
-use log::{debug, error};
+use log::error;
 
 use crate::config::AgentConfig;
 
@@ -31,16 +31,9 @@ impl NatsClient {
     }
 
     pub async fn send_packet(&self, packet_data: Vec<u8>) {
-        let topic = self.raw_packets_topic.clone();
-        let client = self.client.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = client.publish(topic, packet_data.into()).await {
-                error!("Failed to send packet to NATS: {}", e);
-            } else {
-                debug!("Packet sent to NATS");
-            }
-        });
+        if let Err(e) = self.client.publish(self.raw_packets_topic.clone(), packet_data.into()).await {
+            error!("Failed to send packet to NATS: {}", e);
+        }
     }
 
     pub async fn send_heartbeat(&self, status_json: Vec<u8>) {
