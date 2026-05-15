@@ -1,6 +1,6 @@
 use log::{debug, error, info, warn};
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
@@ -25,6 +25,30 @@ impl TeamCache {
         self.last_refresh.elapsed() > std::time::Duration::from_secs(300)
     }
 }
+
+/// Dedup + retry queue for flag submissions.
+struct FlagQueue {
+    submitted: HashSet<String>,
+    retry_queue: VecDeque<FlagEntry>,
+}
+
+struct FlagEntry {
+    flag: String,
+    team: String,
+    attempts: u8,
+}
+
+impl FlagQueue {
+    fn new() -> Self {
+        Self {
+            submitted: HashSet::new(),
+            retry_queue: VecDeque::new(),
+        }
+    }
+}
+
+const MAX_RETRY_ATTEMPTS: u8 = 3;
+const MAX_SUBMITTED_CACHE: usize = 10000;
 
 /// Fetch team mapping from S4DFarm's /api/get_config endpoint.
 /// Returns IP→team_name map built from the TEAMS config dict (name→ip inverted).
@@ -62,22 +86,15 @@ pub fn spawn_special_trigger_handler(
     broadcaster: Arc<broadcast::Sender<String>>,
 ) {
     let team_cache = Arc::new(RwLock::new(TeamCache::new()));
+    let flag_queue = Arc::new(RwLock::new(FlagQueue::new()));
 
     tokio::spawn(async move {
         use tokio::time::{interval, Duration};
         let mut ticker = interval(Duration::from_secs(3));
-        let mut last_check_ts: i64 = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let mut last_check_id: i32 = 0;
 
         loop {
             ticker.tick().await;
-
-            let now_ts: i64 = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
 
             // Find triggers with special_type since last check (deduplicated per packet+tag)
             let triggers = match sqlx::query_as::<_, (i32, i32, i32, i32, String, String, i32)>(
@@ -88,10 +105,10 @@ pub fn spawn_special_trigger_handler(
                  JOIN tag_name tn ON tn.id = t.tag_id
                  JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
                  WHERE tn.special_type IS NOT NULL
-                   AND t.timestamp >= $1
+                   AND t.packet_id > $1
                  ORDER BY t.packet_id, tn.id, t.timestamp ASC"
             )
-            .bind(last_check_ts)
+            .bind(last_check_id)
             .fetch_all(&pool)
             .await {
                 Ok(rows) => rows,
@@ -101,21 +118,60 @@ pub fn spawn_special_trigger_handler(
                 }
             };
 
-            last_check_ts = now_ts;
+            if !triggers.is_empty() {
+                last_check_id = triggers.iter().map(|t| t.0).max().unwrap_or(last_check_id);
 
-            if triggers.is_empty() {
-                continue;
+                for (packet_id, start_idx, end_idx, _tag_id, tag_name, special_type, stream_id) in &triggers {
+                    match special_type.as_str() {
+                        "flag" => {
+                            handle_flag(&pool, *packet_id, *start_idx, *end_idx, tag_name, *stream_id, &team_cache, &flag_queue).await;
+                        }
+                        "alert" => {
+                            handle_alert(&broadcaster, *packet_id, *stream_id, tag_name);
+                        }
+                        _ => {}
+                    }
+                }
             }
 
-            for (packet_id, start_idx, end_idx, _tag_id, tag_name, special_type, stream_id) in &triggers {
-                match special_type.as_str() {
-                    "flag" => {
-                        handle_flag(&pool, *packet_id, *start_idx, *end_idx, tag_name, *stream_id, &team_cache).await;
+            // Retry failed flag submissions
+            {
+                let farm_url = get_setting(&pool, "farm_url").await.unwrap_or_default();
+                let farm_password = get_setting(&pool, "farm_password").await.unwrap_or_default();
+                if !farm_url.is_empty() {
+                    let mut q = flag_queue.write().await;
+                    let mut i = 0;
+                    while i < q.retry_queue.len() {
+                        let entry = &q.retry_queue[i];
+                        if entry.attempts >= MAX_RETRY_ATTEMPTS {
+                            warn!("Flag '{}' exceeded max retries, dropping", entry.flag);
+                            q.retry_queue.remove(i);
+                            continue;
+                        }
+                        let payload = serde_json::json!([{
+                            "flag": entry.flag,
+                            "sploit": "red-eye",
+                            "team": entry.team,
+                        }]);
+                        let client = reqwest::Client::new();
+                        let mut req = client.post(&farm_url)
+                            .json(&payload)
+                            .timeout(std::time::Duration::from_secs(5));
+                        if !farm_password.is_empty() {
+                            req = req.header("Authorization", &farm_password);
+                        }
+                        match req.send().await {
+                            Ok(resp) => {
+                                info!("Retry succeeded for flag '{}': {}", entry.flag, resp.status());
+                                let flag = q.retry_queue.remove(i).unwrap().flag;
+                                q.submitted.insert(flag);
+                            }
+                            Err(_) => {
+                                q.retry_queue[i].attempts += 1;
+                                i += 1;
+                            }
+                        }
                     }
-                    "alert" => {
-                        handle_alert(&broadcaster, *packet_id, *stream_id, tag_name);
-                    }
-                    _ => {}
                 }
             }
         }
@@ -151,7 +207,7 @@ async fn resolve_team(
     ip.to_string()
 }
 
-async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32, tag_name: &str, stream_id: i32, team_cache: &Arc<RwLock<TeamCache>>) {
+async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32, tag_name: &str, stream_id: i32, team_cache: &Arc<RwLock<TeamCache>>, flag_queue: &Arc<RwLock<FlagQueue>>) {
     let farm_enabled = get_setting(pool, "farm_enabled").await.unwrap_or_default();
     if farm_enabled != "true" {
         debug!("Flag found but farm disabled (packet_id={})", packet_id);
@@ -183,6 +239,15 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
             return;
         }
     };
+
+    // Check dedup — skip if already submitted
+    {
+        let q = flag_queue.read().await;
+        if q.submitted.contains(&matched) {
+            debug!("Flag '{}' already submitted, skipping", matched);
+            return;
+        }
+    }
 
     // Resolve team: stream src_ip → team name via farm config
     let src_ip = match sqlx::query_scalar::<_, String>(
@@ -218,9 +283,25 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
     match req.send().await {
         Ok(resp) => {
             info!("Farm response: {} for flag '{}'", resp.status(), matched);
+            let mut q = flag_queue.write().await;
+            q.submitted.insert(matched);
+            if q.submitted.len() > MAX_SUBMITTED_CACHE {
+                // Evict oldest entries (HashSet doesn't preserve order, so just clear half)
+                let drain_count = q.submitted.len() / 2;
+                let to_remove: Vec<String> = q.submitted.iter().take(drain_count).cloned().collect();
+                for key in to_remove {
+                    q.submitted.remove(&key);
+                }
+            }
         }
         Err(e) => {
             error!("Farm submit failed: {}", e);
+            let mut q = flag_queue.write().await;
+            q.retry_queue.push_back(FlagEntry {
+                flag: matched,
+                team,
+                attempts: 1,
+            });
         }
     }
 }
