@@ -3,7 +3,7 @@ FROM rust:1.88.0-slim AS planner
 
 WORKDIR /usr/src/app
 
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --locked
 
 COPY . .
 
@@ -15,9 +15,9 @@ FROM rust:1.88.0-slim AS builder
 
 WORKDIR /usr/src/app
 
-RUN apt update && apt upgrade -y && apt-get install -y musl-tools curl libpcap-dev
+RUN apt update && apt upgrade -y && apt-get install -y musl-tools curl
 
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --locked
 
 RUN rustup target add x86_64-unknown-linux-musl
 
@@ -30,10 +30,8 @@ COPY . .
 RUN cargo build --target x86_64-unknown-linux-musl --release
 
 
-# Stage 3: Runtime
+# Stage 3: Runtime — fully static, no runtime deps
 FROM alpine:3.17
-
-RUN apk add --no-cache libpcap
 
 COPY --from=builder /usr/src/app/target/x86_64-unknown-linux-musl/release/red-eye-agent /usr/local/bin/red-eye-agent
 

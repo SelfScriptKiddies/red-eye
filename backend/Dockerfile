@@ -3,7 +3,7 @@ FROM rust:1.88.0-slim AS planner
 
 WORKDIR /usr/src/app
 
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --locked
 
 COPY . .
 
@@ -17,7 +17,7 @@ WORKDIR /usr/src/app
 
 RUN apt update && apt upgrade -y && apt-get install -y musl-tools curl
 
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --locked
 
 RUN rustup target add x86_64-unknown-linux-musl
 
