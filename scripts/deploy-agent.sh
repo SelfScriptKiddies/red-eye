@@ -161,6 +161,7 @@ fi
 ssh "$TARGET_HOST" "cat > ${REMOTE_DIR}/agent.env << 'ENVEOF'
 ${ENV_CONTENT}
 ENVEOF"
+ssh "$TARGET_HOST" "chmod 600 ${REMOTE_DIR}/agent.env"
 
 # 4. Create systemd unit
 echo -e "${YELLOW}[4/${STEPS}] Installing systemd service...${NC}"
