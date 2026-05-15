@@ -1,5 +1,6 @@
 use bincode;
 use tokio::task;
+use tokio::sync::Semaphore;
 use std::sync::Arc;
 use anyhow::{Context, Result};
 use log::{trace, error, info};
@@ -46,6 +47,7 @@ pub async fn consume_raw_packets(client: Client, cache: Arc<Cache>, config: Arc<
     .ok(); // Optional - if connection fails, we just won't send events
 
     let packet_processor = Arc::new(PacketProcessor::new(cache, config, db, event_client));
+    let semaphore = Arc::new(Semaphore::new(256));
 
     while let Some(message) = subscriber.next().await {
         // Get payload and clone it so it can live in a separate task
@@ -53,23 +55,26 @@ pub async fn consume_raw_packets(client: Client, cache: Arc<Cache>, config: Arc<
 
         // Processing packet in a separate task with cloned data
         let processor_clone = packet_processor.clone();
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
         task::spawn(async move {
-            trace!("Processing packet of size {} bytes: {:?}", payload.len(), payload); 
+            trace!("Processing packet of size {} bytes: {:?}", payload.len(), payload);
             let packet: (i64, i64, Vec<u8>) = match bincode::decode_from_slice(&payload, bincode::config::standard()) {
                 Ok((u, _)) => u,
                 Err(e) => {
                     error!("Error decoding new packet: {}", e);
+                    drop(permit);
                     return;
                 }
             };
             // packet.0 = usec, packet.1 = sec
             let parsed_packet = parse_packet((packet.0 as u64, packet.1 as u64), packet.2);
-            
+
             if let Some(packet) = parsed_packet {
                 processor_clone.process_packet(packet).await.unwrap_or_else(|e| {
                     error!("Error processing packet: {}", e);
                 });
             }
+            drop(permit);
         });
     }
 
