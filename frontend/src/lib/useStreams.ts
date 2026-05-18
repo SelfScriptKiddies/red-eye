@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from './api';
 
 const MAX_STREAMS = 200;
@@ -30,21 +30,21 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
     const [hasMoreStreams, setHasMoreStreams] = useState(true);
     const scrollRef = useRef<HTMLDivElement | null>(null);
 
-    const { isLoading: isLoadingMore } = useQuery({
+    const { data: queryData, isLoading: isLoadingMore } = useQuery({
         queryKey: ['streams', { tags, services, startTime, endTime, offset: 0 }],
         queryFn: ({ signal }) => apiFetch<any[]>(buildUrl(0, tags, services, startTime, endTime), signal),
         enabled,
         refetchInterval,
-        select: (data) => {
-            if (data) {
-                const newStreams = Object.values(data);
-                setAllStreams(newStreams.slice(0, MAX_STREAMS));
-                setCurrentOffset(PAGE_SIZE);
-                setHasMoreStreams(newStreams.length === PAGE_SIZE);
-            }
-            return data;
-        },
     });
+
+    useEffect(() => {
+        if (queryData) {
+            const newStreams = Object.values(queryData);
+            setAllStreams(newStreams.slice(0, MAX_STREAMS));
+            setCurrentOffset(PAGE_SIZE);
+            setHasMoreStreams(newStreams.length === PAGE_SIZE);
+        }
+    }, [queryData]);
 
     const loadMore = useCallback(async () => {
         if (!enabled || !hasMoreStreams) return;

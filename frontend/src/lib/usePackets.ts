@@ -57,19 +57,18 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
                 });
             } else {
                 // Evict oldest if at limit
-                setSelectedStreamIds(prev => {
-                    const updated = [...prev, numericId];
-                    if (updated.length > MAX_SELECTED_STREAMS) {
-                        const evicted = updated[0];
-                        setPacketsByStream(p => {
-                            const next = { ...p };
-                            delete next[evicted];
-                            return next;
-                        });
-                        return updated.slice(1);
-                    }
-                    return updated;
-                });
+                const updated = [...selectedStreamIds, numericId];
+                if (updated.length > MAX_SELECTED_STREAMS) {
+                    const evicted = updated[0];
+                    setPacketsByStream(p => {
+                        const next = { ...p };
+                        delete next[evicted];
+                        return next;
+                    });
+                    setSelectedStreamIds(updated.slice(1));
+                } else {
+                    setSelectedStreamIds(updated);
+                }
                 const packets = await loadPacketsForStream(numericId);
                 setPacketsByStream(prev => ({ ...prev, [numericId]: packets }));
             }

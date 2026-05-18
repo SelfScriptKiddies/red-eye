@@ -341,7 +341,7 @@ impl DB {
     /// Update stream's last_packet_time.
     pub async fn update_stream_last_packet_time(&self, stream_id: usize, timestamp: i64) -> Result<(), Error> {
         sqlx::query(
-            "UPDATE stream SET last_packet_time = to_timestamp($1) WHERE id = $2"
+            "UPDATE stream SET last_packet_time = $1 WHERE id = $2"
         )
         .bind(timestamp)
         .bind(stream_id as i32)
