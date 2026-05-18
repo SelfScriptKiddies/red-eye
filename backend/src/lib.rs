@@ -89,6 +89,7 @@ pub async fn run() -> std::io::Result<()> {
         let cleanup_pool = pool.clone();
         let age_minutes = config.cleanup_stream_age_minutes;
         let interval_minutes = config.cleanup_interval_minutes;
+        let max_disk_mb = config.cleanup_max_disk_mb;
         tokio::spawn(async move {
             use tokio::time::{interval, Duration};
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
@@ -127,6 +128,32 @@ pub async fn run() -> std::io::Result<()> {
                         }
                     }
                     Err(e) => error!("Cleanup failed: {}", e),
+                }
+
+                // Disk pressure check: drop oldest partitions if total exceeds max_disk_mb
+                if max_disk_mb > 0 {
+                    loop {
+                        let total_mb: Option<i64> = sqlx::query_scalar(
+                            "SELECT (sum(pg_total_relation_size(inhrelid::regclass)) / (1024*1024))::bigint
+                             FROM pg_inherits
+                             WHERE inhparent IN ('packets'::regclass, 'tag'::regclass,
+                                                  'http_message'::regclass, 'grpc_message'::regclass)"
+                        )
+                        .fetch_one(&cleanup_pool)
+                        .await
+                        .ok();
+
+                        match total_mb {
+                            Some(mb) if mb > max_disk_mb => {
+                                info!("Disk pressure: {}MB > {}MB limit, dropping oldest partitions", mb, max_disk_mb);
+                                // Drop the single oldest partition from each table
+                                let _ = sqlx::query("SELECT cleanup_old_data(0)")
+                                    .execute(&cleanup_pool)
+                                    .await;
+                            }
+                            _ => break,
+                        }
+                    }
                 }
             }
         });
