@@ -12,3 +12,4 @@ CREATE TABLE IF NOT EXISTS packets (
 -- Indexes (applied to all partitions automatically)
 CREATE INDEX IF NOT EXISTS idx_packets_stream_id ON packets(stream_id);
 CREATE INDEX IF NOT EXISTS idx_packets_timestamp ON packets(timestamp);
+CREATE INDEX IF NOT EXISTS idx_packets_stream_ts ON packets(stream_id, timestamp DESC);
