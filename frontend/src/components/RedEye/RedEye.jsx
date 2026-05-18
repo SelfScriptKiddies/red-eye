@@ -1,44 +1,35 @@
 import "./RedEye.css"
 import { useState, useEffect } from 'react';
+import { useRedEye } from '../../context/RedEyeContext';
 
 export const RedEye = () => {
+    const { isActive, toggle } = useRedEye();
     const [state, setEyeState] = useState(0);
-    const [enabled, setEnabled] = useState(false);
 
     const stateClasses = ["eye__apple__center", "eye__apple__right", "eye__apple__left", "eye__apple__center", "eye__apple__focus", "eye__apple__center"];
-    
+
     useEffect(() => {
             const interval = setInterval(() => {
                 if(window.location.pathname !== '/packets')
                 {
                     setEyeState((state) => (state + 1) % stateClasses.length);
                 }
-                else if(!enabled) {
+                else if(!isActive) {
                     setEyeState((state) => (state + 1) % 4);
                 }
             }, 1500);
 
             return () => clearInterval(interval);
-    }, []);
+    }, [isActive]);
 
     const handleClick = () => {
         if(window.location.pathname === '/packets')
         {
-            if(!enabled)
-            {
-                setEyeState(4);
-                setEnabled(true);
-                localStorage.setItem('redEyeActive', 'true');
-            }
-            else
-            {
-                setEyeState(0);
-                setEnabled(false);
-                localStorage.setItem('redEyeActive', 'false');
-            }
+            toggle();
+            setEyeState(isActive ? 0 : 4);
         }
     }
-    const stateClass = enabled ? 'eye__apple__focus' : stateClasses[state];
+    const stateClass = isActive ? 'eye__apple__focus' : stateClasses[state];
     return (
         <div className="eye" id="RedEye" onClick={handleClick}>
             <div className={`eye__apple ${stateClass}`} >
