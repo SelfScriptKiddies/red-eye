@@ -1,6 +1,7 @@
-import { ReactElement } from "react";
+import { ReactElement, useCallback, CSSProperties } from "react";
 import './PacketsPage.css'
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { List as VirtualList } from 'react-window';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
@@ -20,6 +21,98 @@ interface PacketEvent {
     timestamp_seconds: number;
     timestamp_microseconds: number;
     direction: string;
+}
+
+// Row component for virtual stream list
+interface StreamRowProps {
+    streams: any[];
+    selectedStreamIds: number[];
+    handleStreamClick: (id: number) => void;
+    handleFavoriteToggle: (id: number, fav: boolean) => void;
+    addHeaderFilter: (name: string, value: string) => void;
+    tagColors: Record<string, number>;
+}
+
+function StreamRow({ index, style, streams, selectedStreamIds, handleStreamClick, handleFavoriteToggle, addHeaderFilter, tagColors }: StreamRowProps & { index: number; style: CSSProperties; ariaAttributes?: object }) {
+    const stream = streams[index];
+    if (!stream) return null;
+    return (
+        <div style={style}>
+            <StreamCard
+                streamObj={stream}
+                selected={selectedStreamIds.includes(stream.id)}
+                onStreamClick={handleStreamClick}
+                onFavoriteToggle={handleFavoriteToggle}
+                onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
+                onIpBan={(ip: string) => {
+                    if (!confirm(`Забанить IP ${ip} на всех агентах?`)) return;
+                    fetch('/api/protect/ip-ban', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ agent_id: '_all', ip, ban: true })
+                    });
+                }}
+                tagColors={tagColors}
+            />
+        </div>
+    );
+}
+
+// Row component for virtual packet list
+interface PacketRowProps {
+    packets: any[];
+    isMultiSelect: boolean;
+    selectedStreamL7: string | null;
+    diffLeft: any | null;
+    addHeaderFilter: (name: string, value: string, exclude?: boolean) => void;
+    setDiffLeft: (p: any | null) => void;
+    setDiffRight: (p: any | null) => void;
+    setDiffOpen: (v: boolean) => void;
+}
+
+function PacketRow({ index, style, packets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter, setDiffLeft, setDiffRight, setDiffOpen }: PacketRowProps & { index: number; style: CSSProperties; ariaAttributes?: object }) {
+    const packet = packets[index];
+    if (!packet) return null;
+    return (
+        <div style={style}>
+            <PacketCard
+                key={`${packet._stream_id ?? packet.stream_id}-${packet.id}`}
+                {...packet}
+                showStreamId={isMultiSelect}
+                isHttp={selectedStreamL7 === 'http1'}
+                isGrpc={selectedStreamL7 === 'grpc'}
+                onHeaderSearch={addHeaderFilter}
+                onHeaderExclude={(name: string, value: string) => addHeaderFilter(name, value, true)}
+                diffSelected={diffLeft?.id === packet.id}
+                onDiffSelect={(pkt: any) => {
+                    if (!diffLeft) {
+                        setDiffLeft(pkt);
+                    } else if (diffLeft.id === pkt.id) {
+                        setDiffLeft(null);
+                    } else {
+                        setDiffRight(pkt);
+                        setDiffOpen(true);
+                    }
+                }}
+                onQuickBlock={(pattern: string) => {
+                    if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
+                    const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
+                    fetch('/api/tag/names', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name: `block-${pattern.slice(0, 20)}`,
+                            color: 0,
+                            template_type: isHex ? 'bsubstr' : 'substr',
+                            template: pattern,
+                            direction: 'both',
+                            special_type: 'block'
+                        })
+                    });
+                }}
+            />
+        </div>
+    );
 }
 
 export function PacketsPage() {
@@ -252,6 +345,16 @@ export function PacketsPage() {
             console.error('Ошибка при обновлении избранного:', error);
         }
     };
+
+    // Infinite scroll callback for virtual stream list
+    const handleStreamsRowsRendered = useCallback(
+        (visibleRows: { startIndex: number; stopIndex: number }) => {
+            if (visibleRows.stopIndex >= filteredStreams.length - 3 && hasMoreStreams && !isLoadingMore) {
+                loadMore();
+            }
+        },
+        [filteredStreams.length, hasMoreStreams, isLoadingMore, loadMore]
+    );
 
     // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
@@ -495,41 +598,39 @@ export function PacketsPage() {
                         )}
                     </div>
                 )}
-                <div id="streams" className="streams" ref={streamsContainerRef}>
-                {filteredStreams.map((stream, index) => {
-                    return < StreamCard
-                        key={stream.id}
-                        streamObj={stream}
-                        selected={selectedStreamIds.includes(stream.id)}
-                        onStreamClick={handleStreamClick}
-                        onFavoriteToggle={handleFavoriteToggle}
-                        onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
-                        onIpBan={(ip: string) => {
-                            if (!confirm(`Забанить IP ${ip} на всех агентах?`)) return;
-                            fetch('/api/protect/ip-ban', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ agent_id: '_all', ip, ban: true })
-                            });
-                        }}
-                        tagColors={tagColors}
-                    />
-                })}
-                {isLoadingMore && (
-                    <div style={{ padding: '20px', textAlign: 'center', color: '#ccc' }}>
-                        Загрузка...
-                    </div>
-                )}
-                {!hasMoreStreams && filteredStreams.length > 0 && !headerSearchResults && (
-                    <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
-                        Все стримы загружены
-                    </div>
-                )}
-                {headerSearchResults && filteredStreams.length === 0 && (
-                    <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
-                        Нет стримов по заданным фильтрам
-                    </div>
-                )}
+                <div id="streams" className="streams">
+                    {filteredStreams.length > 0 ? (
+                        <VirtualList
+                            rowComponent={StreamRow}
+                            rowCount={filteredStreams.length}
+                            rowHeight={80}
+                            rowProps={{
+                                streams: filteredStreams,
+                                selectedStreamIds,
+                                handleStreamClick,
+                                handleFavoriteToggle,
+                                addHeaderFilter,
+                                tagColors,
+                            }}
+                            onRowsRendered={handleStreamsRowsRendered}
+                            defaultHeight={400}
+                        />
+                    ) : null}
+                    {isLoadingMore && (
+                        <div style={{ padding: '20px', textAlign: 'center', color: '#ccc' }}>
+                            Загрузка...
+                        </div>
+                    )}
+                    {!hasMoreStreams && filteredStreams.length > 0 && !headerSearchResults && (
+                        <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
+                            Все стримы загружены
+                        </div>
+                    )}
+                    {headerSearchResults && filteredStreams.length === 0 && (
+                        <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
+                            Нет стримов по заданным фильтрам
+                        </div>
+                    )}
                 </div>{/* streams */}
             </div>{/* streams-wrapper */}
             <div className="packetData">
@@ -579,44 +680,24 @@ export function PacketsPage() {
                         </div>
                     </div>
                 )}
-                {mergedPackets.map(packet => (
-                    <PacketCard
-                        key={`${packet._stream_id ?? packet.stream_id}-${packet.id}`}
-                        {...packet}
-                        showStreamId={isMultiSelect}
-                        isHttp={selectedStreamL7 === 'http1'}
-                        isGrpc={selectedStreamL7 === 'grpc'}
-                        onHeaderSearch={addHeaderFilter}
-                        onHeaderExclude={(name: string, value: string) => addHeaderFilter(name, value, true)}
-                        diffSelected={diffLeft?.id === packet.id}
-                        onDiffSelect={(pkt) => {
-                            if (!diffLeft) {
-                                setDiffLeft(pkt);
-                            } else if (diffLeft.id === pkt.id) {
-                                setDiffLeft(null);
-                            } else {
-                                setDiffRight(pkt);
-                                setDiffOpen(true);
-                            }
+                {mergedPackets.length > 0 && (
+                    <VirtualList
+                        rowComponent={PacketRow}
+                        rowCount={mergedPackets.length}
+                        rowHeight={120}
+                        rowProps={{
+                            packets: mergedPackets,
+                            isMultiSelect,
+                            selectedStreamL7,
+                            diffLeft,
+                            addHeaderFilter,
+                            setDiffLeft,
+                            setDiffRight,
+                            setDiffOpen,
                         }}
-                        onQuickBlock={(pattern: string) => {
-                            if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
-                            const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
-                            fetch('/api/tag/names', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    name: `block-${pattern.slice(0, 20)}`,
-                                    color: 0,
-                                    template_type: isHex ? 'bsubstr' : 'substr',
-                                    template: pattern,
-                                    direction: 'both',
-                                    special_type: 'block'
-                                })
-                            });
-                        }}
+                        defaultHeight={400}
                     />
-                ))}
+                )}
             </div>
 
             {diffOpen && diffLeft && diffRight && (
