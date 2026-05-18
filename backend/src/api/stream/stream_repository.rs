@@ -47,101 +47,90 @@ impl StreamRepository {
     }
 
     pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
-        let mut query_parts = Vec::new();
-        let mut params = Vec::new();
-
-        query_parts.push(r#"
+        let mut sql = String::from(r#"
             SELECT
-                p.stream_id,
-                MIN(p.timestamp) as first_time,
-                MAX(p.timestamp) as last_time,
-                COUNT(DISTINCT p.id) as packet_count,
-                COALESCE(array_agg(tn.name) FILTER (WHERE tn.name IS NOT NULL), ARRAY[]::text[]) as tags,
-                s.name as service_name,
-                s.id as service_id,
-                str.favorite as favorite,
-                str.l7_protocol as l7_protocol,
-                str.src_ip::text as src_ip,
-                str.dst_ip::text as dst_ip
-            FROM packets p
-            JOIN stream str ON str.id = p.stream_id
-            JOIN service s ON s.id = str.service_id
-            LEFT JOIN tag t ON t.packet_id = p.id
-            LEFT JOIN tag_name tn ON tn.id = t.tag_id"#.to_string());
+                stream_id,
+                first_time,
+                last_time,
+                packet_count,
+                COALESCE(tags, ARRAY[]::text[]) as tags,
+                service_name,
+                service_id,
+                favorite,
+                l7_protocol,
+                src_ip::text,
+                dst_ip::text
+            FROM streams_list_view"#);
 
         let mut where_clauses = Vec::new();
+        let mut param_idx: usize = 0;
 
-        // Добавление фильтрации по тегам, если они указаны
-        if let Some(tag_ids) = &tags {
+        // Tag filtering via subquery against tag_name (view stores names as text[])
+        if let Some(ref tag_ids) = tags {
             if !tag_ids.is_empty() {
-                where_clauses.push(r#"p.stream_id IN (
-                    SELECT p2.stream_id
-                    FROM packets p2
-                    JOIN tag t2 ON t2.packet_id = p2.id
-                    JOIN tag_name tn2 ON tn2.id = t2.tag_id
-                    WHERE tn2.id = ANY($1)
-                    GROUP BY p2.stream_id
-                    HAVING COUNT(DISTINCT tn2.id) = array_length($1, 1)
-                )"#.to_string());
-                params.push(tag_ids.clone());
+                param_idx += 1;
+                where_clauses.push(format!(
+                    r#"EXISTS (
+                        SELECT 1 FROM unnest(tags) t
+                        JOIN tag_name tn ON tn.name = t
+                        WHERE tn.id = ANY(${param_idx})
+                        HAVING COUNT(DISTINCT tn.id) = array_length(${param_idx}, 1)
+                    )"#
+                ));
             }
         }
 
-        // Добавление фильтрации по сервисам, если они указаны
-        if let Some(service_ids) = &services {
+        // Service filtering
+        if let Some(ref service_ids) = services {
             if !service_ids.is_empty() {
-                let param_idx = params.len() + 1;
-                where_clauses.push(format!("s.id = ANY(${}) ", param_idx));
-                params.push(service_ids.clone());
+                param_idx += 1;
+                where_clauses.push(format!("service_id = ANY(${param_idx})"));
             }
         }
 
-        // Добавление фильтрации по времени
-        let mut extra_bind_count = 0;
-
+        // Time filtering on the view's aggregated columns
         if start_time.is_some() {
-            let param_idx = params.len() + 1 + extra_bind_count;
-            where_clauses.push(format!("p.timestamp >= ${}", param_idx));
-            extra_bind_count += 1;
+            param_idx += 1;
+            where_clauses.push(format!("last_time >= ${param_idx}"));
         }
         if end_time.is_some() {
-            let param_idx = params.len() + 1 + extra_bind_count;
-            where_clauses.push(format!("p.timestamp <= ${}", param_idx));
-            extra_bind_count += 1;
+            param_idx += 1;
+            where_clauses.push(format!("first_time <= ${param_idx}"));
         }
 
-        // Добавление WHERE к запросу, если есть условия
         if !where_clauses.is_empty() {
-            query_parts.push(" WHERE ".to_string());
-            query_parts.push(where_clauses.join(" AND "));
+            sql.push_str(" WHERE ");
+            sql.push_str(&where_clauses.join(" AND "));
         }
 
-        // Добавление GROUP BY и других частей запроса
-        query_parts.push(r#"
-            GROUP BY p.stream_id, s.name, s.id, str.favorite, str.l7_protocol, str.src_ip, str.dst_ip
-            ORDER BY last_time DESC"#.to_string());
+        param_idx += 1;
+        let limit_idx = param_idx;
+        param_idx += 1;
+        let offset_idx = param_idx;
+        sql.push_str(&format!(
+            " ORDER BY last_time DESC LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        ));
 
-        // Добавление LIMIT и OFFSET
-        let limit_idx = params.len() + 1 + extra_bind_count;
-        let offset_idx = params.len() + 2 + extra_bind_count;
-        query_parts.push(format!(" LIMIT ${} OFFSET ${}", limit_idx, offset_idx));
-
-        // Построение полного запроса
-        let query_string = query_parts.join(" ");
-
-        // Вывод запроса в лог для отладки
-        log::debug!("SQL Query: {}", query_string);
+        log::debug!("SQL Query: {}", sql);
         log::debug!("Params: tags={:?}, services={:?}, start_time={:?}, end_time={:?}, limit={}, offset={}", tags, services, start_time, end_time, limit, offset);
 
-        // Выполнение запроса с параметрами
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>(&query_string);
+        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>(&sql);
 
-        // Биндинг параметров tags и services
-        for param in &params {
-            query = query.bind(param);
+        // Bind tag IDs
+        if let Some(ref tag_ids) = tags {
+            if !tag_ids.is_empty() {
+                query = query.bind(tag_ids);
+            }
         }
 
-        // Биндинг параметров времени
+        // Bind service IDs
+        if let Some(ref service_ids) = services {
+            if !service_ids.is_empty() {
+                query = query.bind(service_ids);
+            }
+        }
+
+        // Bind time params
         if let Some(start) = start_time {
             query = query.bind(start);
         }
@@ -149,7 +138,7 @@ impl StreamRepository {
             query = query.bind(end);
         }
 
-        // Биндинг limit и offset
+        // Bind limit and offset
         query = query.bind(limit).bind(offset);
 
         query.fetch_all(&self.pgpool).await
@@ -158,14 +147,13 @@ impl StreamRepository {
     pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i32, String, i64)>, sqlx::Error> {
         sqlx::query_as::<_, (i64, i32, String, i64)>(
             r#"
-            SELECT (p.timestamp / $1) * $1 AS bucket_ts,
-                   s.id AS service_id,
-                   s.name AS service_name,
-                   COUNT(DISTINCT p.stream_id) AS count
-            FROM packets p
-            JOIN stream str ON str.id = p.stream_id
-            JOIN service s ON s.id = str.service_id
-            GROUP BY bucket_ts, s.id, s.name
+            SELECT (last_time / $1) * $1 AS bucket_ts,
+                   service_id,
+                   service_name,
+                   COUNT(*) AS count
+            FROM streams_list_view
+            WHERE last_time > 0
+            GROUP BY bucket_ts, service_id, service_name
             ORDER BY bucket_ts ASC
             "#)
             .bind(bucket_secs as i64)
