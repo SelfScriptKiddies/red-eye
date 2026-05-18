@@ -306,6 +306,7 @@ interface TagTrigger {
 
 export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onHeaderExclude, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isGrpc ? 'grpc' : isHttp ? 'http' : 'text');
+    const [isExpanded, setIsExpanded] = useState(false);
     const [grpcData, setGrpcData] = useState<any[] | null>(null);
     const [grpcLoading, setGrpcLoading] = useState(false);
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
@@ -317,6 +318,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
     // Load triggers for highlight
     useEffect(() => {
+        if (!isExpanded) return;
         fetch(`/api/tag/stream_id/${stream_id}`)
             .then(r => r.json())
             .then((tags: any[]) => {
@@ -331,11 +333,11 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 setTriggers(mine);
             })
             .catch(() => {});
-    }, [id, stream_id]);
+    }, [isExpanded, id, stream_id]);
 
     // Load HTTP data when switching to http mode or on mount if isHttp
     useEffect(() => {
-        if (isHttp && !httpData && !httpLoading) {
+        if (isExpanded && isHttp && !httpData && !httpLoading) {
             setHttpLoading(true);
             // Find http_message for this packet
             fetch(`/api/http/stream/${stream_id}`)
@@ -367,11 +369,11 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 .catch(() => {})
                 .finally(() => setHttpLoading(false));
         }
-    }, [isHttp, id, stream_id]);
+    }, [isExpanded, isHttp, id, stream_id]);
 
     // Load gRPC data
     useEffect(() => {
-        if (isGrpc && !grpcData && !grpcLoading) {
+        if (isExpanded && isGrpc && !grpcData && !grpcLoading) {
             setGrpcLoading(true);
             fetch(`/api/grpc/stream/${stream_id}`)
                 .then(r => r.json())
@@ -379,7 +381,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 .catch(() => setGrpcData([]))
                 .finally(() => setGrpcLoading(false));
         }
-    }, [isGrpc, stream_id]);
+    }, [isExpanded, isGrpc, stream_id]);
 
     const getContent = (): string => {
         switch (viewMode) {
@@ -568,30 +570,30 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
     return (
         <div className={`packet-card ${direction === 'orig' ? 'packet-orig' : 'packet-dest'}`}>
-            <div className="packet-header">
+            <div className="packet-header" onClick={() => setIsExpanded(prev => !prev)} style={{ cursor: 'pointer' }}>
                 <div className="view-mode-switcher">
                     <button
                         className={`view-mode-btn ${viewMode === 'text' ? 'active' : ''}`}
-                        onClick={() => setViewMode('text')}
+                        onClick={(e) => { e.stopPropagation(); setViewMode('text'); }}
                     >TXT</button>
                     <button
                         className={`view-mode-btn ${viewMode === 'hex' ? 'active' : ''}`}
-                        onClick={() => setViewMode('hex')}
+                        onClick={(e) => { e.stopPropagation(); setViewMode('hex'); }}
                     >HEX</button>
                     <button
                         className={`view-mode-btn ${viewMode === 'python' ? 'active' : ''}`}
-                        onClick={() => setViewMode('python')}
+                        onClick={(e) => { e.stopPropagation(); setViewMode('python'); }}
                     >PY</button>
                     {isHttp && (
                         <button
                             className={`view-mode-btn ${viewMode === 'http' ? 'active' : ''}`}
-                            onClick={() => setViewMode('http')}
+                            onClick={(e) => { e.stopPropagation(); setViewMode('http'); }}
                         >HTTP</button>
                     )}
                     {isGrpc && (
                         <button
                             className={`view-mode-btn ${viewMode === 'grpc' ? 'active' : ''}`}
-                            onClick={() => setViewMode('grpc')}
+                            onClick={(e) => { e.stopPropagation(); setViewMode('grpc'); }}
                         >GRPC</button>
                     )}
                 </div>
@@ -605,44 +607,53 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                 {_merged_count && _merged_count > 1 && (
                     <span className="merged-badge">{_merged_count} пакетов</span>
                 )}
+                <span className="expand-indicator">{isExpanded ? '▼' : '▶'}</span>
             </div>
 
-            <div className="packet-content">
-                {viewMode === 'grpc' ? renderGrpcView() : viewMode === 'http' ? renderHttpView() : viewMode === 'hex' ? (
-                    <div className="packet-body monospace">
-                        <InteractiveHexDump bytes={bytes} onQuickBlock={onQuickBlock} />
-                    </div>
-                ) : (
-                    <pre className={`packet-body ${viewMode === 'python' ? 'monospace' : ''}`}>
-                        {viewMode === 'text' && triggers.length > 0
-                            ? renderHighlightedText(toUtf8Preview(bytes), triggers)
-                            : getContent()
-                        }
-                    </pre>
-                )}
-                {viewMode !== 'http' && (
-                    <div className="packet-btn-group">
-                        <button className="copy-btn" onClick={copy} title="Copy to clipboard">Copy</button>
-                        {onDiffSelect && (
-                            <button className={`diff-select-btn ${diffSelected ? 'selected' : ''}`}
-                                onClick={() => onDiffSelect({ id, packet_data, direction })}
-                                title={diffSelected ? 'Выбран для сравнения' : 'Сравнить'}>
-                                Diff
-                            </button>
-                        )}
-                        {onQuickBlock && (
-                            <button className="block-btn" onMouseDown={e => e.preventDefault()} onClick={() => {
-                                const sel = window.getSelection()?.toString();
-                                if (sel && sel.length > 0) {
-                                    onQuickBlock(sel);
-                                } else {
-                                    alert('Выделите текст для блокировки');
-                                }
-                            }} title="Заблокировать выделенный текст">Block</button>
-                        )}
-                    </div>
-                )}
-            </div>
+            {!isExpanded && (
+                <div className="packet-preview" onClick={() => setIsExpanded(true)} style={{ cursor: 'pointer' }}>
+                    {toUtf8Preview(bytes).slice(0, 120).replace(/[\r\n]+/g, ' ')}
+                </div>
+            )}
+
+            {isExpanded && (
+                <div className="packet-content">
+                    {viewMode === 'grpc' ? renderGrpcView() : viewMode === 'http' ? renderHttpView() : viewMode === 'hex' ? (
+                        <div className="packet-body monospace">
+                            <InteractiveHexDump bytes={bytes} onQuickBlock={onQuickBlock} />
+                        </div>
+                    ) : (
+                        <pre className={`packet-body ${viewMode === 'python' ? 'monospace' : ''}`}>
+                            {viewMode === 'text' && triggers.length > 0
+                                ? renderHighlightedText(toUtf8Preview(bytes), triggers)
+                                : getContent()
+                            }
+                        </pre>
+                    )}
+                    {viewMode !== 'http' && (
+                        <div className="packet-btn-group">
+                            <button className="copy-btn" onClick={copy} title="Copy to clipboard">Copy</button>
+                            {onDiffSelect && (
+                                <button className={`diff-select-btn ${diffSelected ? 'selected' : ''}`}
+                                    onClick={() => onDiffSelect({ id, packet_data, direction })}
+                                    title={diffSelected ? 'Выбран для сравнения' : 'Сравнить'}>
+                                    Diff
+                                </button>
+                            )}
+                            {onQuickBlock && (
+                                <button className="block-btn" onMouseDown={e => e.preventDefault()} onClick={() => {
+                                    const sel = window.getSelection()?.toString();
+                                    if (sel && sel.length > 0) {
+                                        onQuickBlock(sel);
+                                    } else {
+                                        alert('Выделите текст для блокировки');
+                                    }
+                                }} title="Заблокировать выделенный текст">Block</button>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
