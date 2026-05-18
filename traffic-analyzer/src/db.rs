@@ -15,15 +15,25 @@ impl DB {
         Self { pgpool }
     }
 
+    pub fn pool(&self) -> &PgPool {
+        &self.pgpool
+    }
+
     /// Initialize database connection pool
     pub async fn connect(connection_string: &str) -> Result<Self, Error> {
         info!("Initializing database connection pool");
-        
+
+        let url = if connection_string.contains('?') {
+            format!("{}&options=-c statement_timeout=30000", connection_string)
+        } else {
+            format!("{}?options=-c statement_timeout=30000", connection_string)
+        };
+
         let pool = PgPoolOptions::new()
             .max_connections(50)
-            .connect(connection_string)
+            .connect(&url)
             .await?;
-        
+
         info!("Database connection pool successfully initialized");
         Ok(Self { pgpool: pool })
     }
@@ -31,7 +41,7 @@ impl DB {
     pub async fn init(config: &ApplicationConfig) -> Result<Self, Error> {
         let pool = PgPoolOptions::new()
             .max_connections(50)
-            .connect(&format!("postgres://{}:{}@{}:{}/{}", config.db_username, config.db_password, config.db_host, config.db_port, config.db_schema))
+            .connect(&format!("postgres://{}:{}@{}:{}/{}?options=-c statement_timeout=30000", config.db_username, config.db_password, config.db_host, config.db_port, config.db_schema))
             .await?;
         Ok(Self { pgpool: pool })
     }
@@ -281,6 +291,60 @@ impl DB {
         .fetch_one(&self.pgpool)
         .await
         .map(|row| row.get::<i32, _>("id"))
+    }
+
+    /// Batch insert packets with a single multi-row INSERT.
+    /// Returns the list of generated packet IDs in insertion order.
+    pub async fn insert_packets_batch(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i32>, Error> {
+        if packets.is_empty() { return Ok(vec![]); }
+
+        let mut query = String::from(
+            "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES "
+        );
+        let mut param_idx = 1u32;
+
+        for (i, _) in packets.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})",
+                param_idx, param_idx + 1, param_idx + 2, param_idx + 3, param_idx + 4));
+            param_idx += 5;
+        }
+        query.push_str(" RETURNING id");
+
+        let mut q = sqlx::query_scalar::<_, i32>(&query);
+        for pkt in packets {
+            let direction_str: &str = match pkt.direction.as_str() {
+                "inbound" => "dest",
+                _ => "orig",
+            };
+            q = q.bind(pkt.timestamp_seconds as i64)
+                 .bind(pkt.timestamp_microseconds as i64)
+                 .bind(direction_str)
+                 .bind(pkt.stream_id as i32)
+                 .bind(&pkt.payload);
+        }
+
+        q.fetch_all(&self.pgpool).await
+    }
+
+    /// Update stream's last_packet_time.
+    pub async fn update_stream_last_packet_time(&self, stream_id: usize, timestamp: i64) -> Result<(), Error> {
+        sqlx::query(
+            "UPDATE stream SET last_packet_time = to_timestamp($1) WHERE id = $2"
+        )
+        .bind(timestamp)
+        .bind(stream_id as i32)
+        .execute(&self.pgpool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Send pg_notify for materialized view / stream refresh.
+    pub async fn notify_refresh_streams(&self) -> Result<(), Error> {
+        sqlx::query("SELECT pg_notify('refresh_streams', '')")
+            .execute(&self.pgpool)
+            .await
+            .map(|_| ())
     }
 
     /// Load all proto files grouped by service_id.
