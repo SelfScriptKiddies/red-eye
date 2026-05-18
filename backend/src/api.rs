@@ -40,6 +40,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(protect::config)
             .configure(proto::config)
             .configure(stats::config)
+            .configure(crate::health::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
 }

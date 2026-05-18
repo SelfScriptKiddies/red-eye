@@ -30,6 +30,7 @@ use tokio::sync::broadcast;
 mod api;
 mod configuration;
 mod db;
+mod health;
 
 
 
@@ -69,7 +70,14 @@ pub async fn run() -> std::io::Result<()> {
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
-    
+
+    health::init_start_time();
+    let health_monitor = Arc::new(health::HealthMonitor::new(
+        config.health_query_warn_ms,
+        config.health_query_critical_ms,
+    ));
+    let health_data = web::Data::new(health_monitor.clone());
+
     // Создаём UpdateAgent для использования в web и фоновой задаче
     let updater_arc = Arc::new(UpdateAgent::new(&config).await);
     let updater = web::Data::from(updater_arc.clone());
@@ -266,6 +274,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(updater.clone())
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
+            .app_data(health_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

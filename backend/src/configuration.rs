@@ -146,4 +146,35 @@ pub struct ApplicationConfig {
         default = 40000
     )]
     pub cleanup_max_disk_mb: i64,
+
+    /// Health monitoring
+    #[source(
+        clap(long="health-query-warn-ms", help="P95 above this triggers degraded mode", help_heading = "Health"),
+        env = "HEALTH_QUERY_WARN_MS",
+        config = "health.query_warn_ms",
+        default = 3000
+    )]
+    pub health_query_warn_ms: u64,
+    #[source(
+        clap(long="health-query-critical-ms", help="P95 above this triggers critical mode", help_heading = "Health"),
+        env = "HEALTH_QUERY_CRITICAL_MS",
+        config = "health.query_critical_ms",
+        default = 8000
+    )]
+    pub health_query_critical_ms: u64,
+    #[source(
+        clap(long="health-kill-query-after-ms", help="Kill individual queries running longer than this", help_heading = "Health"),
+        env = "HEALTH_KILL_QUERY_AFTER_MS",
+        config = "health.kill_query_after_ms",
+        default = 30000
+    )]
+    pub health_kill_query_after_ms: u64,
+    /// Frontend settings
+    #[source(
+        clap(long="max-selected-streams", help="Max streams selectable in multi-select mode", help_heading = "Frontend"),
+        env = "MAX_SELECTED_STREAMS",
+        config = "frontend.max_selected_streams",
+        default = 10
+    )]
+    pub max_selected_streams: i32,
 }
