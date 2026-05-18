@@ -67,65 +67,46 @@ impl PacketProcessor {
     }
     
     async fn find_stream_id(&self, packet: &PacketInfo, direction: &Direction, service_id: usize) -> Result<usize, Error> {
-        // Swap src and dst if direction is inbound
         let (src_ip, dst_ip, src_port, dst_port) = match direction {
             Direction::Outbound => (
-                &packet.src_ip,
-                &packet.dst_ip,
-                packet.src_port,
-                packet.dst_port,
+                &packet.src_ip, &packet.dst_ip, packet.src_port, packet.dst_port,
             ),
             Direction::Inbound => (
-                &packet.dst_ip,
-                &packet.src_ip,
-                packet.dst_port,
-                packet.src_port,
+                &packet.dst_ip, &packet.src_ip, packet.dst_port, packet.src_port,
             ),
         };
-        
+
         let key = StreamsCache::format_key(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port);
 
-        // Fast lookup without lock (read-only check)
-        {
-            let mut stream_cache = self.cache.streams.lock().await;
-            if let Some(id) = stream_cache.get_by_key(&key) {
-                return Ok(id);
-            }
+        // Lock-free lookup
+        if let Some(id) = self.cache.streams.get_by_key(&key) {
+            return Ok(id);
         }
 
-        // Get or create a per-key lock to prevent race conditions for this specific stream
-        // This allows different streams to be processed concurrently while preventing
-        // duplicate creation for the same stream
+        // Per-key lock for stream creation (prevents duplicates)
         let lock = self.cache.stream_locks
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
-        
+
         let _guard = lock.lock().await;
 
-        // Double-check after acquiring lock (another thread might have created it)
-        {
-            let mut stream_cache = self.cache.streams.lock().await;
-            if let Some(stream_id) = stream_cache.get_by_key(&key) {
-                return Ok(stream_id);
-            }
-        }
-
-        // If not found in cache, try database
-        if let Some(stream_id) = self.db.get_stream_id(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port).await {
-            // Insert into cache for future lookups
-            let mut stream_cache = self.cache.streams.lock().await;
-            stream_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+        // Double-check after lock
+        if let Some(stream_id) = self.cache.streams.get_by_key(&key) {
             return Ok(stream_id);
         }
-        
-        // If not found, create new stream
+
+        // Try database
+        if let Some(stream_id) = self.db.get_stream_id(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port).await {
+            self.cache.streams.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+            return Ok(stream_id);
+        }
+
+        // Create new stream
         let stream_id = self.db.create_stream(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, &packet.protocol, &packet.ip_version, service_id).await
-                                        .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
-        
-        // Insert into cache
-        let mut stream_cache = self.cache.streams.lock().await;
-        stream_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+            .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
+
+        self.cache.streams.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
         Ok(stream_id)
     }
 

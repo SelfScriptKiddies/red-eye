@@ -39,22 +39,26 @@ pub async fn run() {
     debug!("{:?}", config);
 
     let cache = Arc::new(
-        cache::Cache::new(config.cache_streams_capacity)
+        cache::Cache::new(config.cache_stream_ttl_secs)
     );
 
-    // Periodic cleanup task for unused stream locks (every 5 minutes)
-    // This prevents memory accumulation from old stream locks
+    // Periodic eviction task for expired streams and unused locks
     tokio::spawn({
         let cache = cache.clone();
+        let interval_secs = config.cache_eviction_interval_secs;
         async move {
             use tokio::time::{interval, Duration};
-            let mut cleanup_interval = interval(Duration::from_secs(5 * 60));
+            let mut cleanup_interval = interval(Duration::from_secs(interval_secs));
             cleanup_interval.tick().await;
 
             loop {
                 cleanup_interval.tick().await;
-                cache.cleanup_unused_locks().await;
-                debug!("Cleaned up unused stream locks");
+                let evicted = cache.streams.evict_expired();
+                cache.cleanup_unused_locks();
+                if evicted > 0 {
+                    debug!("Cache eviction: removed {} expired streams, {} remaining",
+                        evicted, cache.streams.len());
+                }
             }
         }
     });

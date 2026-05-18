@@ -11,44 +11,36 @@ pub use streams::StreamsCache as StreamsCache;
 
 pub struct Cache {
     pub services: Arc<RwLock<HashMap<usize, dto::Service>>>,
-    pub streams: Arc<Mutex<StreamsCache>>,
+    pub streams: Arc<StreamsCache>,
     pub stream_locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
-    /// service_id → parsed proto schema (for gRPC field name resolution)
     pub proto_schemas: Arc<RwLock<HashMap<usize, ProtoSchema>>>,
+    pub header_sets: Arc<DashMap<i64, i32>>,
 }
 
 impl Cache {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(stream_ttl_secs: u64) -> Self {
         Cache {
             services: Arc::new(RwLock::new(HashMap::new())),
-            streams: Arc::new(Mutex::new(StreamsCache::new(capacity))),
+            streams: Arc::new(StreamsCache::new(stream_ttl_secs)),
             stream_locks: Arc::new(DashMap::new()),
             proto_schemas: Arc::new(RwLock::new(HashMap::new())),
+            header_sets: Arc::new(DashMap::new()),
         }
     }
 
-    /// Clean up unused stream locks - removes locks for keys that are not in the LRU cache
-    /// This prevents memory accumulation from old stream locks
-    pub async fn cleanup_unused_locks(&self) {
-        let mut stream_cache = self.streams.lock().await;
-        
-        // Collect keys to remove (locks for streams not in cache)
+    pub fn cleanup_unused_locks(&self) {
         let keys_to_remove: Vec<String> = self.stream_locks
             .iter()
             .filter_map(|entry| {
-                let key = entry.key();
-                if !stream_cache.contains_key(key) {
-                    Some(key.clone())
+                if !self.streams.contains_key(entry.key()) {
+                    Some(entry.key().clone())
                 } else {
                     None
                 }
             })
             .collect();
-
-        // Remove unused locks
         for key in keys_to_remove {
             self.stream_locks.remove(&key);
         }
     }
 }
-
