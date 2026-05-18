@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { fetchApi } from '../../lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { apiFetch } from '../../lib/api';
+import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
 import './MainPage.css';
 
 interface Agent {
@@ -35,27 +36,47 @@ interface FarmStatus {
 }
 
 export function MainPage() {
-    const [agents, setAgents] = useState<Agent[]>([]);
-    const [metrics, setMetrics] = useState<TagMetric[]>([]);
-    const [streams, setStreams] = useState<StreamSummary[]>([]);
-    const [farmStatus, setFarmStatus] = useState<FarmStatus>({ farm_url: '', farm_enabled: 'false' });
-    const [flagBalance, setFlagBalance] = useState<any[]>([]);
-    const [packetsPerMin, setPacketsPerMin] = useState<number | null>(null);
+    const { statsRefetchInterval } = useRealtimeUpdates(true);
 
-    const fetchAll = () => {
-        fetch('/api/agent').then(r => r.json()).then(d => setAgents(Array.isArray(d) ? d : [])).catch(() => {});
-        fetch('/api/tag/metrics?minutes=30').then(r => r.json()).then(d => setMetrics(Array.isArray(d) ? d : [])).catch(() => {});
-        fetch('/api/stream?limit=10&offset=0').then(r => r.json()).then(d => setStreams(Array.isArray(d) ? d : [])).catch(() => {});
-        fetch('/api/settings').then(r => r.json()).then(d => setFarmStatus(d)).catch(() => {});
-        fetchApi('/api/tag/flag-balance?minutes=5').then(d => { if (d) setFlagBalance(Array.isArray(d) ? d : []); });
-        fetchApi('/api/stats/rate').then(d => { if (d) setPacketsPerMin(d.packets_per_minute ?? null); });
-    };
+    const { data: agents = [] } = useQuery({
+        queryKey: ['agents'],
+        queryFn: ({ signal }) => apiFetch<Agent[]>('/api/agent', signal),
+        refetchInterval: statsRefetchInterval,
+        select: (d) => Array.isArray(d) ? d : [],
+    });
 
-    useEffect(() => {
-        fetchAll();
-        const interval = setInterval(fetchAll, 10000);
-        return () => clearInterval(interval);
-    }, []);
+    const { data: metrics = [] } = useQuery({
+        queryKey: ['tagMetrics'],
+        queryFn: ({ signal }) => apiFetch<TagMetric[]>('/api/tag/metrics?minutes=30', signal),
+        refetchInterval: statsRefetchInterval,
+    });
+
+    const { data: streams = [] } = useQuery({
+        queryKey: ['recentStreams'],
+        queryFn: ({ signal }) => apiFetch<StreamSummary[]>('/api/stream?limit=10&offset=0', signal),
+        refetchInterval: statsRefetchInterval,
+        select: (d) => Array.isArray(d) ? d : [],
+    });
+
+    const { data: farmStatus = { farm_url: '', farm_enabled: 'false' } } = useQuery({
+        queryKey: ['farmStatus'],
+        queryFn: ({ signal }) => apiFetch<FarmStatus>('/api/settings', signal),
+        refetchInterval: statsRefetchInterval,
+    });
+
+    const { data: flagBalance = [] } = useQuery({
+        queryKey: ['flagBalance'],
+        queryFn: ({ signal }) => apiFetch<any[]>('/api/tag/flag-balance?minutes=5', signal),
+        refetchInterval: statsRefetchInterval,
+        select: (d) => Array.isArray(d) ? d : [],
+    });
+
+    const { data: packetsPerMin = null } = useQuery({
+        queryKey: ['statsRate'],
+        queryFn: ({ signal }) => apiFetch<{ packets_per_minute: number }>('/api/stats/rate', signal),
+        refetchInterval: statsRefetchInterval,
+        select: (d) => d?.packets_per_minute ?? null,
+    });
 
     const onlineAgents = agents.filter(a => a.online);
     const totalProxyRules = agents.reduce((sum, a) => sum + a.harpoon_rules.length, 0);

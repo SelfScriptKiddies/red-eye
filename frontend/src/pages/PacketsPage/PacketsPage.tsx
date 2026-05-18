@@ -7,10 +7,11 @@ import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
 
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
-import { fetchApi, copyText } from '../../lib/api';
+import { apiFetch, copyText } from '../../lib/api';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
+import { useRedEye } from '../../context/RedEyeContext';
 
 
 interface PacketEvent {
@@ -45,8 +46,8 @@ export function PacketsPage() {
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 
-    // Получаем состояние RedEye из localStorage
-    const isRedEyeActive = localStorage.getItem('redEyeActive') === 'true';
+    // Получаем состояние RedEye из контекста
+    const { isActive: isRedEyeActive } = useRedEye();
 
     const streamTags = useMemo(() => filterMode === 'and' ? usedTags : [], [filterMode, usedTags]);
     const streamServices = useMemo(() => filterMode === 'and' ? usedServices : [], [filterMode, usedServices]);
@@ -59,7 +60,8 @@ export function PacketsPage() {
         refresh,
         updateStream,
         clearStreams,
-        loadStreams,
+        loadMore,
+        patchStreams,
     } = useStreams({
         tags: streamTags,
         services: streamServices,
@@ -82,18 +84,18 @@ export function PacketsPage() {
         loadMultipleStreams,
     } = usePackets(streamsArray, servicesArray);
 
-    useRealtimeUpdates(refresh, !isRedEyeActive);
+    const { streamRefetchInterval, statsRefetchInterval } = useRealtimeUpdates(!isRedEyeActive, patchStreams, selectedStreamIds);
 
     const getServices = async () => {
         if (servicesLoaded) return;
         setServicesLoaded(true);
-        const data = await fetchApi("/api/service");
+        const data = await apiFetch<any[]>("/api/service");
         if (data) setServices(Object.values(data));
     };
     const getTags = async () => {
         if (tagsLoaded) return;
         setTagsLoaded(true);
-        const data = await fetchApi("/api/tag/names");
+        const data = await apiFetch<any[]>("/api/tag/names");
         if (data) {
             const tagsData = Object.values(data) as any[];
             setTags(tagsData as any);
@@ -140,7 +142,7 @@ export function PacketsPage() {
         if (found.length > 0) {
             setHeaderFilteredStreams(found);
         } else {
-            fetchApi(`/api/stream?limit=200&offset=0`)
+            apiFetch<any[]>(`/api/stream?limit=200&offset=0`)
                 .then(data => {
                     if (data) {
                         const all = Object.values(data) as any[];
@@ -152,7 +154,7 @@ export function PacketsPage() {
         }
     }, [headerSearchResults]);
 
-    const filteredStreams = (() => {
+    const filteredStreams = useMemo(() => {
         let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
         if (headerExcludeIds.size > 0) {
             streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
@@ -173,7 +175,7 @@ export function PacketsPage() {
             });
         }
         return streams;
-    })();
+    }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, showFavoritesOnly, filterMode, usedTags, usedServices, tagsArray]);
 
     const addHeaderFilter = (name: string, value: string, exclude: boolean = false) => {
         const exists = headerFilters.some(f => f.name === name && f.value === value && f.exclude === exclude);
