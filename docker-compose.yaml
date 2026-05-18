@@ -3,6 +3,7 @@ services:
     build:
       context: ./database
     restart: always
+    shm_size: 512m
     env_file:
       - .env
     environment:

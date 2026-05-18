@@ -5,7 +5,7 @@ use crate::configuration::ApplicationConfig;
 
 pub async fn establish_connection(config: &ApplicationConfig) -> Pool<Postgres> {
     let database_url = format!(
-        "postgres://{}:{}@{}:{}/{}",
+        "postgres://{}:{}@{}:{}/{}?options=-c statement_timeout=15000",
         &config.db_username,
         &config.db_password,
         &config.db_host,
@@ -15,7 +15,7 @@ pub async fn establish_connection(config: &ApplicationConfig) -> Pool<Postgres> 
 
     debug!("postgresql: {:?}", database_url);
     PgPoolOptions::new()
-        .max_connections(25)
+        .max_connections(50)
         .connect(database_url.as_str())
         .await
         .unwrap_or_else(|error: Error| {
