@@ -154,7 +154,7 @@ impl PacketProcessor {
 
             // Deduplicate headers
             let header_set_id = if !parsed.headers.is_empty() {
-                match self.db.get_or_create_header_set(&parsed.headers).await {
+                match self.db.get_or_create_header_set(&parsed.headers, &self.cache.header_sets).await {
                     Ok(id) => Some(id),
                     Err(e) => {
                         error!("Failed to store header set: {:?}", e);

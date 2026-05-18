@@ -167,9 +167,11 @@ impl DB {
     }
 
     /// Get or create a deduplicated header set. Returns the header_set id.
+    /// Uses in-memory cache to avoid DB round-trips for repeated header sets.
     pub async fn get_or_create_header_set(
         &self,
         headers: &[(String, String)],
+        cache: &dashmap::DashMap<i64, i32>,
     ) -> Result<i32, Error> {
         use std::collections::BTreeMap;
         use std::hash::{Hash, Hasher};
@@ -183,7 +185,12 @@ impl DB {
         json.to_string().hash(&mut hasher);
         let hash = hasher.finish() as i64;
 
-        // Try to find existing
+        // Check in-memory cache first
+        if let Some(id) = cache.get(&hash) {
+            return Ok(*id);
+        }
+
+        // Try to find existing in DB
         let existing = sqlx::query_scalar::<_, i32>(
             "SELECT id FROM header_set WHERE hash = $1"
         )
@@ -192,11 +199,12 @@ impl DB {
         .await?;
 
         if let Some(id) = existing {
+            cache.insert(hash, id);
             return Ok(id);
         }
 
         // Insert new (ON CONFLICT for race conditions)
-        sqlx::query_scalar::<_, i32>(
+        let id = sqlx::query_scalar::<_, i32>(
             "INSERT INTO header_set (hash, headers) VALUES ($1, $2)
              ON CONFLICT (hash) DO UPDATE SET hash = header_set.hash
              RETURNING id"
@@ -204,7 +212,10 @@ impl DB {
         .bind(hash)
         .bind(json)
         .fetch_one(&self.pgpool)
-        .await
+        .await?;
+
+        cache.insert(hash, id);
+        Ok(id)
     }
 
     /// Insert an HTTP message with a reference to a deduplicated header set.

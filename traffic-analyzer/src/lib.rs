@@ -97,6 +97,31 @@ pub async fn run() {
         }
     });
 
+    // Warm service cache from DB before consuming packets
+    {
+        let rows = sqlx::query_as::<_, (i32, String, i32, bool, bool, bool, bool, bool, bool)>(
+            "SELECT id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap_or_default();
+
+        let mut services = cache.services.write().unwrap();
+        for (id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse) in rows {
+            services.insert(id as usize, configuration::updater::dto::Service {
+                name,
+                port: port as u16,
+                chunked_transfer_encoding,
+                decrypt_tls,
+                inflate_websockets,
+                merge_adjacent_packets,
+                urldecode,
+                http_parse,
+            });
+        }
+        info!("Loaded {} services from DB into cache", services.len());
+    }
+
     // Create batch channel and spawn the flusher
     let (batch_tx, batch_rx) = batch_flusher::create_batch_channel(config.batch_size * 4);
 
