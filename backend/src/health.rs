@@ -123,7 +123,7 @@ pub async fn health_endpoint(
     let resp = HealthResponse {
         state: monitor.state(),
         p95_ms: monitor.p95_ms(),
-        pool_active: pool.size() - pool.num_idle() as u32,
+        pool_active: pool.size().saturating_sub(pool.num_idle() as u32),
         pool_idle: pool.num_idle() as u32,
         pool_max: pool.size(),
         uptime_secs: uptime,

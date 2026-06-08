@@ -28,6 +28,11 @@ export function useWebSocket(
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const attemptRef = useRef(0);
+    const onPatchStreamsRef = useRef(onPatchStreams);
+    const selectedStreamIdsRef = useRef(selectedStreamIds);
+
+    onPatchStreamsRef.current = onPatchStreams;
+    selectedStreamIdsRef.current = selectedStreamIds;
 
     const flush = useCallback(() => {
         const events = bufferRef.current;
@@ -45,7 +50,7 @@ export function useWebSocket(
                 invalidateKeys.add(`tags-${evt.stream_id}`);
                 invalidateKeys.add('streams');
             } else if (evt.type === 'packets_available' && evt.stream_id != null) {
-                if (selectedStreamIds?.includes(evt.stream_id)) {
+                if (selectedStreamIdsRef.current?.includes(evt.stream_id)) {
                     invalidateKeys.add(`packets-${evt.stream_id}`);
                 }
             } else if (evt.type === 'new_stream') {
@@ -53,8 +58,8 @@ export function useWebSocket(
             }
         }
 
-        if (patches.size > 0 && onPatchStreams) {
-            onPatchStreams(patches);
+        if (patches.size > 0 && onPatchStreamsRef.current) {
+            onPatchStreamsRef.current(patches);
         }
 
         for (const key of invalidateKeys) {
@@ -68,7 +73,7 @@ export function useWebSocket(
                 queryClient.invalidateQueries({ queryKey: ['packets', id] });
             }
         }
-    }, [onPatchStreams, selectedStreamIds]);
+    }, []);
 
     const scheduleFlush = useCallback(() => {
         if (!timerRef.current) {
