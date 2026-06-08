@@ -29,6 +29,7 @@ impl TeamCache {
 /// Dedup + retry queue for flag submissions.
 struct FlagQueue {
     submitted: HashSet<String>,
+    submitted_order: VecDeque<String>,
     retry_queue: VecDeque<FlagEntry>,
 }
 
@@ -42,8 +43,26 @@ impl FlagQueue {
     fn new() -> Self {
         Self {
             submitted: HashSet::new(),
+            submitted_order: VecDeque::new(),
             retry_queue: VecDeque::new(),
         }
+    }
+
+    fn mark_submitted(&mut self, flag: String) {
+        if self.submitted.insert(flag.clone()) {
+            self.submitted_order.push_back(flag);
+        }
+        while self.submitted.len() > MAX_SUBMITTED_CACHE {
+            if let Some(oldest) = self.submitted_order.pop_front() {
+                self.submitted.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn is_known(&self, flag: &str) -> bool {
+        self.submitted.contains(flag) || self.retry_queue.iter().any(|e| e.flag == flag)
     }
 }
 
@@ -161,10 +180,15 @@ pub fn spawn_special_trigger_handler(
                             req = req.header("Authorization", &farm_password);
                         }
                         match req.send().await {
-                            Ok(resp) => {
+                            Ok(resp) if resp.status().is_success() => {
                                 info!("Retry succeeded for flag '{}': {}", entry.flag, resp.status());
                                 let flag = q.retry_queue.remove(i).unwrap().flag;
-                                q.submitted.insert(flag);
+                                q.mark_submitted(flag);
+                            }
+                            Ok(resp) => {
+                                warn!("Retry rejected for flag '{}': {}", entry.flag, resp.status());
+                                q.retry_queue[i].attempts += 1;
+                                i += 1;
                             }
                             Err(_) => {
                                 q.retry_queue[i].attempts += 1;
@@ -240,11 +264,11 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
         }
     };
 
-    // Check dedup — skip if already submitted
+    // Check dedup — skip if already submitted or queued for retry
     {
         let q = flag_queue.read().await;
-        if q.submitted.contains(&matched) {
-            debug!("Flag '{}' already submitted, skipping", matched);
+        if q.is_known(&matched) {
+            debug!("Flag '{}' already submitted or queued, skipping", matched);
             return;
         }
     }
@@ -281,17 +305,19 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
     }
 
     match req.send().await {
-        Ok(resp) => {
-            info!("Farm response: {} for flag '{}'", resp.status(), matched);
+        Ok(resp) if resp.status().is_success() => {
+            info!("Farm accepted flag '{}': {}", matched, resp.status());
             let mut q = flag_queue.write().await;
-            q.submitted.insert(matched);
-            if q.submitted.len() > MAX_SUBMITTED_CACHE {
-                let drain_count = q.submitted.len() / 2;
-                let to_remove: Vec<String> = q.submitted.iter().take(drain_count).cloned().collect();
-                for key in to_remove {
-                    q.submitted.remove(&key);
-                }
-            }
+            q.mark_submitted(matched);
+        }
+        Ok(resp) => {
+            warn!("Farm rejected flag '{}': {}", matched, resp.status());
+            let mut q = flag_queue.write().await;
+            q.retry_queue.push_back(FlagEntry {
+                flag: matched,
+                team,
+                attempts: 1,
+            });
         }
         Err(e) => {
             error!("Farm submit failed: {}", e);
