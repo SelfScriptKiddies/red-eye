@@ -15,15 +15,25 @@ impl DB {
         Self { pgpool }
     }
 
+    pub fn pool(&self) -> &PgPool {
+        &self.pgpool
+    }
+
     /// Initialize database connection pool
     pub async fn connect(connection_string: &str) -> Result<Self, Error> {
         info!("Initializing database connection pool");
-        
+
+        let url = if connection_string.contains('?') {
+            format!("{}&options=-c statement_timeout=30000", connection_string)
+        } else {
+            format!("{}?options=-c statement_timeout=30000", connection_string)
+        };
+
         let pool = PgPoolOptions::new()
             .max_connections(50)
-            .connect(connection_string)
+            .connect(&url)
             .await?;
-        
+
         info!("Database connection pool successfully initialized");
         Ok(Self { pgpool: pool })
     }
@@ -31,7 +41,7 @@ impl DB {
     pub async fn init(config: &ApplicationConfig) -> Result<Self, Error> {
         let pool = PgPoolOptions::new()
             .max_connections(50)
-            .connect(&format!("postgres://{}:{}@{}:{}/{}", config.db_username, config.db_password, config.db_host, config.db_port, config.db_schema))
+            .connect(&format!("postgres://{}:{}@{}:{}/{}?options=-c statement_timeout=30000", config.db_username, config.db_password, config.db_host, config.db_port, config.db_schema))
             .await?;
         Ok(Self { pgpool: pool })
     }
@@ -157,9 +167,11 @@ impl DB {
     }
 
     /// Get or create a deduplicated header set. Returns the header_set id.
+    /// Uses in-memory cache to avoid DB round-trips for repeated header sets.
     pub async fn get_or_create_header_set(
         &self,
         headers: &[(String, String)],
+        cache: &dashmap::DashMap<i64, i32>,
     ) -> Result<i32, Error> {
         use std::collections::BTreeMap;
         use std::hash::{Hash, Hasher};
@@ -173,7 +185,12 @@ impl DB {
         json.to_string().hash(&mut hasher);
         let hash = hasher.finish() as i64;
 
-        // Try to find existing
+        // Check in-memory cache first
+        if let Some(id) = cache.get(&hash) {
+            return Ok(*id);
+        }
+
+        // Try to find existing in DB
         let existing = sqlx::query_scalar::<_, i32>(
             "SELECT id FROM header_set WHERE hash = $1"
         )
@@ -182,11 +199,12 @@ impl DB {
         .await?;
 
         if let Some(id) = existing {
+            cache.insert(hash, id);
             return Ok(id);
         }
 
         // Insert new (ON CONFLICT for race conditions)
-        sqlx::query_scalar::<_, i32>(
+        let id = sqlx::query_scalar::<_, i32>(
             "INSERT INTO header_set (hash, headers) VALUES ($1, $2)
              ON CONFLICT (hash) DO UPDATE SET hash = header_set.hash
              RETURNING id"
@@ -194,7 +212,10 @@ impl DB {
         .bind(hash)
         .bind(json)
         .fetch_one(&self.pgpool)
-        .await
+        .await?;
+
+        cache.insert(hash, id);
+        Ok(id)
     }
 
     /// Insert an HTTP message with a reference to a deduplicated header set.
@@ -281,6 +302,60 @@ impl DB {
         .fetch_one(&self.pgpool)
         .await
         .map(|row| row.get::<i32, _>("id"))
+    }
+
+    /// Batch insert packets with a single multi-row INSERT.
+    /// Returns the list of generated packet IDs in insertion order.
+    pub async fn insert_packets_batch(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i32>, Error> {
+        if packets.is_empty() { return Ok(vec![]); }
+
+        let mut query = String::from(
+            "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES "
+        );
+        let mut param_idx = 1u32;
+
+        for (i, _) in packets.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})",
+                param_idx, param_idx + 1, param_idx + 2, param_idx + 3, param_idx + 4));
+            param_idx += 5;
+        }
+        query.push_str(" RETURNING id");
+
+        let mut q = sqlx::query_scalar::<_, i32>(&query);
+        for pkt in packets {
+            let direction_str: &str = match pkt.direction.as_str() {
+                "inbound" => "dest",
+                _ => "orig",
+            };
+            q = q.bind(pkt.timestamp_seconds as i64)
+                 .bind(pkt.timestamp_microseconds as i64)
+                 .bind(direction_str)
+                 .bind(pkt.stream_id as i32)
+                 .bind(&pkt.payload);
+        }
+
+        q.fetch_all(&self.pgpool).await
+    }
+
+    /// Update stream's last_packet_time.
+    pub async fn update_stream_last_packet_time(&self, stream_id: usize, timestamp: i64) -> Result<(), Error> {
+        sqlx::query(
+            "UPDATE stream SET last_packet_time = $1 WHERE id = $2"
+        )
+        .bind(timestamp)
+        .bind(stream_id as i32)
+        .execute(&self.pgpool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Send pg_notify for materialized view / stream refresh.
+    pub async fn notify_refresh_streams(&self) -> Result<(), Error> {
+        sqlx::query("SELECT pg_notify('refresh_streams', '')")
+            .execute(&self.pgpool)
+            .await
+            .map(|_| ())
     }
 
     /// Load all proto files grouped by service_id.

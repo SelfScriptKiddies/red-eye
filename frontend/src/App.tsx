@@ -2,6 +2,7 @@ import './index.css';
 import { RedEye } from './components/RedEye';
 import { AlertToast } from './components/AlertToast';
 import { Transit, PagesProvider, RenderPage, usePages } from "./PagesProvider";
+import { RedEyeProvider } from './context/RedEyeContext';
 
 function NavIcon({ to, label, children }: { to: string; label: string; children: React.ReactNode }) {
   const { name } = usePages();
@@ -19,6 +20,7 @@ function NavIcon({ to, label, children }: { to: string; label: string; children:
 
 export function App() {
   return (
+    <RedEyeProvider>
     <PagesProvider>
       <div className='section'>
         {window.location.pathname !== '/login' ? (
@@ -55,5 +57,6 @@ export function App() {
 
       {window.location.pathname !== '/login' && <AlertToast />}
     </PagesProvider>
+    </RedEyeProvider>
   )
 }

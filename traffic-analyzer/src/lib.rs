@@ -8,6 +8,7 @@ pub mod process_packet;
 pub mod http_parser;
 pub mod grpc_parser;
 pub mod proto_schema;
+pub mod batch_flusher;
 use crate::configuration::init;
 use log::{info, debug, error};
 use std::sync::Arc;
@@ -39,22 +40,26 @@ pub async fn run() {
     debug!("{:?}", config);
 
     let cache = Arc::new(
-        cache::Cache::new(config.cache_streams_capacity)
+        cache::Cache::new(config.cache_stream_ttl_secs)
     );
 
-    // Periodic cleanup task for unused stream locks (every 5 minutes)
-    // This prevents memory accumulation from old stream locks
+    // Periodic eviction task for expired streams and unused locks
     tokio::spawn({
         let cache = cache.clone();
+        let interval_secs = config.cache_eviction_interval_secs;
         async move {
             use tokio::time::{interval, Duration};
-            let mut cleanup_interval = interval(Duration::from_secs(5 * 60));
+            let mut cleanup_interval = interval(Duration::from_secs(interval_secs));
             cleanup_interval.tick().await;
 
             loop {
                 cleanup_interval.tick().await;
-                cache.cleanup_unused_locks().await;
-                debug!("Cleaned up unused stream locks");
+                let evicted = cache.streams.evict_expired();
+                cache.cleanup_unused_locks();
+                if evicted > 0 {
+                    debug!("Cache eviction: removed {} expired streams, {} remaining",
+                        evicted, cache.streams.len());
+                }
             }
         }
     });
@@ -92,7 +97,47 @@ pub async fn run() {
         }
     });
 
-    match message_broker::consume_raw_packets(consumer, cache, Arc::new(config), db).await {
+    // Warm service cache from DB before consuming packets
+    {
+        let rows = sqlx::query_as::<_, (i32, String, i32, bool, bool, bool, bool, bool, bool)>(
+            "SELECT id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap_or_default();
+
+        let mut services = cache.services.write().unwrap();
+        for (id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse) in rows {
+            services.insert(id as usize, configuration::updater::dto::Service {
+                name,
+                port: port as u16,
+                chunked_transfer_encoding,
+                decrypt_tls,
+                inflate_websockets,
+                merge_adjacent_packets,
+                urldecode,
+                http_parse,
+            });
+        }
+        info!("Loaded {} services from DB into cache", services.len());
+    }
+
+    // Create batch channel and spawn the flusher
+    let (batch_tx, batch_rx) = batch_flusher::create_batch_channel(config.batch_size * 4);
+
+    let flusher_db = db::DB::init(&config).await.unwrap();
+    let flusher_nats = message_broker::create_consumer(&config).await.ok();
+    let batch_size = config.batch_size;
+    let flush_interval = config.batch_flush_interval_ms;
+    let nats_ws_topic = config.nats_websocket_packets_topic.clone();
+    tokio::spawn(async move {
+        batch_flusher::run_batch_flusher(
+            batch_rx, flusher_db, batch_size, flush_interval,
+            flusher_nats, nats_ws_topic,
+        ).await;
+    });
+
+    match message_broker::consume_raw_packets(consumer, cache, Arc::new(config), db, batch_tx).await {
         Ok(_) => (),
         Err(e) => {
             error!("Error consuming raw packets: {}", e);

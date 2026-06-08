@@ -3,11 +3,11 @@ use crate::ethernet::PacketInfo;
 use crate::filters::apply_filters;
 use crate::http_parser;
 use crate::grpc_parser;
+use crate::batch_flusher::{ProcessedPacket, HttpMessageData, GrpcMessageData, NatsEventData};
 use log::{debug, error};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use async_nats::Client;
-use bincode::{config, Encode};
+use tokio::sync::mpsc;
 use crate::cache::Cache;
 use crate::cache::streams::StreamsCache;
 use crate::configuration::ApplicationConfig;
@@ -19,7 +19,7 @@ pub enum Direction {
     Outbound
 }
 
-#[derive(Debug, Encode)]
+#[derive(Debug)]
 pub struct PacketEvent {
     pub packet_id: i32,
     pub stream_id: usize,
@@ -32,19 +32,16 @@ pub struct PacketEvent {
     cache: Arc<Cache>,
     config: Arc<ApplicationConfig>,
     db: DB,
-    nats_client: Option<Client>,
-    nats_topic: String,
+    batch_tx: mpsc::Sender<ProcessedPacket>,
  }
 
 impl PacketProcessor {
-    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, nats_client: Option<Client>) -> Self {
-        let nats_topic = config.nats_websocket_packets_topic.clone();
+    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, batch_tx: mpsc::Sender<ProcessedPacket>) -> Self {
         Self {
             cache,
             config,
             db,
-            nats_client,
-            nats_topic,
+            batch_tx,
         }
     }
 
@@ -65,67 +62,48 @@ impl PacketProcessor {
         }
         None
     }
-    
+
     async fn find_stream_id(&self, packet: &PacketInfo, direction: &Direction, service_id: usize) -> Result<usize, Error> {
-        // Swap src and dst if direction is inbound
         let (src_ip, dst_ip, src_port, dst_port) = match direction {
             Direction::Outbound => (
-                &packet.src_ip,
-                &packet.dst_ip,
-                packet.src_port,
-                packet.dst_port,
+                &packet.src_ip, &packet.dst_ip, packet.src_port, packet.dst_port,
             ),
             Direction::Inbound => (
-                &packet.dst_ip,
-                &packet.src_ip,
-                packet.dst_port,
-                packet.src_port,
+                &packet.dst_ip, &packet.src_ip, packet.dst_port, packet.src_port,
             ),
         };
-        
+
         let key = StreamsCache::format_key(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port);
 
-        // Fast lookup without lock (read-only check)
-        {
-            let mut stream_cache = self.cache.streams.lock().await;
-            if let Some(id) = stream_cache.get_by_key(&key) {
-                return Ok(id);
-            }
+        // Lock-free lookup
+        if let Some(id) = self.cache.streams.get_by_key(&key) {
+            return Ok(id);
         }
 
-        // Get or create a per-key lock to prevent race conditions for this specific stream
-        // This allows different streams to be processed concurrently while preventing
-        // duplicate creation for the same stream
+        // Per-key lock for stream creation (prevents duplicates)
         let lock = self.cache.stream_locks
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
-        
+
         let _guard = lock.lock().await;
 
-        // Double-check after acquiring lock (another thread might have created it)
-        {
-            let mut stream_cache = self.cache.streams.lock().await;
-            if let Some(stream_id) = stream_cache.get_by_key(&key) {
-                return Ok(stream_id);
-            }
-        }
-
-        // If not found in cache, try database
-        if let Some(stream_id) = self.db.get_stream_id(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port).await {
-            // Insert into cache for future lookups
-            let mut stream_cache = self.cache.streams.lock().await;
-            stream_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+        // Double-check after lock
+        if let Some(stream_id) = self.cache.streams.get_by_key(&key) {
             return Ok(stream_id);
         }
-        
-        // If not found, create new stream
+
+        // Try database
+        if let Some(stream_id) = self.db.get_stream_id(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port).await {
+            self.cache.streams.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+            return Ok(stream_id);
+        }
+
+        // Create new stream
         let stream_id = self.db.create_stream(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, &packet.protocol, &packet.ip_version, service_id).await
-                                        .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
-        
-        // Insert into cache
-        let mut stream_cache = self.cache.streams.lock().await;
-        stream_cache.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
+            .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
+
+        self.cache.streams.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
         Ok(stream_id)
     }
 
@@ -135,7 +113,7 @@ impl PacketProcessor {
                                                             .ok_or(Error::new(std::io::ErrorKind::Other, "Service not found"))?;
 
         debug!("Processing packet: \nService ID: {:?}\nDirection: {:?}", service_id, direction);
-        
+
         let stream_id = self.find_stream_id(&packet, &direction, service_id).await?;
         debug!("Stream ID: {:?}", stream_id);
 
@@ -143,29 +121,26 @@ impl PacketProcessor {
         let triggers = apply_filters(&packet.payload);
         debug!("Triggers: {:?}", triggers);
 
-        // Inserting packet into database
-        let packet_id = self.db.insert_packet(&packet, stream_id, &direction).await
-            .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Packet insertion failed: {:?}", e)))?;
-        debug!("Packet ID: {:?}", packet_id);
-
-        // Inserting triggers into database (batched)
-        let trigger_rows: Vec<(i32, usize, usize, usize)> = triggers
+        // Flatten triggers into (filter_id, start_index, end_index)
+        let trigger_tuples: Vec<(usize, usize, usize)> = triggers
             .iter()
             .flat_map(|(filter_id, arr)| {
-                arr.iter().map(move |t| (packet_id, *filter_id, t.start_index, t.end_index))
+                arr.iter().map(move |t| (*filter_id, t.start_index, t.end_index))
             })
             .collect();
-        if !trigger_rows.is_empty() {
-            debug!("Inserting {} triggers", trigger_rows.len());
-            self.db.insert_triggers_batch(&trigger_rows).await
-                .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Trigger batch insert failed: {:?}", e)))?;
-        }
+
+        let direction_str = match direction {
+            Direction::Inbound => "inbound".to_string(),
+            Direction::Outbound => "outbound".to_string(),
+        };
 
         // Try L7 HTTP parsing (only if service has http_parse enabled)
         let should_parse_http = {
             let services = self.cache.services.read().unwrap();
             services.get(&service_id).map(|s| s.http_parse).unwrap_or(false)
         };
+
+        let mut http_message: Option<HttpMessageData> = None;
 
         if should_parse_http {
         if let Some(parsed) = http_parser::try_parse_http(&packet.payload) {
@@ -179,7 +154,7 @@ impl PacketProcessor {
 
             // Deduplicate headers
             let header_set_id = if !parsed.headers.is_empty() {
-                match self.db.get_or_create_header_set(&parsed.headers).await {
+                match self.db.get_or_create_header_set(&parsed.headers, &self.cache.header_sets).await {
                     Ok(id) => Some(id),
                     Err(e) => {
                         error!("Failed to store header set: {:?}", e);
@@ -190,102 +165,90 @@ impl PacketProcessor {
                 None
             };
 
-            match self.db.insert_http_message(
+            // Detect gRPC
+            let is_grpc = content_type.as_deref()
+                .map(|ct| ct.starts_with("application/grpc"))
+                .unwrap_or(false);
+
+            let mut grpc_data: Option<GrpcMessageData> = None;
+            let l7_protocol;
+
+            if is_grpc {
+                let body = &packet.payload[parsed.body_offset..];
+                let proto = {
+                    let schemas = self.cache.proto_schemas.read().unwrap();
+                    schemas.get(&service_id).cloned()
+                };
+                if let Some(grpc) = grpc_parser::try_parse_grpc_body(
+                    body,
+                    parsed.path.as_deref(),
+                    parsed.is_request,
+                    proto.as_ref(),
+                ) {
+                    l7_protocol = "grpc".to_string();
+                    grpc_data = Some(GrpcMessageData {
+                        stream_id,
+                        service_name: grpc.service_name,
+                        method_name: grpc.method_name,
+                        is_request: grpc.is_request,
+                        decoded_json: grpc.decoded_json,
+                        timestamp: packet.timestamp_seconds as i64,
+                    });
+                    debug!("gRPC parsed for batch");
+                } else {
+                    l7_protocol = "http2".to_string();
+                }
+            } else {
+                l7_protocol = "http1".to_string();
+            }
+
+            http_message = Some(HttpMessageData {
                 stream_id,
-                packet_id,
-                parsed.is_request,
-                parsed.method.as_deref(),
-                parsed.path.as_deref(),
-                parsed.status_code,
-                parsed.http_version.as_deref(),
-                content_type.as_deref(),
+                is_request: parsed.is_request,
+                method: parsed.method,
+                path: parsed.path,
+                status_code: parsed.status_code,
+                http_version: parsed.http_version,
+                content_type,
                 content_length,
-                parsed.body_offset as i32,
+                body_offset: parsed.body_offset as i32,
                 body_length,
                 header_set_id,
-                packet.timestamp_seconds as i64,
-            ).await {
-                Ok(msg_id) => {
-                    // Detect gRPC and parse protobuf body
-                    let is_grpc = content_type.as_deref()
-                        .map(|ct| ct.starts_with("application/grpc"))
-                        .unwrap_or(false);
+                timestamp: packet.timestamp_seconds as i64,
+                l7_protocol,
+                grpc: grpc_data,
+            });
 
-                    if is_grpc {
-                        let body = &packet.payload[parsed.body_offset..];
-
-                        let proto = {
-                            let schemas = self.cache.proto_schemas.read().unwrap();
-                            schemas.get(&service_id).cloned()
-                        };
-                        if let Some(grpc) = grpc_parser::try_parse_grpc_body(
-                            body,
-                            parsed.path.as_deref(),
-                            parsed.is_request,
-                            proto.as_ref(),
-                        ) {
-                            let _ = self.db.insert_grpc_message(
-                                stream_id,
-                                msg_id,
-                                grpc.service_name.as_deref(),
-                                grpc.method_name.as_deref(),
-                                grpc.is_request,
-                                &grpc.decoded_json,
-                                packet.timestamp_seconds as i64,
-                            ).await;
-                            let _ = self.db.update_stream_l7_protocol(stream_id, "grpc").await;
-                            debug!("gRPC parsed: {}/{}",
-                                grpc.service_name.as_deref().unwrap_or("?"),
-                                grpc.method_name.as_deref().unwrap_or("?"));
-                        } else {
-                            let _ = self.db.update_stream_l7_protocol(stream_id, "http2").await;
-                        }
-                    } else {
-                        let _ = self.db.update_stream_l7_protocol(stream_id, "http1").await;
-                    }
-
-                    debug!("HTTP {} parsed: {} headers (set_id={:?})",
-                        if parsed.is_request { "request" } else { "response" },
-                        parsed.headers.len(), header_set_id
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to insert HTTP message: {:?}", e);
-                }
-            }
+            debug!("HTTP parsed for batch: {} headers (set_id={:?})",
+                parsed.headers.len(), header_set_id
+            );
         }
         } // should_parse_http
 
-        // Send event to NATS for real-time updates
-        if let Some(ref client) = self.nats_client {
-            let event = PacketEvent {
-                packet_id,
-                stream_id,
-                timestamp_seconds: packet.timestamp_seconds,
-                timestamp_microseconds: packet.timestamp_microseconds,
-                direction: match direction {
-                    Direction::Inbound => "inbound".to_string(),
-                    Direction::Outbound => "outbound".to_string(),
-                },
-            };
-            
-            match bincode::encode_to_vec(&event, config::standard()) {
-                Ok(payload) => {
-                    let topic = self.nats_topic.clone();
-                    let client_clone = client.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = client_clone.publish(topic, payload.into()).await {
-                            error!("Failed to send packet event to NATS: {}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    error!("Failed to encode packet event: {}", e);
-                }
-            }
-        }
+        // Build NATS event data
+        let nats_event = Some(NatsEventData {
+            stream_id,
+            timestamp_seconds: packet.timestamp_seconds,
+            timestamp_microseconds: packet.timestamp_microseconds,
+            direction: direction_str.clone(),
+        });
+
+        // Build the ProcessedPacket and send to batch channel
+        let processed = ProcessedPacket {
+            timestamp_seconds: packet.timestamp_seconds,
+            timestamp_microseconds: packet.timestamp_microseconds,
+            direction: direction_str,
+            stream_id,
+            payload: packet.payload,
+            triggers: trigger_tuples,
+            http_message,
+            grpc_message: None, // gRPC is nested inside http_message
+            nats_event,
+        };
+
+        self.batch_tx.send(processed).await
+            .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Batch channel send failed: {}", e)))?;
 
         Ok(())
     }
 }
-

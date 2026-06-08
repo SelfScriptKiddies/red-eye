@@ -1,9 +1,12 @@
 import { useState, useMemo, useCallback } from 'react';
-import { fetchApi } from './api';
+import { useQueryClient } from '@tanstack/react-query';
+import { apiFetch } from './api';
 
 const MAX_PACKETS = 500;
+const MAX_SELECTED_STREAMS = 10;
 
 export function usePackets(streamsArray: any[], servicesArray: any[]) {
+    const queryClient = useQueryClient();
     const [packetsByStream, setPacketsByStream] = useState<Record<number, any[]>>({});
     const [selectedStreamIds, setSelectedStreamIds] = useState<number[]>([]);
     const [mergeOverride, setMergeOverride] = useState<boolean | null>(null);
@@ -24,14 +27,18 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
 
     const loadPacketsForStream = useCallback(async (streamId: number): Promise<any[]> => {
         try {
-            const data = await fetchApi(`/api/packet/stream_id/${streamId}`);
+            const data = await queryClient.fetchQuery({
+                queryKey: ['packets', streamId],
+                queryFn: () => apiFetch<any>(`/api/packet/stream_id/${streamId}`),
+                staleTime: 3_000,
+            });
             if (data) {
                 const packets = Object.values(data) as any[];
                 return packets.slice(0, MAX_PACKETS).map(p => ({ ...p, _stream_id: streamId }));
             }
         } catch (error) { console.error('Error fetching packets:', error); }
         return [];
-    }, []);
+    }, [queryClient]);
 
     const handleStreamClick = useCallback(async (streamId: number | string, event?: any) => {
         const numericId = typeof streamId === 'string' ? parseInt(streamId) : streamId;
@@ -49,7 +56,19 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
                     return next;
                 });
             } else {
-                setSelectedStreamIds(prev => [...prev, numericId]);
+                // Evict oldest if at limit
+                const updated = [...selectedStreamIds, numericId];
+                if (updated.length > MAX_SELECTED_STREAMS) {
+                    const evicted = updated[0];
+                    setPacketsByStream(p => {
+                        const next = { ...p };
+                        delete next[evicted];
+                        return next;
+                    });
+                    setSelectedStreamIds(updated.slice(1));
+                } else {
+                    setSelectedStreamIds(updated);
+                }
                 const packets = await loadPacketsForStream(numericId);
                 setPacketsByStream(prev => ({ ...prev, [numericId]: packets }));
             }
@@ -61,15 +80,16 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
             const packets = await loadPacketsForStream(numericId);
             setPacketsByStream({ [numericId]: packets });
         }
-    }, [streamsArray, selectedStreamIds, loadPacketsForStream]);
+    }, [selectedStreamIds, loadPacketsForStream]);
 
     // Load multiple streams at once (for shared URLs)
     const loadMultipleStreams = useCallback(async (ids: number[]) => {
         if (ids.length === 0) return;
-        setSelectedStreamIds(ids);
+        const limited = ids.slice(0, MAX_SELECTED_STREAMS);
+        setSelectedStreamIds(limited);
         setMergeOverride(null);
         const results: Record<number, any[]> = {};
-        await Promise.all(ids.map(async (id) => {
+        await Promise.all(limited.map(async (id) => {
             results[id] = await loadPacketsForStream(id);
         }));
         setPacketsByStream(results);

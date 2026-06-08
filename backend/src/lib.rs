@@ -30,6 +30,7 @@ use tokio::sync::broadcast;
 mod api;
 mod configuration;
 mod db;
+mod health;
 
 
 
@@ -69,7 +70,14 @@ pub async fn run() -> std::io::Result<()> {
     let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
-    
+
+    health::init_start_time();
+    let health_monitor = Arc::new(health::HealthMonitor::new(
+        config.health_query_warn_ms,
+        config.health_query_critical_ms,
+    ));
+    let health_data = web::Data::new(health_monitor.clone());
+
     // Создаём UpdateAgent для использования в web и фоновой задаче
     let updater_arc = Arc::new(UpdateAgent::new(&config).await);
     let updater = web::Data::from(updater_arc.clone());
@@ -89,6 +97,7 @@ pub async fn run() -> std::io::Result<()> {
         let cleanup_pool = pool.clone();
         let age_minutes = config.cleanup_stream_age_minutes;
         let interval_minutes = config.cleanup_interval_minutes;
+        let max_disk_mb = config.cleanup_max_disk_mb;
         tokio::spawn(async move {
             use tokio::time::{interval, Duration};
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
@@ -127,6 +136,72 @@ pub async fn run() -> std::io::Result<()> {
                         }
                     }
                     Err(e) => error!("Cleanup failed: {}", e),
+                }
+
+                // Disk pressure check: drop oldest partitions if total exceeds max_disk_mb
+                if max_disk_mb > 0 {
+                    loop {
+                        let total_mb: Option<i64> = sqlx::query_scalar(
+                            "SELECT (sum(pg_total_relation_size(inhrelid::regclass)) / (1024*1024))::bigint
+                             FROM pg_inherits
+                             WHERE inhparent IN ('packets'::regclass, 'tag'::regclass,
+                                                  'http_message'::regclass, 'grpc_message'::regclass)"
+                        )
+                        .fetch_one(&cleanup_pool)
+                        .await
+                        .ok();
+
+                        match total_mb {
+                            Some(mb) if mb > max_disk_mb => {
+                                info!("Disk pressure: {}MB > {}MB limit, dropping oldest partitions", mb, max_disk_mb);
+                                // Drop the single oldest partition from each table
+                                let _ = sqlx::query("SELECT cleanup_old_data(0)")
+                                    .execute(&cleanup_pool)
+                                    .await;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Materialized view refresh via LISTEN/NOTIFY
+    {
+        let refresh_pool = pool.clone();
+        tokio::spawn(async move {
+            use tokio::time::{sleep, Duration, Instant};
+
+            let mut listener = sqlx::postgres::PgListener::connect_with(&refresh_pool).await.unwrap();
+            listener.listen("refresh_streams").await.unwrap();
+            info!("Listening for refresh_streams notifications");
+
+            let debounce = Duration::from_secs(5);
+            let mut last_refresh = Instant::now() - debounce;
+
+            loop {
+                match listener.recv().await {
+                    Ok(_) => {
+                        let since_last = last_refresh.elapsed();
+                        if since_last < debounce {
+                            sleep(debounce - since_last).await;
+                        }
+                        match sqlx::query("SELECT refresh_streams_view()")
+                            .execute(&refresh_pool)
+                            .await
+                        {
+                            Ok(_) => {
+                                debug!("Refreshed streams_list_view");
+                                last_refresh = Instant::now();
+                            }
+                            Err(e) => error!("Failed to refresh mat view: {}", e),
+                        }
+                    }
+                    Err(e) => {
+                        error!("LISTEN error: {}", e);
+                        sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
         });
@@ -239,6 +314,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(updater.clone())
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
+            .app_data(health_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())
             .wrap(IdentityMiddleware::default())

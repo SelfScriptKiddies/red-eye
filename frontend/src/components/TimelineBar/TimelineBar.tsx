@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchApi } from '../../lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { apiFetch } from '../../lib/api';
 import './TimelineBar.css';
 
 const SERVICE_COLORS = [
@@ -39,7 +40,11 @@ function formatHHMM(ts: number): string {
 }
 
 export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
-    const [data, setData] = useState<HistogramBucket[]>([]);
+    const { data = [] } = useQuery({
+        queryKey: ['histogram', 60],
+        queryFn: ({ signal }) => apiFetch<HistogramBucket[]>('/api/stream/histogram?bucket_secs=60', signal),
+        refetchInterval: 10_000,
+    });
     const [collapsed, setCollapsed] = useState<boolean>(() => {
         try {
             return localStorage.getItem('timeline-collapsed') === 'true';
@@ -52,21 +57,6 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
     const chartRef = useRef<HTMLDivElement>(null);
     const MIN_WINDOW_SECS = 30 * 60; // 30 minutes minimum viewport
     const MAX_BAR_WIDTH_PCT = 6; // max bar width in % of chart
-
-    // Fetch histogram data
-    useEffect(() => {
-        let cancelled = false;
-        const load = async () => {
-            const result = await fetchApi<HistogramBucket[]>('/api/stream/histogram?bucket_secs=60');
-            if (!cancelled && result) setData(result);
-        };
-        load();
-        const interval = setInterval(load, 10_000);
-        return () => {
-            cancelled = true;
-            clearInterval(interval);
-        };
-    }, []);
 
     // Persist collapsed state
     const toggleCollapsed = useCallback(() => {

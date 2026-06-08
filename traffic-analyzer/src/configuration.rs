@@ -114,6 +114,46 @@ pub struct ApplicationConfig {
     )]
     pub cache_streams_capacity: usize,
 
+    #[source(
+        clap(long="cache-stream-ttl-secs", help="Evict cached streams not seen for this many seconds", help_heading = "Cache"),
+        env = "CACHE_STREAM_TTL_SECS",
+        config = "cache.stream_ttl_secs",
+        default = 120
+    )]
+    pub cache_stream_ttl_secs: u64,
+
+    #[source(
+        clap(long="cache-eviction-interval-secs", help="How often to sweep expired cache entries", help_heading = "Cache"),
+        env = "CACHE_EVICTION_INTERVAL_SECS",
+        config = "cache.eviction_interval_secs",
+        default = 30
+    )]
+    pub cache_eviction_interval_secs: u64,
+
+    #[source(
+        clap(long="batch-size", help="Max packets per batch insert", help_heading = "Batch"),
+        env = "BATCH_SIZE",
+        config = "batch.size",
+        default = 500
+    )]
+    pub batch_size: usize,
+
+    #[source(
+        clap(long="batch-flush-interval-ms", help="Max ms before flushing a partial batch", help_heading = "Batch"),
+        env = "BATCH_FLUSH_INTERVAL_MS",
+        config = "batch.flush_interval_ms",
+        default = 100
+    )]
+    pub batch_flush_interval_ms: u64,
+
+    #[source(
+        clap(long="analyzer-concurrency", help="Max concurrent packet processing tasks", help_heading = "Performance"),
+        env = "ANALYZER_CONCURRENCY",
+        config = "performance.concurrency",
+        default = 256
+    )]
+    pub analyzer_concurrency: usize,
+
     /// Sniffer configuration
     #[source(
         clap(short='i', long="machine-ip", help="Machine IP address", help_heading = "Sniffer"),

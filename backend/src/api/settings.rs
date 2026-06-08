@@ -15,13 +15,16 @@ pub struct SettingUpdate {
 async fn get_all_settings(
     _identity: Identity,
     pool: web::Data<PgPool>,
+    config: web::Data<crate::configuration::ApplicationConfig>,
 ) -> impl Responder {
     match sqlx::query_as::<_, (String, String)>("SELECT key, value FROM app_settings")
         .fetch_all(pool.get_ref())
         .await
     {
         Ok(rows) => {
-            let map: HashMap<String, String> = rows.into_iter().collect();
+            let mut map: HashMap<String, String> = rows.into_iter().collect();
+            map.entry("max_selected_streams".to_string())
+                .or_insert_with(|| config.max_selected_streams.to_string());
             HttpResponse::Ok().json(map)
         }
         Err(_) => HttpResponse::InternalServerError().finish(),

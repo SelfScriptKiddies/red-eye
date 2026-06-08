@@ -1,12 +1,13 @@
 use bincode;
 use tokio::task;
 use tokio::sync::Semaphore;
+use tokio::sync::mpsc;
 use std::sync::Arc;
 use anyhow::{Context, Result};
 use log::{trace, error, info};
 use futures::StreamExt;
 use async_nats::{
-    ConnectOptions, 
+    ConnectOptions,
     Client
 };
 
@@ -15,12 +16,13 @@ use crate::cache::Cache;
 use crate::ethernet::parse_packet;
 use crate::process_packet::PacketProcessor;
 use crate::configuration::ApplicationConfig;
+use crate::batch_flusher::ProcessedPacket;
 
 
 pub async fn create_consumer(config: &ApplicationConfig) -> Result<Client> {
     let host = config.nats_host.clone();
     let client = ConnectOptions::with_user_and_password(
-        config.nats_login.clone(), 
+        config.nats_login.clone(),
         config.nats_password.clone()
     ).connect(&host).await
     .with_context(|| format!("Error connecting to NATS: {}", &host))?;
@@ -28,26 +30,15 @@ pub async fn create_consumer(config: &ApplicationConfig) -> Result<Client> {
     Ok(client)
 }
 
-pub async fn consume_raw_packets(client: Client, cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB) -> Result<()> {
+pub async fn consume_raw_packets(client: Client, cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, batch_tx: mpsc::Sender<ProcessedPacket>) -> Result<()> {
     let subject = config.nats_raw_packets_topic.clone();
-    
+
     let mut subscriber = client.subscribe(subject.clone()).await?;
     info!("Starting to consume packets from topic {}", &subject);
 
-    // Create separate NATS client for sending events (to avoid blocking on receive)
-    let nats_host = config.nats_host.clone();
-    let nats_login = config.nats_login.clone();
-    let nats_password = config.nats_password.clone();
-    let event_client = ConnectOptions::with_user_and_password(
-        nats_login,
-        nats_password
-    )
-    .connect(&nats_host)
-    .await
-    .ok(); // Optional - if connection fails, we just won't send events
-
-    let packet_processor = Arc::new(PacketProcessor::new(cache, config, db, event_client));
-    let semaphore = Arc::new(Semaphore::new(256));
+    let concurrency = config.analyzer_concurrency;
+    let packet_processor = Arc::new(PacketProcessor::new(cache, config, db, batch_tx));
+    let semaphore = Arc::new(Semaphore::new(concurrency));
 
     while let Some(message) = subscriber.next().await {
         // Get payload and clone it so it can live in a separate task

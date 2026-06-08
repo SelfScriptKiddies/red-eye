@@ -13,3 +13,5 @@ CREATE TABLE IF NOT EXISTS tag (
             REFERENCES tag_name(id)
             ON DELETE CASCADE
 ) PARTITION BY RANGE (timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_tag_packet_id ON tag(packet_id) INCLUDE (tag_id);

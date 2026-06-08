@@ -10,5 +10,9 @@ CREATE TABLE IF NOT EXISTS stream (
     favorite BOOLEAN NOT NULL DEFAULT FALSE,
     packet_count INTEGER NOT NULL DEFAULT 0,
     service_id INTEGER NOT NULL,
-    l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown'
+    l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown',
+    last_packet_time BIGINT
 );
+
+CREATE INDEX IF NOT EXISTS idx_stream_last_packet ON stream(last_packet_time DESC);
+CREATE INDEX IF NOT EXISTS idx_stream_service_id ON stream(service_id);
