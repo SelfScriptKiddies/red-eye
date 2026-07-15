@@ -1,6 +1,7 @@
-import { ReactElement, useCallback, CSSProperties } from "react";
+import { useCallback, CSSProperties } from "react";
 import './PacketsPage.css'
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { List as VirtualList } from 'react-window';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
@@ -138,9 +139,16 @@ export function PacketsPage() {
     const [shareCopied, setShareCopied] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+    // Live toggle (default ON). OFF fully freezes auto-updates until the user acts.
+    const [liveEnabled, setLiveEnabled] = useState(true);
+
+    const queryClient = useQueryClient();
 
     // Получаем состояние RedEye из контекста
     const { isActive: isRedEyeActive } = useRedEye();
+
+    // Live composes with the existing RedEye gate.
+    const live = liveEnabled && !isRedEyeActive;
 
     const streamTags = useMemo(() => filterMode === 'and' ? usedTags : [], [filterMode, usedTags]);
     const streamServices = useMemo(() => filterMode === 'and' ? usedServices : [], [filterMode, usedServices]);
@@ -160,7 +168,7 @@ export function PacketsPage() {
         services: streamServices,
         startTime,
         endTime,
-        enabled: !isRedEyeActive,
+        enabled: live,
     });
 
     const {
@@ -177,7 +185,16 @@ export function PacketsPage() {
         loadMultipleStreams,
     } = usePackets(streamsArray, servicesArray);
 
-    const { streamRefetchInterval, statsRefetchInterval } = useRealtimeUpdates(!isRedEyeActive, patchStreams, selectedStreamIds);
+    // Live OFF stops the WS subscription; enabled:false on useStreams already
+    // halts its refetchInterval, so no auto-updates fire until the user hits Update.
+    useRealtimeUpdates(live, patchStreams, selectedStreamIds);
+
+    // One-shot manual refresh: pull newest streams + currently visible packets.
+    const handleManualUpdate = useCallback(() => {
+        queryClient.invalidateQueries({ queryKey: ['streams'] });
+        selectedStreamIds.forEach(id => queryClient.invalidateQueries({ queryKey: ['packets', id] }));
+        if (selectedStreamIds.length > 0) loadMultipleStreams(selectedStreamIds);
+    }, [queryClient, selectedStreamIds, loadMultipleStreams]);
 
     const getServices = async () => {
         if (servicesLoaded) return;
@@ -270,27 +287,8 @@ export function PacketsPage() {
         return streams;
     }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, showFavoritesOnly, filterMode, usedTags, usedServices, tagsArray]);
 
-    const addHeaderFilter = (name: string, value: string, exclude: boolean = false) => {
-        const exists = headerFilters.some(f => f.name === name && f.value === value && f.exclude === exclude);
-        if (!exists) {
-            const updated = [...headerFilters, { name, value, exclude }];
-            setHeaderFilters(updated);
-            runHeaderSearch(updated);
-        }
-    };
-
-    const removeHeaderFilter = (index: number) => {
-        const updated = headerFilters.filter((_, i) => i !== index);
-        setHeaderFilters(updated);
-        if (updated.length > 0) {
-            runHeaderSearch(updated);
-        } else {
-            setHeaderSearchResults(null);
-            setHeaderExcludeIds(new Set());
-        }
-    };
-
-    const runHeaderSearch = async (filters: {name: string, value: string, exclude?: boolean}[]) => {
+    // Stable callbacks so memoized rowProps (below) don't churn on every render.
+    const runHeaderSearch = useCallback(async (filters: {name: string, value: string, exclude?: boolean}[]) => {
         setHeaderSearching(true);
         try {
             const includeFilters = filters.filter(f => !f.exclude);
@@ -321,6 +319,27 @@ export function PacketsPage() {
             setHeaderExcludeIds(new Set());
         }
         setHeaderSearching(false);
+    }, []);
+
+    const addHeaderFilter = useCallback((name: string, value: string, exclude: boolean = false) => {
+        setHeaderFilters(prev => {
+            const exists = prev.some(f => f.name === name && f.value === value && f.exclude === exclude);
+            if (exists) return prev;
+            const updated = [...prev, { name, value, exclude }];
+            runHeaderSearch(updated);
+            return updated;
+        });
+    }, [runHeaderSearch]);
+
+    const removeHeaderFilter = (index: number) => {
+        const updated = headerFilters.filter((_, i) => i !== index);
+        setHeaderFilters(updated);
+        if (updated.length > 0) {
+            runHeaderSearch(updated);
+        } else {
+            setHeaderSearchResults(null);
+            setHeaderExcludeIds(new Set());
+        }
     };
 
     const handleStreamNavigate = (streamId: number) => {
@@ -329,7 +348,7 @@ export function PacketsPage() {
         if (streamEl) streamEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
-    const handleFavoriteToggle = async (streamId, currentFavorite) => {
+    const handleFavoriteToggle = useCallback(async (streamId, currentFavorite) => {
         try {
             const response = await fetch(`/api/stream/${streamId}/favorite`, {
                 method: 'PUT',
@@ -344,7 +363,7 @@ export function PacketsPage() {
         } catch (error) {
             console.error('Ошибка при обновлении избранного:', error);
         }
-    };
+    }, [updateStream]);
 
     // Infinite scroll callback for virtual stream list
     const handleStreamsRowsRendered = useCallback(
@@ -355,6 +374,28 @@ export function PacketsPage() {
         },
         [filteredStreams.length, hasMoreStreams, isLoadingMore, loadMore]
     );
+
+    // Stable rowProps so react-window rows (and the React.memo'd cards) don't
+    // re-render on unrelated parent updates.
+    const streamRowProps = useMemo(() => ({
+        streams: filteredStreams,
+        selectedStreamIds,
+        handleStreamClick,
+        handleFavoriteToggle,
+        addHeaderFilter,
+        tagColors,
+    }), [filteredStreams, selectedStreamIds, handleStreamClick, handleFavoriteToggle, addHeaderFilter, tagColors]);
+
+    const packetRowProps = useMemo(() => ({
+        packets: mergedPackets,
+        isMultiSelect,
+        selectedStreamL7,
+        diffLeft,
+        addHeaderFilter,
+        setDiffLeft,
+        setDiffRight,
+        setDiffOpen,
+    }), [mergedPackets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter]);
 
     // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
@@ -604,14 +645,7 @@ export function PacketsPage() {
                             rowComponent={StreamRow}
                             rowCount={filteredStreams.length}
                             rowHeight={80}
-                            rowProps={{
-                                streams: filteredStreams,
-                                selectedStreamIds,
-                                handleStreamClick,
-                                handleFavoriteToggle,
-                                addHeaderFilter,
-                                tagColors,
-                            }}
+                            rowProps={streamRowProps}
                             onRowsRendered={handleStreamsRowsRendered}
                             defaultHeight={400}
                         />
@@ -637,6 +671,16 @@ export function PacketsPage() {
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
                         <div className="toolbar-left">
+                            <button
+                                className={`merge-toggle-btn ${liveEnabled ? 'active' : ''}`}
+                                onClick={() => setLiveEnabled(prev => !prev)}
+                                title={liveEnabled ? 'Автообновление включено — нажмите, чтобы заморозить' : 'Автообновление выключено — нажмите, чтобы возобновить'}
+                            >
+                                {liveEnabled ? 'Live вкл' : 'Live выкл'}
+                            </button>
+                            <button className="toolbar-btn" onClick={handleManualUpdate} title="Обновить вручную">
+                                Update
+                            </button>
                             {isMultiSelect && (
                                 <span style={{ fontSize: '11px', color: 'var(--re-text-muted)', marginRight: '4px' }}>{selectedStreamIds.length} streams</span>
                             )}
@@ -685,16 +729,7 @@ export function PacketsPage() {
                         rowComponent={PacketRow}
                         rowCount={mergedPackets.length}
                         rowHeight={120}
-                        rowProps={{
-                            packets: mergedPackets,
-                            isMultiSelect,
-                            selectedStreamL7,
-                            diffLeft,
-                            addHeaderFilter,
-                            setDiffLeft,
-                            setDiffRight,
-                            setDiffOpen,
-                        }}
+                        rowProps={packetRowProps}
                         defaultHeight={400}
                     />
                 )}
