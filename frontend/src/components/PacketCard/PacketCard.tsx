@@ -309,7 +309,9 @@ interface TagTrigger {
 
 export const PacketCard = memo(function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onHeaderExclude, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isGrpc ? 'grpc' : isHttp ? 'http' : 'text');
-    const [isExpanded, setIsExpanded] = useState(false);
+    // Render the full card by default; click still collapses. (PR #13's lazy
+    // collapse-by-default showed every packet as a gray preview line until clicked.)
+    const [isExpanded, setIsExpanded] = useState(true);
     const [grpcData, setGrpcData] = useState<any[] | null>(null);
     const [grpcLoading, setGrpcLoading] = useState(false);
     const [httpData, setHttpData] = useState<HttpMessageData | null>(null);
