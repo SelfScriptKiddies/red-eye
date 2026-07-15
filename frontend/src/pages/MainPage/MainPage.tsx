@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api';
-import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
 import './MainPage.css';
+
+// Stat tiles poll on a plain interval, independent of the WS connection.
+// (WS never invalidates these queries, so connection-aware gating froze them.)
+const STATS_INTERVAL_MS = 5_000;
 
 interface Agent {
     agent_id: string;
@@ -36,45 +39,43 @@ interface FarmStatus {
 }
 
 export function MainPage() {
-    const { statsRefetchInterval } = useRealtimeUpdates(true);
-
     const { data: agents = [] } = useQuery({
         queryKey: ['agents'],
         queryFn: ({ signal }) => apiFetch<Agent[]>('/api/agent', signal),
-        refetchInterval: statsRefetchInterval,
+        refetchInterval: STATS_INTERVAL_MS,
         select: (d) => Array.isArray(d) ? d : [],
     });
 
     const { data: metrics = [] } = useQuery({
         queryKey: ['tagMetrics'],
         queryFn: ({ signal }) => apiFetch<TagMetric[]>('/api/tag/metrics?minutes=30', signal),
-        refetchInterval: statsRefetchInterval,
+        refetchInterval: STATS_INTERVAL_MS,
     });
 
     const { data: streams = [] } = useQuery({
         queryKey: ['recentStreams'],
         queryFn: ({ signal }) => apiFetch<StreamSummary[]>('/api/stream?limit=10&offset=0', signal),
-        refetchInterval: statsRefetchInterval,
+        refetchInterval: STATS_INTERVAL_MS,
         select: (d) => Array.isArray(d) ? d : [],
     });
 
     const { data: farmStatus = { farm_url: '', farm_enabled: 'false' } } = useQuery({
         queryKey: ['farmStatus'],
         queryFn: ({ signal }) => apiFetch<FarmStatus>('/api/settings', signal),
-        refetchInterval: statsRefetchInterval,
+        refetchInterval: STATS_INTERVAL_MS,
     });
 
     const { data: flagBalance = [] } = useQuery({
         queryKey: ['flagBalance'],
         queryFn: ({ signal }) => apiFetch<any[]>('/api/tag/flag-balance?minutes=5', signal),
-        refetchInterval: statsRefetchInterval,
+        refetchInterval: STATS_INTERVAL_MS,
         select: (d) => Array.isArray(d) ? d : [],
     });
 
     const { data: packetsPerMin = null } = useQuery({
         queryKey: ['statsRate'],
         queryFn: ({ signal }) => apiFetch<{ packets_per_minute: number }>('/api/stats/rate', signal),
-        refetchInterval: statsRefetchInterval,
+        refetchInterval: STATS_INTERVAL_MS,
         select: (d) => d?.packets_per_minute ?? null,
     });
 

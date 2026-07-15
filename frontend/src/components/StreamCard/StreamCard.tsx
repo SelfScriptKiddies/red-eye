@@ -1,7 +1,8 @@
 import "./StreamCard.css"
+import { memo } from 'react';
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
+export const StreamCard = memo(function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {
@@ -111,4 +112,4 @@ export function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggl
             </div>
         </div>
     );
-}
+});

@@ -75,7 +75,7 @@ impl DB {
         }
     }
 
-    pub async fn create_stream(&self, src_ip: &str, src_port: u16, dst_ip: &str, dst_port: u16, protocol: &Protocol, ip_version: &IpVersion, service_id: usize) -> Result<usize, Error> {
+    pub async fn create_stream(&self, src_ip: &str, src_port: u16, dst_ip: &str, dst_port: u16, protocol: &Protocol, ip_version: &IpVersion, service_id: usize, first_packet_time: i64) -> Result<usize, Error> {
         let protocol_str: &'static str = protocol.into();
         let ip_version_str: &'static str = ip_version.into();
 
@@ -83,7 +83,7 @@ impl DB {
         let dst_ip_addr: IpAddr = dst_ip.parse().unwrap();
 
         sqlx::query(
-            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, service_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"
+            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, service_id, first_packet_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id"
         )
         .bind(src_ip_addr)
         .bind(src_port as i32)
@@ -92,9 +92,10 @@ impl DB {
         .bind(protocol_str)
         .bind(true)
         .bind(service_id as i32)
+        .bind(first_packet_time)
         .fetch_one(&self.pgpool)
         .await.map(|row| row.get::<i32, _>("id") as usize)
-        
+
     }
 
     pub async fn insert_packet(&self, packet: &PacketInfo, stream_id: usize, direction: &Direction) -> Result<i32, Error> {
@@ -338,16 +339,154 @@ impl DB {
         q.fetch_all(&self.pgpool).await
     }
 
-    /// Update stream's last_packet_time.
-    pub async fn update_stream_last_packet_time(&self, stream_id: usize, timestamp: i64) -> Result<(), Error> {
-        sqlx::query(
-            "UPDATE stream SET last_packet_time = $1 WHERE id = $2"
-        )
-        .bind(timestamp)
-        .bind(stream_id as i32)
-        .execute(&self.pgpool)
-        .await
-        .map(|_| ())
+    /// Batch insert HTTP messages with a single multi-row INSERT.
+    /// `rows` is (packet_id, http). Returns generated ids in insertion order.
+    pub async fn insert_http_messages_batch(
+        &self,
+        rows: &[(i32, &crate::batch_flusher::HttpMessageData)],
+    ) -> Result<Vec<i32>, Error> {
+        if rows.is_empty() { return Ok(vec![]); }
+
+        const COLS: usize = 13;
+        let mut query = String::from(
+            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp) VALUES "
+        );
+        for (i, _) in rows.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            let base = i * COLS;
+            query.push('(');
+            for c in 0..COLS {
+                if c > 0 { query.push_str(", "); }
+                query.push_str(&format!("${}", base + c + 1));
+            }
+            query.push(')');
+        }
+        query.push_str(" RETURNING id");
+
+        let mut q = sqlx::query_scalar::<_, i32>(&query);
+        for (packet_id, http) in rows {
+            q = q.bind(http.stream_id as i32)
+                 .bind(*packet_id)
+                 .bind(http.is_request)
+                 .bind(http.method.as_deref())
+                 .bind(http.path.as_deref())
+                 .bind(http.status_code.map(|c| c as i16))
+                 .bind(http.http_version.as_deref())
+                 .bind(http.content_type.as_deref())
+                 .bind(http.content_length)
+                 .bind(http.body_offset)
+                 .bind(http.body_length)
+                 .bind(http.header_set_id)
+                 .bind(http.timestamp);
+        }
+        q.fetch_all(&self.pgpool).await
+    }
+
+    /// Batch insert gRPC messages. `rows` is (http_message_id, grpc).
+    /// Dedups body sets by hash (mirrors insert_grpc_message) with two multi-row queries.
+    pub async fn insert_grpc_messages_batch(
+        &self,
+        rows: &[(i32, &crate::batch_flusher::GrpcMessageData)],
+    ) -> Result<(), Error> {
+        if rows.is_empty() { return Ok(()); }
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        // Compute per-row body hash and dedupe distinct body sets.
+        let mut hashes: Vec<i64> = Vec::with_capacity(rows.len());
+        let mut distinct: HashMap<i64, &str> = HashMap::new();
+        for (_, grpc) in rows {
+            let mut hasher = DefaultHasher::new();
+            grpc.decoded_json.hash(&mut hasher);
+            let h = hasher.finish() as i64;
+            hashes.push(h);
+            distinct.entry(h).or_insert(grpc.decoded_json.as_str());
+        }
+
+        // Multi-row upsert distinct body sets -> map hash -> id.
+        let distinct: Vec<(i64, &str)> = distinct.into_iter().collect();
+        let mut q1 = String::from("INSERT INTO grpc_body_set (hash, decoded_json) VALUES ");
+        for (i, _) in distinct.iter().enumerate() {
+            if i > 0 { q1.push_str(", "); }
+            let base = i * 2;
+            q1.push_str(&format!("(${}, ${})", base + 1, base + 2));
+        }
+        q1.push_str(" ON CONFLICT (hash) DO UPDATE SET decoded_json = EXCLUDED.decoded_json RETURNING hash, id");
+        let mut query1 = sqlx::query(&q1);
+        for (h, j) in &distinct {
+            query1 = query1.bind(*h).bind(*j);
+        }
+        let mut id_by_hash: HashMap<i64, i32> = HashMap::new();
+        for row in query1.fetch_all(&self.pgpool).await? {
+            id_by_hash.insert(row.get::<i64, _>("hash"), row.get::<i32, _>("id"));
+        }
+
+        // Multi-row insert grpc_message.
+        const COLS: usize = 7;
+        let mut q2 = String::from(
+            "INSERT INTO grpc_message (stream_id, http_message_id, service_name, method_name, is_request, body_set_id, timestamp) VALUES "
+        );
+        for (i, _) in rows.iter().enumerate() {
+            if i > 0 { q2.push_str(", "); }
+            let base = i * COLS;
+            q2.push('(');
+            for c in 0..COLS {
+                if c > 0 { q2.push_str(", "); }
+                q2.push_str(&format!("${}", base + c + 1));
+            }
+            q2.push(')');
+        }
+        let mut query2 = sqlx::query(&q2);
+        for ((http_message_id, grpc), h) in rows.iter().zip(hashes.iter()) {
+            let body_set_id = id_by_hash.get(h).copied();
+            query2 = query2
+                .bind(grpc.stream_id as i32)
+                .bind(*http_message_id)
+                .bind(grpc.service_name.as_deref())
+                .bind(grpc.method_name.as_deref())
+                .bind(grpc.is_request)
+                .bind(body_set_id)
+                .bind(grpc.timestamp);
+        }
+        query2.execute(&self.pgpool).await.map(|_| ())
+    }
+
+    /// Batch update stream l7_protocol from deduped (stream_id, protocol) pairs.
+    /// Keeps the upgrade semantics of update_stream_l7_protocol (unknown->http1->grpc).
+    pub async fn update_stream_l7_protocol_batch(&self, rows: &[(usize, String)]) -> Result<(), Error> {
+        if rows.is_empty() { return Ok(()); }
+        let mut query = String::from("UPDATE stream s SET l7_protocol = v.proto FROM (VALUES ");
+        for (i, _) in rows.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            let base = i * 2;
+            query.push_str(&format!("(${}::int, ${}::varchar)", base + 1, base + 2));
+        }
+        query.push_str(") AS v(stream_id, proto) WHERE s.id = v.stream_id AND (s.l7_protocol = 'unknown' OR (v.proto = 'grpc' AND s.l7_protocol = 'http1'))");
+        let mut q = sqlx::query(&query);
+        for (sid, proto) in rows {
+            q = q.bind(*sid as i32).bind(proto);
+        }
+        q.execute(&self.pgpool).await.map(|_| ())
+    }
+
+    /// Batch update stream last_packet_time (max) and increment packet_count.
+    /// `rows` is (stream_id, max_timestamp, packet_count_delta). Single set-based UPDATE.
+    pub async fn update_streams_stats_batch(&self, rows: &[(usize, i64, i64)]) -> Result<(), Error> {
+        if rows.is_empty() { return Ok(()); }
+        let mut query = String::from(
+            "UPDATE stream s SET last_packet_time = GREATEST(COALESCE(s.last_packet_time, 0), v.ts), packet_count = s.packet_count + v.cnt FROM (VALUES "
+        );
+        for (i, _) in rows.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            let base = i * 3;
+            query.push_str(&format!("(${}::int, ${}::bigint, ${}::int)", base + 1, base + 2, base + 3));
+        }
+        query.push_str(") AS v(stream_id, ts, cnt) WHERE s.id = v.stream_id");
+        let mut q = sqlx::query(&query);
+        for (sid, ts, cnt) in rows {
+            q = q.bind(*sid as i32).bind(*ts).bind(*cnt as i32);
+        }
+        q.execute(&self.pgpool).await.map(|_| ())
     }
 
     /// Send pg_notify for materialized view / stream refresh.

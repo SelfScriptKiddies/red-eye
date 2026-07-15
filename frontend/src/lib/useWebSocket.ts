@@ -95,8 +95,14 @@ export function useWebSocket(
 
         ws.onmessage = (msg) => {
             try {
-                const event: WsEvent = JSON.parse(msg.data);
-                bufferRef.current.push(event);
+                const parsed = JSON.parse(msg.data);
+                if (parsed.type === 'packet_batch') {
+                    const events: WsEvent[] = parsed.events;
+                    if (!Array.isArray(events) || events.length === 0) return;
+                    for (const evt of events) bufferRef.current.push(evt);
+                } else {
+                    bufferRef.current.push(parsed as WsEvent);
+                }
                 if (bufferRef.current.length >= WS_BATCH_MAX_SIZE) {
                     flush();
                 } else {

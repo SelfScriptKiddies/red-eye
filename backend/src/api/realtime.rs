@@ -46,9 +46,20 @@ async fn ws_handler(
     // Spawn task to send messages from broadcaster to this WebSocket session
     let mut session_sender = session.clone();
     actix_web::rt::spawn(async move {
-        while let Ok(msg) = rx.recv().await {
-            if session_sender.text(msg).await.is_err() {
-                break;
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    if session_sender.text(msg).await.is_err() {
+                        break;
+                    }
+                }
+                // A momentarily-slow client falls behind the broadcast ring buffer.
+                // Skip the missed messages but keep the connection alive.
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("WebSocket client lagged, skipped {} broadcast messages", n);
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });

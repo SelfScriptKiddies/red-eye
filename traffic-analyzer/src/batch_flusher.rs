@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
-use log::{info, error, debug};
+use log::{info, warn, error, debug};
 use async_nats::Client;
 
 use crate::db::DB;
@@ -146,21 +146,16 @@ async fn flush_batch(
     let count = buffer.len();
     debug!("Flushing batch of {} packets", count);
 
-    // 1. Batch INSERT packets -> RETURNING id
-    let packet_ids = match db.insert_packets_batch(buffer).await {
-        Ok(ids) => ids,
-        Err(e) => {
-            error!("Batch packet insert failed: {:?}", e);
+    // 1. Batch INSERT packets -> RETURNING id.
+    // Losing 1 packet is acceptable, losing the whole batch is not: retry once
+    // after a short backoff before dropping (no DLQ / persistent queue).
+    let packet_ids = match insert_packets_with_retry(db, buffer).await {
+        Some(ids) => ids,
+        None => {
             buffer.clear();
             return;
         }
     };
-
-    if packet_ids.len() != buffer.len() {
-        error!("Batch insert returned {} ids for {} packets — mismatch", packet_ids.len(), buffer.len());
-        buffer.clear();
-        return;
-    }
 
     // 2. Batch INSERT triggers
     let mut trigger_rows: Vec<(i32, usize, usize, usize)> = Vec::new();
@@ -176,66 +171,55 @@ async fn flush_batch(
         }
     }
 
-    // 3. Insert HTTP messages one by one (they need RETURNING id for gRPC)
-    for (idx, pkt) in buffer.iter().enumerate() {
-        let packet_id = packet_ids[idx];
-        if let Some(ref http) = pkt.http_message {
-            match db.insert_http_message(
-                http.stream_id,
-                packet_id,
-                http.is_request,
-                http.method.as_deref(),
-                http.path.as_deref(),
-                http.status_code,
-                http.http_version.as_deref(),
-                http.content_type.as_deref(),
-                http.content_length,
-                http.body_offset,
-                http.body_length,
-                http.header_set_id,
-                http.timestamp,
-            ).await {
-                Ok(msg_id) => {
-                    // Update l7_protocol
-                    let _ = db.update_stream_l7_protocol(http.stream_id, &http.l7_protocol).await;
+    // 3. Batch INSERT HTTP messages (multi-row, RETURNING id), then batch the
+    //    dependent gRPC inserts and l7-protocol UPDATEs.
+    let http_rows: Vec<(i32, &HttpMessageData)> = buffer.iter().enumerate()
+        .filter_map(|(idx, pkt)| pkt.http_message.as_ref().map(|http| (packet_ids[idx], http)))
+        .collect();
+    if !http_rows.is_empty() {
+        match db.insert_http_messages_batch(&http_rows).await {
+            Ok(msg_ids) if msg_ids.len() == http_rows.len() => {
+                // gRPC inserts keyed by the returned http_message ids.
+                let grpc_rows: Vec<(i32, &GrpcMessageData)> = http_rows.iter().enumerate()
+                    .filter_map(|(i, (_, http))| http.grpc.as_ref().map(|grpc| (msg_ids[i], grpc)))
+                    .collect();
+                if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
+                    error!("Batch gRPC insert failed: {:?}", e);
+                }
 
-                    // Insert gRPC if present
-                    if let Some(ref grpc) = http.grpc {
-                        let _ = db.insert_grpc_message(
-                            grpc.stream_id,
-                            msg_id,
-                            grpc.service_name.as_deref(),
-                            grpc.method_name.as_deref(),
-                            grpc.is_request,
-                            &grpc.decoded_json,
-                            grpc.timestamp,
-                        ).await;
-                    }
+                // Dedupe l7-protocol UPDATEs to the highest protocol per stream.
+                let rank = |p: &str| match p { "grpc" => 2, "http1" => 1, _ => 0 };
+                let mut l7: HashMap<usize, &str> = HashMap::new();
+                for (_, http) in &http_rows {
+                    l7.entry(http.stream_id)
+                        .and_modify(|cur| { if rank(&http.l7_protocol) > rank(cur) { *cur = http.l7_protocol.as_str(); } })
+                        .or_insert(http.l7_protocol.as_str());
                 }
-                Err(e) => {
-                    error!("Failed to insert HTTP message: {:?}", e);
+                let l7_rows: Vec<(usize, String)> = l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
+                if let Err(e) = db.update_stream_l7_protocol_batch(&l7_rows).await {
+                    error!("Batch l7_protocol update failed: {:?}", e);
                 }
+            }
+            Ok(msg_ids) => {
+                error!("HTTP batch returned {} ids for {} messages — skipping grpc/l7", msg_ids.len(), http_rows.len());
+            }
+            Err(e) => {
+                error!("Batch HTTP message insert failed: {:?}", e);
             }
         }
     }
 
-    // 4. Bulk UPDATE stream SET last_packet_time (grouped by stream_id)
-    let mut stream_max_ts: HashMap<usize, i64> = HashMap::new();
+    // 4. Single set-based UPDATE stream: last_packet_time (max) + packet_count (+= delta).
+    let mut stream_stats: HashMap<usize, (i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count)
     for pkt in buffer.iter() {
         let ts = pkt.timestamp_seconds as i64;
-        stream_max_ts
-            .entry(pkt.stream_id)
-            .and_modify(|existing| {
-                if ts > *existing {
-                    *existing = ts;
-                }
-            })
-            .or_insert(ts);
+        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0));
+        if ts > entry.0 { entry.0 = ts; }
+        entry.1 += 1;
     }
-    for (stream_id, ts) in &stream_max_ts {
-        if let Err(e) = db.update_stream_last_packet_time(*stream_id, *ts).await {
-            error!("Failed to update last_packet_time for stream {}: {:?}", stream_id, e);
-        }
+    let stats_rows: Vec<(usize, i64, i64)> = stream_stats.iter().map(|(s, (ts, c))| (*s, *ts, *c)).collect();
+    if let Err(e) = db.update_streams_stats_batch(&stats_rows).await {
+        error!("Failed to update stream stats: {:?}", e);
     }
 
     // 5. pg_notify('refresh_streams')
@@ -264,6 +248,32 @@ async fn flush_batch(
     }
 
     debug!("Flushed {} packets ({} triggers, {} streams updated)",
-        count, trigger_rows.len(), stream_max_ts.len());
+        count, trigger_rows.len(), stats_rows.len());
     buffer.clear();
+}
+
+/// Insert the packet batch, retrying once after a short backoff on error or
+/// id-count mismatch. Returns the packet ids, or None if the batch should be
+/// dropped (logged at warn with the count lost).
+async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Option<Vec<i32>> {
+    match db.insert_packets_batch(buffer).await {
+        Ok(ids) if ids.len() == buffer.len() => return Some(ids),
+        Ok(ids) => error!("Batch insert returned {} ids for {} packets — retrying", ids.len(), buffer.len()),
+        Err(e) => error!("Batch packet insert failed: {:?} — retrying", e),
+    }
+
+    tokio::time::sleep(Duration::from_millis(75)).await;
+
+    match db.insert_packets_batch(buffer).await {
+        Ok(ids) if ids.len() == buffer.len() => Some(ids),
+        Ok(ids) => {
+            warn!("Batch insert still mismatched after retry ({} ids for {} packets) — dropping {} packets",
+                ids.len(), buffer.len(), buffer.len());
+            None
+        }
+        Err(e) => {
+            warn!("Batch packet insert failed after retry: {:?} — dropping {} packets", e, buffer.len());
+            None
+        }
+    }
 }

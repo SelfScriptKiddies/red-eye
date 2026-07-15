@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS packets (
 ) PARTITION BY RANGE (timestamp);
 
 -- Indexes (applied to all partitions automatically)
-CREATE INDEX IF NOT EXISTS idx_packets_stream_id ON packets(stream_id);
+-- Note: a single-column index on stream_id is redundant with idx_packets_stream_ts
+-- (leading column stream_id), so it is intentionally omitted to cut write amplification.
 CREATE INDEX IF NOT EXISTS idx_packets_timestamp ON packets(timestamp);
 CREATE INDEX IF NOT EXISTS idx_packets_stream_ts ON packets(stream_id, timestamp DESC);

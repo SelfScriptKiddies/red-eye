@@ -8,6 +8,8 @@ use stream_dto::StreamResponse;
 use utoipa::IntoParams;
 use log::info;
 use utoipa::ToSchema;
+use std::sync::Arc;
+use crate::health::HealthMonitor;
 
 pub mod stream_dto;
 mod stream_repository;
@@ -116,17 +118,22 @@ where
 async fn get_all_streams(
     _identity: Identity,
     stream_service: web::Data<StreamService>,
+    health: web::Data<Arc<HealthMonitor>>,
     query: web::Query<StreamQuery>
 ) -> Result<impl Responder, actix_web::error::Error> {
     info!("Getting all streams with query: {:?}", query);
-    match stream_service.get_all_streams_with_details(
+    let started = std::time::Instant::now();
+    let result = stream_service.get_all_streams_with_details(
         query.limit,
         query.offset,
         query.tags.clone(),
         query.services.clone(),
         query.start_time,
         query.end_time,
-    ).await {
+    ).await;
+    // Feed real query latency into the health monitor (reporting only, never gates).
+    health.record(started.elapsed());
+    match result {
         Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
         Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
     }

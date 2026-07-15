@@ -75,8 +75,4 @@ impl StreamService {
     pub async fn set_favorite(&self, stream_id: i32, favorite: bool) -> Result<bool, sqlx::Error> {
         self.stream_repository.set_favorite(stream_id, favorite).await
     }
-
-    pub async fn delete_old_streams(&self, age_minutes: i64) -> Result<u64, sqlx::Error> {
-        self.stream_repository.delete_old_streams(age_minutes).await
-    }
 }

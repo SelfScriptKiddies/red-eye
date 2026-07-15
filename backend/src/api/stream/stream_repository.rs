@@ -34,18 +34,6 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_stream_packet_timestamps(&self, stream_id: i32) -> Result<(Option<i64>, Option<i64>), sqlx::Error> {
-        sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
-            r#"
-            SELECT MIN(timestamp) as first_time, MAX(timestamp) as last_time
-            FROM packets
-            WHERE stream_id = $1
-            "#)
-            .bind(stream_id)
-            .fetch_one(&self.pgpool)
-            .await
-    }
-
     pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
         let mut sql = String::from(r#"
             SELECT
@@ -174,25 +162,6 @@ impl StreamRepository {
         .bind(favorite)
         .fetch_one(&self.pgpool)
         .await
-    }
-
-    pub async fn delete_old_streams(&self, age_minutes: i64) -> Result<u64, sqlx::Error> {
-        // Определяем порог в секундах для сравнения с полем timestamp в packets
-        sqlx::query(
-            r#"
-            DELETE FROM stream s
-            WHERE s.favorite = FALSE
-            AND NOT EXISTS (
-                SELECT 1 FROM packets p
-                WHERE p.stream_id = s.id
-                  AND p.timestamp >= (extract(epoch from now())::bigint - ($1 * 60))
-            )
-            "#,
-        )
-        .bind(age_minutes)
-        .execute(&self.pgpool)
-        .await
-        .map(|res| res.rows_affected())
     }
 }
 
