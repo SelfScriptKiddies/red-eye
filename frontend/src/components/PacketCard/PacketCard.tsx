@@ -1,4 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
+import { queryClient } from '../../lib/queryClient';
+import { apiFetch } from '../../lib/api';
+import { useHttpMessages } from '../../lib/useHttpMessages';
 import './PacketCard.css';
 
 type ViewMode = 'text' | 'hex' | 'python' | 'http' | 'grpc';
@@ -304,7 +307,7 @@ interface TagTrigger {
     color: number;
 }
 
-export function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onHeaderExclude, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
+export const PacketCard = memo(function PacketCard({ direction, id, packet_data, stream_id, timestamp, isHttp, isGrpc, onHeaderSearch, onHeaderExclude, onQuickBlock, onDiffSelect, diffSelected, _merged_count, _stream_id, showStreamId }: PacketProps) {
     const [viewMode, setViewMode] = useState<ViewMode>(isGrpc ? 'grpc' : isHttp ? 'http' : 'text');
     const [isExpanded, setIsExpanded] = useState(false);
     const [grpcData, setGrpcData] = useState<any[] | null>(null);
@@ -313,8 +316,13 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
     const [httpLoading, setHttpLoading] = useState(false);
     const [triggers, setTriggers] = useState<TagTrigger[]>([]);
 
-    const bytes = base64ToBytes(packet_data);
+    // Decode once per payload — runs on every render otherwise, even collapsed.
+    const bytes = useMemo(() => base64ToBytes(packet_data), [packet_data]);
+    const utf8 = useMemo(() => toUtf8Preview(bytes), [bytes]);
     const formattedTime = new Date(timestamp * 1000).toLocaleTimeString();
+
+    // Cached + aborted HTTP message list (shared across cards of the same stream).
+    const { data: httpMessages } = useHttpMessages(isExpanded && isHttp ? stream_id : null);
 
     // Load triggers for highlight
     useEffect(() => {
@@ -335,41 +343,37 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             .catch(() => {});
     }, [isExpanded, id, stream_id]);
 
-    // Load HTTP data when switching to http mode or on mount if isHttp
+    // Match this packet's HTTP message from the (cached) list, then fetch its headers.
     useEffect(() => {
-        if (isExpanded && isHttp && !httpData && !httpLoading) {
-            setHttpLoading(true);
-            // Find http_message for this packet
-            fetch(`/api/http/stream/${stream_id}`)
-                .then(r => r.json())
-                .then((messages: any[]) => {
-                    const msg = messages.find((m: any) => m.packet_id === id);
-                    if (msg) {
-                        return fetch(`/api/http/headers/${msg.id}`)
-                            .then(r => r.json())
-                            .then(headersObj => {
-                                // Convert JSONB {"Name": "value"} to array
-                                const headersArr: HttpHeader[] = headersObj && typeof headersObj === 'object' && !Array.isArray(headersObj)
-                                    ? Object.entries(headersObj).map(([name, value]) => ({ name, value: String(value) }))
-                                    : Array.isArray(headersObj)
-                                        ? headersObj.map((h: any) => ({ name: h.name, value: h.value }))
-                                        : [];
-                                setHttpData({
-                                    id: msg.id,
-                                    is_request: msg.is_request,
-                                    method: msg.method,
-                                    path: msg.path,
-                                    status_code: msg.status_code,
-                                    http_version: msg.http_version,
-                                    headers: headersArr,
-                                });
-                            });
-                    }
-                })
-                .catch(() => {})
-                .finally(() => setHttpLoading(false));
-        }
-    }, [isExpanded, isHttp, id, stream_id]);
+        if (!isExpanded || !isHttp || !httpMessages || httpData || httpLoading) return;
+        const msg = (httpMessages as any[]).find((m: any) => m.packet_id === id);
+        if (!msg) return;
+        setHttpLoading(true);
+        queryClient.fetchQuery({
+            queryKey: ['httpHeaders', msg.id],
+            queryFn: ({ signal }) => apiFetch<any>(`/api/http/headers/${msg.id}`, signal),
+            staleTime: 10_000,
+        })
+            .then((headersObj: any) => {
+                // Convert JSONB {"Name": "value"} to array
+                const headersArr: HttpHeader[] = headersObj && typeof headersObj === 'object' && !Array.isArray(headersObj)
+                    ? Object.entries(headersObj).map(([name, value]) => ({ name, value: String(value) }))
+                    : Array.isArray(headersObj)
+                        ? headersObj.map((h: any) => ({ name: h.name, value: h.value }))
+                        : [];
+                setHttpData({
+                    id: msg.id,
+                    is_request: msg.is_request,
+                    method: msg.method,
+                    path: msg.path,
+                    status_code: msg.status_code,
+                    http_version: msg.http_version,
+                    headers: headersArr,
+                });
+            })
+            .catch(() => {})
+            .finally(() => setHttpLoading(false));
+    }, [isExpanded, isHttp, id, httpMessages]);
 
     // Load gRPC data
     useEffect(() => {
@@ -386,7 +390,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
     const getContent = (): string => {
         switch (viewMode) {
             case 'text':
-                return toUtf8Preview(bytes);
+                return utf8;
             case 'hex':
                 return toHexDump(bytes);
             case 'python':
@@ -409,13 +413,13 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
     const renderGrpcView = () => {
         if (grpcLoading) return <div className="http-loading">Loading...</div>;
-        if (!grpcData || grpcData.length === 0) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
+        if (!grpcData || grpcData.length === 0) return <pre className="packet-body">{utf8}</pre>;
 
         // Match gRPC message to this specific packet by packet_id
         const msg = grpcData.find((m: any) => m.packet_id === id)
             // Fallback: match by direction (for data without packet_id)
             || grpcData.find((m: any) => m.is_request === (direction === 'dest'));
-        if (!msg) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
+        if (!msg) return <pre className="packet-body">{utf8}</pre>;
 
         let decoded: Record<string, any> = {};
         try {
@@ -447,7 +451,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
     const renderHttpView = () => {
         if (httpLoading) return <div className="http-loading">Loading...</div>;
-        if (!httpData) return <pre className="packet-body">{toUtf8Preview(bytes)}</pre>;
+        if (!httpData) return <pre className="packet-body">{utf8}</pre>;
 
         return (
             <div className="http-parsed">
@@ -554,7 +558,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
                 {/* Body separator + raw body */}
                 {bytes.length > 0 && (
-                    <pre className="http-body">{toUtf8Preview(bytes).split('\r\n\r\n').slice(1).join('\r\n\r\n') || ''}</pre>
+                    <pre className="http-body">{utf8.split('\r\n\r\n').slice(1).join('\r\n\r\n') || ''}</pre>
                 )}
 
                 {/* Export buttons for requests */}
@@ -612,7 +616,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
 
             {!isExpanded && (
                 <div className="packet-preview" onClick={() => setIsExpanded(true)} style={{ cursor: 'pointer' }}>
-                    {toUtf8Preview(bytes).slice(0, 120).replace(/[\r\n]+/g, ' ')}
+                    {utf8.slice(0, 120).replace(/[\r\n]+/g, ' ')}
                 </div>
             )}
 
@@ -625,7 +629,7 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
                     ) : (
                         <pre className={`packet-body ${viewMode === 'python' ? 'monospace' : ''}`}>
                             {viewMode === 'text' && triggers.length > 0
-                                ? renderHighlightedText(toUtf8Preview(bytes), triggers)
+                                ? renderHighlightedText(utf8, triggers)
                                 : getContent()
                             }
                         </pre>
@@ -656,4 +660,4 @@ export function PacketCard({ direction, id, packet_data, stream_id, timestamp, i
             )}
         </div>
     );
-}
+});
