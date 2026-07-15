@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS stream (
     packet_count INTEGER NOT NULL DEFAULT 0,
     service_id INTEGER NOT NULL,
     l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown',
+    first_packet_time BIGINT,
     last_packet_time BIGINT
 );
 

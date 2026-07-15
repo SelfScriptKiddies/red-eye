@@ -15,10 +15,7 @@ SELECT
     str.l7_protocol,
     s.id AS service_id,
     s.name AS service_name,
-    COALESCE(
-        (SELECT MIN(p.timestamp) FROM packets p WHERE p.stream_id = str.id),
-        0
-    ) AS first_time,
+    COALESCE(str.first_packet_time, 0) AS first_time,
     COALESCE(str.last_packet_time, 0) AS last_time,
     str.packet_count,
     COALESCE(

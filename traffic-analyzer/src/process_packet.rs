@@ -100,7 +100,7 @@ impl PacketProcessor {
         }
 
         // Create new stream
-        let stream_id = self.db.create_stream(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, &packet.protocol, &packet.ip_version, service_id).await
+        let stream_id = self.db.create_stream(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, &packet.protocol, &packet.ip_version, service_id, packet.timestamp_seconds as i64).await
             .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
 
         self.cache.streams.insert(&src_ip.to_string(), src_port, &dst_ip.to_string(), dst_port, stream_id);
