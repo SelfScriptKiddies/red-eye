@@ -238,7 +238,7 @@ pub async fn run() -> std::io::Result<()> {
     let agent_service_data = web::Data::new(agent_service.clone());
 
     // Subscribe to agent heartbeats (syncs block filters on new agent connect)
-    spawn_heartbeat_listener(agent_nats_client, agent_service.clone(), pool.clone());
+    spawn_heartbeat_listener(agent_nats_client.clone(), agent_service.clone(), pool.clone());
 
     // Create broadcaster for WebSocket connections
     let (tx, _) = broadcast::channel::<String>(1000);
@@ -251,31 +251,19 @@ pub async fn run() -> std::io::Result<()> {
         broadcaster_tx.clone(),
     );
 
-    // Subscribe to NATS events and broadcast to WebSocket clients
+    // Subscribe to NATS events and broadcast to WebSocket clients.
+    // Reuse the already-connected agent client: a client connected inside this
+    // spawned task never delivers messages under the actix runtime.
     let broadcaster_tx_clone = broadcaster_tx.clone();
-    let config_clone = config.clone();
+    let ws_nats_client = agent_nats_client.clone();
+    let ws_topic = config.nats_websocket_topic.clone();
     tokio::spawn(async move {
-        let nats_client = match ConnectOptions::with_user_and_password(
-            config_clone.nats_login.clone(),
-            config_clone.nats_password.clone()
-        )
-        .connect(&config_clone.nats_broker)
-        .await
-        {
-            Ok(client) => client,
-            Err(e) => {
-                error!("Failed to connect to NATS for WebSocket events: {}", e);
-                return;
-            }
-        };
+        info!("Subscribing to NATS topic {} for WebSocket events", ws_topic);
 
-        let topic = config_clone.nats_websocket_topic.clone();
-        info!("Subscribing to NATS topic {} for WebSocket events", topic);
-
-        let mut subscriber = match nats_client.subscribe(topic.clone()).await {
+        let mut subscriber = match ws_nats_client.subscribe(ws_topic.clone()).await {
             Ok(sub) => sub,
             Err(e) => {
-                error!("Failed to subscribe to NATS topic {}: {}", topic, e);
+                error!("Failed to subscribe to NATS topic {}: {}", ws_topic, e);
                 return;
             }
         };
@@ -298,12 +286,20 @@ pub async fn run() -> std::io::Result<()> {
         let mut flush_deadline: Option<Instant> = None;
 
         loop {
+            // When no batch is pending, the timer branch must never fire; a
+            // pending() future keeps it disabled without unwrapping the deadline.
+            let flush_timer = async {
+                match flush_deadline {
+                    Some(d) => sleep_until(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::select! {
                 maybe_msg = subscriber.next() => {
                     let Some(message) = maybe_msg else { break };
                     let payload = message.payload.to_vec();
-                    match bincode::decode_from_slice::<PacketEvent, _>(&payload, config::standard()) {
-                        Ok((event, _)) => match serde_json::to_value(&event) {
+                    match serde_json::from_slice::<PacketEvent>(&payload) {
+                        Ok(event) => match serde_json::to_value(&event) {
                             Ok(v) => {
                                 if buffer.is_empty() {
                                     flush_deadline = Some(Instant::now() + Duration::from_millis(100));
@@ -319,7 +315,7 @@ pub async fn run() -> std::io::Result<()> {
                         Err(e) => error!("Failed to decode packet event from NATS: {}", e),
                     }
                 }
-                _ = sleep_until(flush_deadline.unwrap()), if flush_deadline.is_some() => {
+                _ = flush_timer => {
                     flush_batch(&broadcaster_tx_clone, std::mem::take(&mut buffer));
                     flush_deadline = None;
                 }
