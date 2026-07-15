@@ -40,7 +40,7 @@ impl StreamRepository {
                 stream_id,
                 first_time,
                 last_time,
-                packet_count,
+                packet_count::bigint,
                 COALESCE(tags, ARRAY[]::text[]) as tags,
                 service_name,
                 service_id,
