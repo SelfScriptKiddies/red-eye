@@ -34,6 +34,24 @@ mod health;
 
 
 
+// Serialize a batch of packet events once and broadcast as a single frame.
+// Wire contract: {"type":"packet_batch","events":[ E1, E2, ... ]} where each E
+// is the same per-event JSON object shape sent before batching was introduced.
+fn flush_batch(tx: &broadcast::Sender<String>, events: Vec<serde_json::Value>) {
+    if events.is_empty() {
+        return;
+    }
+    let count = events.len();
+    let batch = serde_json::json!({ "type": "packet_batch", "events": events });
+    match serde_json::to_string(&batch) {
+        Ok(json) => match tx.send(json) {
+            Ok(_) => debug!("Broadcasted packet batch of {} events", count),
+            Err(e) => debug!("No WebSocket clients connected or channel full: {}", e),
+        },
+        Err(e) => error!("Failed to serialize packet batch to JSON: {}", e),
+    }
+}
+
 fn init() -> ApplicationConfig {
     let config: ApplicationConfig = match ApplicationConfig::parse() {
         Ok(config) => config,
@@ -253,7 +271,7 @@ pub async fn run() -> std::io::Result<()> {
 
         let topic = config_clone.nats_websocket_topic.clone();
         info!("Subscribing to NATS topic {} for WebSocket events", topic);
-        
+
         let mut subscriber = match nats_client.subscribe(topic.clone()).await {
             Ok(sub) => sub,
             Err(e) => {
@@ -262,41 +280,48 @@ pub async fn run() -> std::io::Result<()> {
             }
         };
 
-        while let Some(message) = subscriber.next().await {
-            let payload = message.payload.to_vec();
-            
-            // Decode packet event (same structure as in traffic-analyzer)
-            #[derive(serde::Serialize, serde::Deserialize, bincode::Decode)]
-            struct PacketEvent {
-                packet_id: i32,
-                stream_id: usize,
-                timestamp_seconds: u64,
-                timestamp_microseconds: u64,
-                direction: String,
-            }
+        // Decode packet event (same structure as in traffic-analyzer)
+        #[derive(serde::Serialize, serde::Deserialize, bincode::Decode)]
+        struct PacketEvent {
+            packet_id: i32,
+            stream_id: usize,
+            timestamp_seconds: u64,
+            timestamp_microseconds: u64,
+            direction: String,
+        }
 
-            match bincode::decode_from_slice::<PacketEvent, _>(&payload, config::standard()) {
-                Ok((event, _)) => {
-                    // Convert to JSON for frontend
-                    match serde_json::to_string(&event) {
-                        Ok(json) => {
-                            // Broadcast to all WebSocket clients
-                            match broadcaster_tx_clone.send(json.clone()) {
-                                Ok(_) => {
-                                    debug!("Broadcasted packet event: packet_id={}, stream_id={}", event.packet_id, event.stream_id);
+        // Coalesce incoming packet events into batches to avoid one serialization +
+        // broadcast + socket write per packet at high packet rates. Flush at most
+        // every 100ms or once 100 events accumulate, whichever comes first.
+        use tokio::time::{sleep_until, Duration, Instant};
+        let mut buffer: Vec<serde_json::Value> = Vec::new();
+        let mut flush_deadline: Option<Instant> = None;
+
+        loop {
+            tokio::select! {
+                maybe_msg = subscriber.next() => {
+                    let Some(message) = maybe_msg else { break };
+                    let payload = message.payload.to_vec();
+                    match bincode::decode_from_slice::<PacketEvent, _>(&payload, config::standard()) {
+                        Ok((event, _)) => match serde_json::to_value(&event) {
+                            Ok(v) => {
+                                if buffer.is_empty() {
+                                    flush_deadline = Some(Instant::now() + Duration::from_millis(100));
                                 }
-                                Err(e) => {
-                                    debug!("No WebSocket clients connected or channel full: {}", e);
+                                buffer.push(v);
+                                if buffer.len() >= 100 {
+                                    flush_batch(&broadcaster_tx_clone, std::mem::take(&mut buffer));
+                                    flush_deadline = None;
                                 }
                             }
-                        }
-                        Err(e) => {
-                            error!("Failed to serialize packet event to JSON: {}", e);
-                        }
+                            Err(e) => error!("Failed to serialize packet event to JSON: {}", e),
+                        },
+                        Err(e) => error!("Failed to decode packet event from NATS: {}", e),
                     }
                 }
-                Err(e) => {
-                    error!("Failed to decode packet event from NATS: {}", e);
+                _ = sleep_until(flush_deadline.unwrap()), if flush_deadline.is_some() => {
+                    flush_batch(&broadcaster_tx_clone, std::mem::take(&mut buffer));
+                    flush_deadline = None;
                 }
             }
         }
