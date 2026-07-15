@@ -2,7 +2,7 @@ import { useCallback, CSSProperties } from "react";
 import './PacketsPage.css'
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { List as VirtualList } from 'react-window';
+import { List as VirtualList, useDynamicRowHeight } from 'react-window';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
@@ -397,6 +397,10 @@ export function PacketsPage() {
         setDiffOpen,
     }), [mergedPackets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter]);
 
+    // Packet cards expand on click, so their height is variable. A fixed rowHeight
+    // makes an expanded card overlap the rows below it — measure each row instead.
+    const packetRowHeight = useDynamicRowHeight({ defaultRowHeight: 120 });
+
     // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
         if (selectedStreamIds.length === 0) return;
@@ -728,7 +732,7 @@ export function PacketsPage() {
                     <VirtualList
                         rowComponent={PacketRow}
                         rowCount={mergedPackets.length}
-                        rowHeight={120}
+                        rowHeight={packetRowHeight}
                         rowProps={packetRowProps}
                         defaultHeight={400}
                     />
