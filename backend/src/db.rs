@@ -4,13 +4,19 @@ use sqlx::{Error, Pool, Postgres};
 use crate::configuration::ApplicationConfig;
 
 pub async fn establish_connection(config: &ApplicationConfig) -> Pool<Postgres> {
+    // Kill queries that exceed the configured budget; fall back to the historical 15s default.
+    let statement_timeout = match config.health_kill_query_after_ms {
+        0 => 15000,
+        ms => ms,
+    };
     let database_url = format!(
-        "postgres://{}:{}@{}:{}/{}?options=-c statement_timeout=15000",
+        "postgres://{}:{}@{}:{}/{}?options=-c statement_timeout={}",
         &config.db_username,
         &config.db_password,
         &config.db_host,
         &config.db_port,
-        &config.db_schema
+        &config.db_schema,
+        statement_timeout
     );
 
     debug!("postgresql: {:?}", database_url);
