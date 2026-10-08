@@ -99,7 +99,7 @@ pub async fn run() {
 
     // Warm service cache from DB before consuming packets
     {
-        let rows = sqlx::query_as::<_, (i32, String, i32, bool, bool, bool, bool, bool, bool)>(
+        let rows = sqlx::query_as::<_, (i64, String, i32, bool, bool, bool, bool, bool, bool)>(
             "SELECT id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
         )
         .fetch_all(db.pool())

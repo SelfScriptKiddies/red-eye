@@ -19,16 +19,16 @@ impl StreamService {
         )
     }
 
-    pub async fn get_stream_by_id(&self, stream_id: i32) -> Result<Stream, sqlx::Error> {
+    pub async fn get_stream_by_id(&self, stream_id: i64) -> Result<Stream, sqlx::Error> {
         self.stream_repository.get_packet_by_id(stream_id).await
     }
 
     pub async fn get_all_streams_with_details(
         &self,
-        limit: Option<i32>,
-        offset: Option<i32>,
-        tags: Option<Vec<i32>>,
-        services: Option<Vec<i32>>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+        tags: Option<Vec<i64>>,
+        services: Option<Vec<i64>>,
         start_time: Option<i64>,
         end_time: Option<i64>,
     ) -> Result<Vec<StreamListResponse>, sqlx::Error> {
@@ -72,7 +72,7 @@ impl StreamService {
         }).collect())
     }
 
-    pub async fn set_favorite(&self, stream_id: i32, favorite: bool) -> Result<bool, sqlx::Error> {
+    pub async fn set_favorite(&self, stream_id: i64, favorite: bool) -> Result<bool, sqlx::Error> {
         self.stream_repository.set_favorite(stream_id, favorite).await
     }
 }

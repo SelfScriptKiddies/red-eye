@@ -52,11 +52,11 @@ pub struct UpdateFavoriteRequest {
 #[get("/stream/{id}")]
 async fn get_stream_by_id(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     stream_service: web::Data<StreamService>,
     packet_service: web::Data<PacketService>
 ) -> Result<impl Responder, actix_web::error::Error> {
-    let stream_id: i32 = path.into_inner().0;
+    let stream_id: i64 = path.into_inner().0;
 
     match stream_service.get_stream_by_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream.to_response(&packet_service).await)),
@@ -67,22 +67,22 @@ async fn get_stream_by_id(
 
 #[derive(Debug, Deserialize, IntoParams)]
 struct StreamQuery {
-    pub limit: Option<i32>,
-    pub offset: Option<i32>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_comma_separated_numbers")]
-    pub tags: Option<Vec<i32>>,
+    pub tags: Option<Vec<i64>>,
 
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_comma_separated_numbers")]
-    pub services: Option<Vec<i32>>,
+    pub services: Option<Vec<i64>>,
 
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
 }
 
-fn deserialize_comma_separated_numbers<'de, D>(deserializer: D) -> Result<Option<Vec<i32>>, D::Error>
+fn deserialize_comma_separated_numbers<'de, D>(deserializer: D) -> Result<Option<Vec<i64>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -93,7 +93,7 @@ where
         }
         Ok(Some(
             s.split(',')
-                .filter_map(|s| s.trim().parse::<i32>().ok())
+                .filter_map(|s| s.trim().parse::<i64>().ok())
                 .collect()
         ))
     } else {
@@ -154,9 +154,9 @@ async fn get_all_streams(
 #[put("/stream/{id}/favorite")]
 async fn update_stream_favorite(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     payload: web::Json<UpdateFavoriteRequest>,
-    stream_service: web::Data<StreamService>,
+    stream_service: web::Data<StreamService>
 ) -> Result<impl Responder, actix_web::error::Error> {
     let stream_id = path.into_inner().0;
     match stream_service.set_favorite(stream_id, payload.favorite).await {

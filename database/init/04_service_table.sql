@@ -1,6 +1,8 @@
 -- Create 'services' table
+-- BIGINT id: referenced by stream.service_id, agent_service.service_id and
+-- proto_file.service_id (BIGINT end-to-end)
 CREATE TABLE IF NOT EXISTS service (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL, -- Имя сервиса
     port INTEGER NOT NULL, -- Порт сервиса
     chunked_transfer_encoding BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически раскодировать chunked transfer encoding
@@ -19,6 +21,6 @@ CREATE INDEX IF NOT EXISTS idx_services_port ON service(port);
 -- Agent-to-service bindings (which agent monitors which service)
 CREATE TABLE IF NOT EXISTS agent_service (
     agent_id VARCHAR(255) NOT NULL,
-    service_id INTEGER NOT NULL REFERENCES service(id) ON DELETE CASCADE,
+    service_id BIGINT NOT NULL REFERENCES service(id) ON DELETE CASCADE,
     PRIMARY KEY (agent_id, service_id)
 );

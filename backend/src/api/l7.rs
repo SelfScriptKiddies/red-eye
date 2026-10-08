@@ -31,7 +31,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 async fn get_http_messages(
     _identity: Identity,
     l7_service: web::Data<L7Service>,
-    stream_id: web::Path<i32>,
+    stream_id: web::Path<i64>,
 ) -> impl Responder {
     match l7_service.get_messages_by_stream(stream_id.into_inner()).await {
         Ok(messages) => HttpResponse::Ok().json(messages),
@@ -53,7 +53,7 @@ async fn get_http_messages(
 async fn get_http_message_full(
     _identity: Identity,
     l7_service: web::Data<L7Service>,
-    id: web::Path<i32>,
+    id: web::Path<i64>,
 ) -> impl Responder {
     match l7_service.get_message_full(id.into_inner()).await {
         Ok(msg) => HttpResponse::Ok().json(msg),
@@ -75,7 +75,7 @@ async fn get_http_message_full(
 async fn get_http_headers(
     _identity: Identity,
     l7_service: web::Data<L7Service>,
-    message_id: web::Path<i32>,
+    message_id: web::Path<i64>,
 ) -> impl Responder {
     match l7_service.get_headers(message_id.into_inner()).await {
         Ok(headers) => HttpResponse::Ok().json(headers),
@@ -155,7 +155,7 @@ async fn search_by_headers(
 async fn get_grpc_messages(
     _identity: Identity,
     l7_service: web::Data<L7Service>,
-    stream_id: web::Path<i32>,
+    stream_id: web::Path<i64>,
 ) -> impl Responder {
     match l7_service.get_grpc_messages(stream_id.into_inner()).await {
         Ok(messages) => HttpResponse::Ok().json(messages),

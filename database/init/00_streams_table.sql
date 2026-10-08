@@ -1,6 +1,8 @@
 -- Create 'stream' table
+-- id is BIGINT: stream ids are referenced by packets/http_message/grpc_message
+-- (BIGINT end-to-end) and a 32-bit sequence is a crash class at game load.
 CREATE TABLE IF NOT EXISTS stream (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     src_ip INET NOT NULL,
     src_port INTEGER NOT NULL,
     dst_ip INET NOT NULL,
@@ -9,7 +11,7 @@ CREATE TABLE IF NOT EXISTS stream (
     active BOOLEAN NOT NULL,
     favorite BOOLEAN NOT NULL DEFAULT FALSE,
     packet_count INTEGER NOT NULL DEFAULT 0,
-    service_id INTEGER NOT NULL,
+    service_id BIGINT NOT NULL,
     l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown',
     first_packet_time BIGINT,
     last_packet_time BIGINT

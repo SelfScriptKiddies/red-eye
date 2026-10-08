@@ -8,7 +8,7 @@ use crate::api::service::service_service::ServiceService;
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ProtectRequest {
-    pub service_id: i32,
+    pub service_id: i64,
     pub agent_id: String,
     pub enable: bool,
     #[serde(default)]

@@ -161,7 +161,7 @@ pub fn spawn_special_trigger_handler(
     tokio::spawn(async move {
         use tokio::time::{interval, Duration};
         let mut ticker = interval(Duration::from_secs(3));
-        let mut last_check_id: i32 = 0;
+        let mut last_check_id: i64 = 0;
 
         loop {
             ticker.tick().await;
@@ -184,7 +184,7 @@ pub fn spawn_special_trigger_handler(
             // they are informational (WebSocket) and useful in both
             // directions. Unknown/NULL/'both' direction values are treated
             // as Both (mirrors the analyzer DTO mapping).
-            let triggers = match sqlx::query_as::<_, (i32, i32, i32, i32, String, String, i32)>(
+            let triggers = match sqlx::query_as::<_, (i64, i32, i32, i64, String, String, i64)>(
                 "SELECT t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
                         tn.name as tag_name, tn.special_type, p.stream_id
                  FROM tag t
@@ -220,7 +220,7 @@ pub fn spawn_special_trigger_handler(
                 // Preserve one alert per (packet, tag) — the removed
                 // DISTINCT ON used to collapse these; duplicate alert
                 // broadcasts for extra matches carry no extra info.
-                let mut alerted: HashSet<(i32, i32)> = HashSet::new();
+                let mut alerted: HashSet<(i64, i64)> = HashSet::new();
 
                 for (packet_id, start_idx, end_idx, tag_id, tag_name, special_type, stream_id) in &triggers {
                     match special_type.as_str() {
@@ -315,7 +315,7 @@ async fn resolve_team(
     ip.to_string()
 }
 
-async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32, tag_name: &str, stream_id: i32, team_cache: &Arc<RwLock<TeamCache>>, flag_queue: &Arc<RwLock<FlagQueue>>) {
+async fn handle_flag(pool: &PgPool, packet_id: i64, start_idx: i32, end_idx: i32, tag_name: &str, stream_id: i64, team_cache: &Arc<RwLock<TeamCache>>, flag_queue: &Arc<RwLock<FlagQueue>>) {
     let farm_enabled = get_setting(pool, "farm_enabled").await.unwrap_or_default();
     if farm_enabled != "true" {
         debug!("Flag found but farm disabled (packet_id={})", packet_id);
@@ -436,8 +436,8 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
 
 fn handle_alert(
     broadcaster: &broadcast::Sender<String>,
-    packet_id: i32,
-    stream_id: i32,
+    packet_id: i64,
+    stream_id: i64,
     tag_name: &str,
 ) {
     let alert_event = serde_json::json!({

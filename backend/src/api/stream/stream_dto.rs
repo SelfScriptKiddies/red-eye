@@ -12,7 +12,7 @@ pub enum Protocol {
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Stream {
-    pub id: i32,
+    pub id: i64,
     pub src_ip: IpAddr,
     pub src_port: i32,
     pub dst_ip: IpAddr,
@@ -26,7 +26,7 @@ pub struct Stream {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct StreamResponse {
-    pub id: i32,
+    pub id: i64,
     pub src_ip: String,
     pub src_port: i32,
     pub dst_ip: String,
@@ -41,8 +41,8 @@ pub struct StreamResponse {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct StreamListResponse {
-    pub id: i32,
-    pub service_id: i32,
+    pub id: i64,
+    pub service_id: i64,
     pub service_name: String,
     pub tags: Vec<String>,
     pub first_packet_time: i64,
@@ -57,7 +57,7 @@ pub struct StreamListResponse {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HistogramBucket {
     pub timestamp: i64,
-    pub service_id: i32,
+    pub service_id: i64,
     pub service_name: String,
     pub count: i64,
 }

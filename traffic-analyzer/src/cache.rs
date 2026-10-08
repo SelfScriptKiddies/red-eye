@@ -14,7 +14,7 @@ pub struct Cache {
     pub streams: Arc<StreamsCache>,
     pub stream_locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
     pub proto_schemas: Arc<RwLock<HashMap<usize, ProtoSchema>>>,
-    pub header_sets: Arc<DashMap<i64, i32>>,
+    pub header_sets: Arc<DashMap<i64, i64>>,
 }
 
 impl Cache {

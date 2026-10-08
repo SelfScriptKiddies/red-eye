@@ -21,7 +21,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 async fn get_protos_by_service(
     _identity: Identity,
     pool: web::Data<PgPool>,
-    service_id: web::Path<i32>,
+    service_id: web::Path<i64>,
 ) -> impl Responder {
     let repo = ProtoRepository::new(pool.get_ref().clone());
     match repo.get_by_service(service_id.into_inner()).await {
@@ -66,7 +66,7 @@ async fn upload_proto(
 async fn delete_proto(
     _identity: Identity,
     pool: web::Data<PgPool>,
-    id: web::Path<i32>,
+    id: web::Path<i64>,
 ) -> impl Responder {
     let repo = ProtoRepository::new(pool.get_ref().clone());
     match repo.delete(id.into_inner()).await {

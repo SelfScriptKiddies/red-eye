@@ -66,7 +66,7 @@ impl DB {
         .await;
 
         match row {
-            Ok(Some(row)) => Some(row.get::<i32, _>("id") as usize),
+            Ok(Some(row)) => Some(row.get::<i64, _>("id") as usize),
             Ok(None) => None,
             Err(e) => {
                 error!("Error fetching stream id: {}", e);
@@ -91,42 +91,42 @@ impl DB {
         .bind(dst_port as i32)
         .bind(protocol_str)
         .bind(true)
-        .bind(service_id as i32)
+        .bind(service_id as i64)
         .bind(first_packet_time)
         .fetch_one(&self.pgpool)
-        .await.map(|row| row.get::<i32, _>("id") as usize)
+        .await.map(|row| row.get::<i64, _>("id") as usize)
 
     }
 
-    pub async fn insert_packet(&self, packet: &PacketInfo, stream_id: usize, direction: &Direction) -> Result<i32, Error> {
+    pub async fn insert_packet(&self, packet: &PacketInfo, stream_id: usize, direction: &Direction) -> Result<i64, Error> {
         let direction_str: &'static str = match direction {
             Direction::Inbound => "dest",
             Direction::Outbound => "orig"
         };
-        
+
         sqlx::query(
             "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES ($1, $2, $3, $4, $5) RETURNING id"
         )
         .bind(packet.timestamp_seconds as i64)
         .bind(packet.timestamp_microseconds as i64)
         .bind(direction_str)
-        .bind(stream_id as i32)
+        .bind(stream_id as i64)
         .bind(&packet.payload)
         .fetch_one(&self.pgpool)
         .await
-        .map(|row| row.get::<i32, _>("id"))
+        .map(|row| row.get::<i64, _>("id"))
     }
 
     /// Insert a single tag (filter trigger) row.
     /// `timestamp` MUST be the packet's capture time (same value as the
     /// packets row): the backend JOINs `p.timestamp = t.timestamp`, so a
     /// DB-clock default silently detaches the tag from its packet.
-    pub async fn insert_trigger(&self, packet_id: i32, filter_id: usize, start_index: usize, end_index: usize, timestamp: i64) -> Result<(), Error> {
+    pub async fn insert_trigger(&self, packet_id: i64, filter_id: usize, start_index: usize, end_index: usize, timestamp: i64) -> Result<(), Error> {
         sqlx::query(
             "INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ($1, $2, $3, $4, $5)"
         )
         .bind(packet_id)
-        .bind(filter_id as i32)
+        .bind(filter_id as i64)
         .bind(start_index as i32)
         .bind(end_index as i32)
         .bind(timestamp)
@@ -139,7 +139,7 @@ impl DB {
     /// Rows are (packet_id, filter_id, start_index, end_index, packet_timestamp):
     /// the timestamp is each source packet's capture time, NOT NOW() — the
     /// backend joins tag rows to packets on `p.timestamp = t.timestamp`.
-    pub async fn insert_triggers_batch(&self, rows: &[(i32, usize, usize, usize, i64)]) -> Result<(), Error> {
+    pub async fn insert_triggers_batch(&self, rows: &[(i64, usize, usize, usize, i64)]) -> Result<(), Error> {
         if rows.is_empty() { return Ok(()); }
 
         // Build multi-row INSERT: INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ($1..$5), ($6..$10), ...
@@ -156,7 +156,7 @@ impl DB {
         let mut q = sqlx::query(&query);
         for (packet_id, filter_id, start, end, timestamp) in rows {
             q = q.bind(*packet_id)
-                 .bind(*filter_id as i32)
+                 .bind(*filter_id as i64)
                  .bind(*start as i32)
                  .bind(*end as i32)
                  .bind(*timestamp);
@@ -170,7 +170,7 @@ impl DB {
             "UPDATE stream SET l7_protocol = $1 WHERE id = $2 AND (l7_protocol = 'unknown' OR ($1 = 'grpc' AND l7_protocol = 'http1'))"
         )
         .bind(protocol)
-        .bind(stream_id as i32)
+        .bind(stream_id as i64)
         .execute(&self.pgpool)
         .await
         .map(|_| ())
@@ -181,8 +181,8 @@ impl DB {
     pub async fn get_or_create_header_set(
         &self,
         headers: &[(String, String)],
-        cache: &dashmap::DashMap<i64, i32>,
-    ) -> Result<i32, Error> {
+        cache: &dashmap::DashMap<i64, i64>,
+    ) -> Result<i64, Error> {
         use std::collections::BTreeMap;
         use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
@@ -201,7 +201,7 @@ impl DB {
         }
 
         // Try to find existing in DB
-        let existing = sqlx::query_scalar::<_, i32>(
+        let existing = sqlx::query_scalar::<_, i64>(
             "SELECT id FROM header_set WHERE hash = $1"
         )
         .bind(hash)
@@ -214,7 +214,7 @@ impl DB {
         }
 
         // Insert new (ON CONFLICT for race conditions)
-        let id = sqlx::query_scalar::<_, i32>(
+        let id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO header_set (hash, headers) VALUES ($1, $2)
              ON CONFLICT (hash) DO UPDATE SET hash = header_set.hash
              RETURNING id"
@@ -232,7 +232,7 @@ impl DB {
     pub async fn insert_http_message(
         &self,
         stream_id: usize,
-        packet_id: i32,
+        packet_id: i64,
         is_request: bool,
         method: Option<&str>,
         path: Option<&str>,
@@ -242,15 +242,15 @@ impl DB {
         content_length: Option<i32>,
         body_offset: i32,
         body_length: i32,
-        header_set_id: Option<i32>,
+        header_set_id: Option<i64>,
         timestamp: i64,
-    ) -> Result<i32, Error> {
+    ) -> Result<i64, Error> {
         sqlx::query(
             "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
              RETURNING id"
         )
-        .bind(stream_id as i32)
+        .bind(stream_id as i64)
         .bind(packet_id)
         .bind(is_request)
         .bind(method)
@@ -265,20 +265,20 @@ impl DB {
         .bind(timestamp)
         .fetch_one(&self.pgpool)
         .await
-        .map(|row| row.get::<i32, _>("id"))
+        .map(|row| row.get::<i64, _>("id"))
     }
 
     /// Insert a gRPC message with deduplicated body
     pub async fn insert_grpc_message(
         &self,
         stream_id: usize,
-        http_message_id: i32,
+        http_message_id: i64,
         service_name: Option<&str>,
         method_name: Option<&str>,
         is_request: bool,
         decoded_json: &str,
         timestamp: i64,
-    ) -> Result<i32, Error> {
+    ) -> Result<i64, Error> {
         // Dedup body via hash (like header_set)
         use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
@@ -287,7 +287,7 @@ impl DB {
         let body_hash = hasher.finish() as i64;
 
         // Upsert into grpc_body_set
-        let body_set_id = sqlx::query_scalar::<_, i32>(
+        let body_set_id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO grpc_body_set (hash, decoded_json) VALUES ($1, $2)
              ON CONFLICT (hash) DO UPDATE SET decoded_json = EXCLUDED.decoded_json
              RETURNING id"
@@ -302,7 +302,7 @@ impl DB {
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id"
         )
-        .bind(stream_id as i32)
+        .bind(stream_id as i64)
         .bind(http_message_id)
         .bind(service_name)
         .bind(method_name)
@@ -311,12 +311,12 @@ impl DB {
         .bind(timestamp)
         .fetch_one(&self.pgpool)
         .await
-        .map(|row| row.get::<i32, _>("id"))
+        .map(|row| row.get::<i64, _>("id"))
     }
 
     /// Batch insert packets with a single multi-row INSERT.
     /// Returns the list of generated packet IDs in insertion order.
-    pub async fn insert_packets_batch(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i32>, Error> {
+    pub async fn insert_packets_batch(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
         if packets.is_empty() { return Ok(vec![]); }
 
         let mut query = String::from(
@@ -332,7 +332,7 @@ impl DB {
         }
         query.push_str(" RETURNING id");
 
-        let mut q = sqlx::query_scalar::<_, i32>(&query);
+        let mut q = sqlx::query_scalar::<_, i64>(&query);
         for pkt in packets {
             let direction_str: &str = match pkt.direction.as_str() {
                 "inbound" => "dest",
@@ -341,7 +341,7 @@ impl DB {
             q = q.bind(pkt.timestamp_seconds as i64)
                  .bind(pkt.timestamp_microseconds as i64)
                  .bind(direction_str)
-                 .bind(pkt.stream_id as i32)
+                 .bind(pkt.stream_id as i64)
                  .bind(&pkt.payload);
         }
 
@@ -352,8 +352,8 @@ impl DB {
     /// `rows` is (packet_id, http). Returns generated ids in insertion order.
     pub async fn insert_http_messages_batch(
         &self,
-        rows: &[(i32, &crate::batch_flusher::HttpMessageData)],
-    ) -> Result<Vec<i32>, Error> {
+        rows: &[(i64, &crate::batch_flusher::HttpMessageData)],
+    ) -> Result<Vec<i64>, Error> {
         if rows.is_empty() { return Ok(vec![]); }
 
         const COLS: usize = 13;
@@ -372,9 +372,9 @@ impl DB {
         }
         query.push_str(" RETURNING id");
 
-        let mut q = sqlx::query_scalar::<_, i32>(&query);
+        let mut q = sqlx::query_scalar::<_, i64>(&query);
         for (packet_id, http) in rows {
-            q = q.bind(http.stream_id as i32)
+            q = q.bind(http.stream_id as i64)
                  .bind(*packet_id)
                  .bind(http.is_request)
                  .bind(http.method.as_deref())
@@ -395,7 +395,7 @@ impl DB {
     /// Dedups body sets by hash (mirrors insert_grpc_message) with two multi-row queries.
     pub async fn insert_grpc_messages_batch(
         &self,
-        rows: &[(i32, &crate::batch_flusher::GrpcMessageData)],
+        rows: &[(i64, &crate::batch_flusher::GrpcMessageData)],
     ) -> Result<(), Error> {
         if rows.is_empty() { return Ok(()); }
         use std::hash::{Hash, Hasher};
@@ -425,9 +425,9 @@ impl DB {
         for (h, j) in &distinct {
             query1 = query1.bind(*h).bind(*j);
         }
-        let mut id_by_hash: HashMap<i64, i32> = HashMap::new();
+        let mut id_by_hash: HashMap<i64, i64> = HashMap::new();
         for row in query1.fetch_all(&self.pgpool).await? {
-            id_by_hash.insert(row.get::<i64, _>("hash"), row.get::<i32, _>("id"));
+            id_by_hash.insert(row.get::<i64, _>("hash"), row.get::<i64, _>("id"));
         }
 
         // Multi-row insert grpc_message.
@@ -449,7 +449,7 @@ impl DB {
         for ((http_message_id, grpc), h) in rows.iter().zip(hashes.iter()) {
             let body_set_id = id_by_hash.get(h).copied();
             query2 = query2
-                .bind(grpc.stream_id as i32)
+                .bind(grpc.stream_id as i64)
                 .bind(*http_message_id)
                 .bind(grpc.service_name.as_deref())
                 .bind(grpc.method_name.as_deref())
@@ -468,12 +468,12 @@ impl DB {
         for (i, _) in rows.iter().enumerate() {
             if i > 0 { query.push_str(", "); }
             let base = i * 2;
-            query.push_str(&format!("(${}::int, ${}::varchar)", base + 1, base + 2));
+            query.push_str(&format!("(${}::bigint, ${}::varchar)", base + 1, base + 2));
         }
         query.push_str(") AS v(stream_id, proto) WHERE s.id = v.stream_id AND (s.l7_protocol = 'unknown' OR (v.proto = 'grpc' AND s.l7_protocol = 'http1'))");
         let mut q = sqlx::query(&query);
         for (sid, proto) in rows {
-            q = q.bind(*sid as i32).bind(proto);
+            q = q.bind(*sid as i64).bind(proto);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }
@@ -488,12 +488,12 @@ impl DB {
         for (i, _) in rows.iter().enumerate() {
             if i > 0 { query.push_str(", "); }
             let base = i * 3;
-            query.push_str(&format!("(${}::int, ${}::bigint, ${}::int)", base + 1, base + 2, base + 3));
+            query.push_str(&format!("(${}::bigint, ${}::bigint, ${}::bigint)", base + 1, base + 2, base + 3));
         }
         query.push_str(") AS v(stream_id, ts, cnt) WHERE s.id = v.stream_id");
         let mut q = sqlx::query(&query);
         for (sid, ts, cnt) in rows {
-            q = q.bind(*sid as i32).bind(*ts).bind(*cnt as i32);
+            q = q.bind(*sid as i64).bind(*ts).bind(*cnt);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }
@@ -508,7 +508,7 @@ impl DB {
 
     /// Load all proto files grouped by service_id.
     /// Returns: service_id → Vec<(filename, content)>
-    pub async fn get_all_proto_files(&self) -> HashMap<i32, Vec<(String, String)>> {
+    pub async fn get_all_proto_files(&self) -> HashMap<i64, Vec<(String, String)>> {
         let rows = sqlx::query(
             "SELECT service_id, filename, content FROM proto_file ORDER BY service_id, id"
         )
@@ -516,9 +516,9 @@ impl DB {
         .await
         .unwrap_or_default();
 
-        let mut result: HashMap<i32, Vec<(String, String)>> = HashMap::new();
+        let mut result: HashMap<i64, Vec<(String, String)>> = HashMap::new();
         for row in rows {
-            let svc_id: i32 = row.get("service_id");
+            let svc_id: i64 = row.get("service_id");
             let filename: String = row.get("filename");
             let content: String = row.get("content");
             result.entry(svc_id).or_default().push((filename, content));

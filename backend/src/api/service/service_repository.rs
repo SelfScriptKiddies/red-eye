@@ -12,7 +12,7 @@ impl ServiceRepository {
         }
     }
 
-    pub async fn get_service_by_id(&self, id: i32) -> Result<Service, sqlx::Error> {
+    pub async fn get_service_by_id(&self, id: i64) -> Result<Service, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
@@ -90,7 +90,7 @@ impl ServiceRepository {
             .await
     }
 
-    pub async fn delete_service(&self, id: i32) -> Result<(), sqlx::Error> {
+    pub async fn delete_service(&self, id: i64) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
             DELETE FROM service WHERE id = $1

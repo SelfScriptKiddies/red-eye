@@ -13,7 +13,7 @@ impl L7Repository {
 
     pub async fn get_messages_by_stream(
         &self,
-        stream_id: i32,
+        stream_id: i64,
     ) -> Result<Vec<HttpMessage>, Error> {
         sqlx::query_as::<_, HttpMessage>(
             "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
@@ -28,7 +28,7 @@ impl L7Repository {
         .await
     }
 
-    pub async fn get_message_by_id(&self, id: i32) -> Result<HttpMessage, Error> {
+    pub async fn get_message_by_id(&self, id: i64) -> Result<HttpMessage, Error> {
         sqlx::query_as::<_, HttpMessage>(
             "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
                     http_version, content_type, content_length, body_offset, body_length,
@@ -44,7 +44,7 @@ impl L7Repository {
     /// Get headers JSONB from header_set by message's header_set_id
     pub async fn get_headers_by_message(
         &self,
-        message_id: i32,
+        message_id: i64,
     ) -> Result<serde_json::Value, Error> {
         let result = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT hs.headers
@@ -65,13 +65,13 @@ impl L7Repository {
         name: &str,
         value: Option<&str>,
         limit: i64,
-    ) -> Result<Vec<i32>, Error> {
+    ) -> Result<Vec<i64>, Error> {
         if let Some(val) = value {
             // Use LIKE for partial matches (e.g. individual cookies within Cookie header)
             let use_like = name.eq_ignore_ascii_case("Cookie") || val.contains('=');
             if use_like {
                 let pattern = format!("%{}%", val);
-                sqlx::query_scalar::<_, i32>(
+                sqlx::query_scalar::<_, i64>(
                     "SELECT DISTINCT m.stream_id
                      FROM http_message m
                      JOIN header_set hs ON hs.id = m.header_set_id
@@ -85,7 +85,7 @@ impl L7Repository {
                 .fetch_all(&self.pgpool)
                 .await
             } else {
-                sqlx::query_scalar::<_, i32>(
+                sqlx::query_scalar::<_, i64>(
                     "SELECT DISTINCT m.stream_id
                      FROM http_message m
                      JOIN header_set hs ON hs.id = m.header_set_id
@@ -100,7 +100,7 @@ impl L7Repository {
                 .await
             }
         } else {
-            sqlx::query_scalar::<_, i32>(
+            sqlx::query_scalar::<_, i64>(
                 "SELECT DISTINCT m.stream_id
                  FROM http_message m
                  JOIN header_set hs ON hs.id = m.header_set_id
@@ -120,8 +120,8 @@ impl L7Repository {
         &self,
         ip: &str,
         limit: i64,
-    ) -> Result<Vec<i32>, Error> {
-        sqlx::query_scalar::<_, i32>(
+    ) -> Result<Vec<i64>, Error> {
+        sqlx::query_scalar::<_, i64>(
             "SELECT id FROM stream
              WHERE src_ip::text = $1 OR dst_ip::text = $1
              ORDER BY id DESC
@@ -138,14 +138,14 @@ impl L7Repository {
         &self,
         path: &str,
         limit: i64,
-    ) -> Result<Vec<i32>, Error> {
+    ) -> Result<Vec<i64>, Error> {
         // Use LIKE if path contains %, otherwise exact or prefix match
         let pattern = if path.contains('%') {
             path.to_string()
         } else {
             format!("{}%", path) // prefix match by default
         };
-        sqlx::query_scalar::<_, i32>(
+        sqlx::query_scalar::<_, i64>(
             "SELECT DISTINCT stream_id
              FROM http_message
              WHERE path LIKE $1
@@ -162,12 +162,12 @@ impl L7Repository {
         &self,
         filters: &[(String, Option<String>)],
         limit: i64,
-    ) -> Result<Vec<i32>, Error> {
+    ) -> Result<Vec<i64>, Error> {
         if filters.is_empty() {
             return Ok(vec![]);
         }
 
-        let mut result: Option<Vec<i32>> = None;
+        let mut result: Option<Vec<i64>> = None;
 
         for (name, value) in filters {
             let ids = if name == "_path" {
@@ -181,7 +181,7 @@ impl L7Repository {
             result = Some(match result {
                 None => ids,
                 Some(prev) => {
-                    let ids_set: std::collections::HashSet<i32> = ids.into_iter().collect();
+                    let ids_set: std::collections::HashSet<i64> = ids.into_iter().collect();
                     prev.into_iter().filter(|id| ids_set.contains(id)).collect()
                 }
             });
@@ -223,7 +223,7 @@ impl L7Repository {
 
     pub async fn get_grpc_messages_by_stream(
         &self,
-        stream_id: i32,
+        stream_id: i64,
     ) -> Result<Vec<super::l7_dto::GrpcMessage>, Error> {
         sqlx::query_as::<_, super::l7_dto::GrpcMessage>(
             "SELECT g.id, g.stream_id, g.http_message_id, g.service_name, g.method_name,

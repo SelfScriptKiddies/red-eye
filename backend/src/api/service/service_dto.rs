@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct Service {
-    pub id: i32,
+    pub id: i64,
     pub name: String,
     pub port: i32,
     pub chunked_transfer_encoding: bool,

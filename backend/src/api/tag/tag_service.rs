@@ -23,27 +23,27 @@ impl TagService {
         self.repository.create_tag_name(tag_name).await
     }
 
-    pub async fn get_tags_by_packet_id(&self, packet_id: i32) -> Result<Vec<Tag>, sqlx::Error> {
+    pub async fn get_tags_by_packet_id(&self, packet_id: i64) -> Result<Vec<Tag>, sqlx::Error> {
         self.repository.get_tags_by_packet_id(packet_id).await
     }
 
-    pub async fn get_tags_by_stream_id(&self, stream_id: i32) -> Result<Vec<Tag>, sqlx::Error> {
+    pub async fn get_tags_by_stream_id(&self, stream_id: i64) -> Result<Vec<Tag>, sqlx::Error> {
         self.repository.get_tags_by_stream_id(stream_id).await
     }
 
-    pub async fn get_tag_name_by_id(&self, id: i32) -> Result<TagName, sqlx::Error> {
+    pub async fn get_tag_name_by_id(&self, id: i64) -> Result<TagName, sqlx::Error> {
         self.repository.get_tag_name_by_id(id).await
     }
 
-    pub async fn update_tag_name(&self, id: i32, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
+    pub async fn update_tag_name(&self, id: i64, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
         self.repository.update_tag_name(id, tag_name).await
     }
 
-    pub async fn delete_tag(&self, id: i32) -> Result<(), sqlx::Error> {
+    pub async fn delete_tag(&self, id: i64) -> Result<(), sqlx::Error> {
         self.repository.delete_tag(id).await
     }
 
-    pub async fn delete_tag_name(&self, id: i32) -> Result<(), sqlx::Error> {
+    pub async fn delete_tag_name(&self, id: i64) -> Result<(), sqlx::Error> {
         self.repository.delete_tag_name(id).await
     }
 
@@ -51,11 +51,11 @@ impl TagService {
         self.repository.get_all_tag_names().await
     }
 
-    pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
+    pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
         self.repository.get_tag_metrics(minutes).await
     }
 
-    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
+    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
         self.repository.get_flag_balance(minutes).await
     }
 }

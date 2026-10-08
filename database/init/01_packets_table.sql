@@ -1,10 +1,13 @@
 -- Create partitioned 'packets' table
+-- id BIGINT: at ~100k pkt/s an int4 sequence exhausts 2^31 in ~6h and every
+-- INSERT fails (ingest stops). All id/FK columns are BIGINT end-to-end so
+-- JOINs never mix int4/int8.
 CREATE TABLE IF NOT EXISTS packets (
-    id SERIAL,
+    id BIGSERIAL,
     timestamp BIGINT NOT NULL,
     timestamp_microseconds BIGINT NOT NULL,
     direction VARCHAR(4) NOT NULL,
-    stream_id INTEGER NOT NULL,
+    stream_id BIGINT NOT NULL,
     packet_data BYTEA NOT NULL,
     PRIMARY KEY (id, timestamp)
 ) PARTITION BY RANGE (timestamp);
