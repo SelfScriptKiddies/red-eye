@@ -517,6 +517,7 @@ dependencies = [
  "config-manager",
  "env_logger",
  "futures-util",
+ "ipnetwork",
  "lazy_static",
  "log",
  "pcap",
