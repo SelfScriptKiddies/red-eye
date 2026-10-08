@@ -130,13 +130,14 @@ pub fn spawn_command_listener(
             };
 
             debug!("Received command: {:?}", cmd);
-            handle_command(cmd, &ports_cache, &restart_tx, &harpoon).await;
+            handle_command(cmd, &nats, &ports_cache, &restart_tx, &harpoon).await;
         }
     });
 }
 
 async fn handle_command(
     cmd: AgentCommand,
+    nats: &NatsClient,
     ports_cache: &PortsCache,
     restart_tx: &RestartNotifier,
     harpoon: &Arc<Mutex<HarpoonEngine>>,
@@ -151,8 +152,8 @@ async fn handle_command(
 
         AgentCommand::Shutdown => {
             info!("Shutdown command received");
-            harpoon.lock().await.shutdown().await;
-            std::process::exit(0);
+            // Shared with SIGTERM/SIGINT: bounded cleanup + exit(0).
+            crate::graceful_shutdown(harpoon.clone(), nats).await;
         }
 
         AgentCommand::ProxyAdd {

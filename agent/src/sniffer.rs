@@ -235,29 +235,22 @@ pub async fn run_sniffer_loop(
     }
 
     loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                info!("Shutdown signal received");
-                sniffer.stop();
-                break;
-            }
-            result = restart_rx.changed() => {
-                if result.is_err() {
-                    info!("Restart notifier dropped, shutting down");
-                    sniffer.stop();
-                    break;
-                }
+        // SIGTERM/SIGINT are handled centrally (see lib.rs spawn_signal_handler);
+        // this loop only reacts to sniffer restarts.
+        if restart_rx.changed().await.is_err() {
+            info!("Restart notifier dropped, shutting down sniffer");
+            sniffer.stop();
+            break;
+        }
 
-                info!("Ports changed, restarting sniffer...");
-                sniffer.stop();
-                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        info!("Ports changed, restarting sniffer...");
+        sniffer.stop();
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-                sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
-                match sniffer.start().await {
-                    Ok(_) => info!("Sniffer restarted with updated ports"),
-                    Err(e) => log::error!("Failed to restart sniffer: {}", e),
-                }
-            }
+        sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
+        match sniffer.start().await {
+            Ok(_) => info!("Sniffer restarted with updated ports"),
+            Err(e) => log::error!("Failed to restart sniffer: {}", e),
         }
     }
 }

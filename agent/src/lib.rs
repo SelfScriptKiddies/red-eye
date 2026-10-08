@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use log::{debug, error, info, warn};
@@ -105,9 +106,79 @@ pub async fn run() {
         harpoon.clone(),
     );
 
+    // SIGTERM (systemctl restart/stop) and SIGINT must clean up nftables
+    // before exit, otherwise the table keeps redirecting traffic to a dead
+    // proxy port after the agent is gone.
+    spawn_signal_handler(harpoon.clone(), nats.clone());
+
     // Run sniffer (blocks until shutdown)
     sniffer::run_sniffer_loop(nats, &config, ports_cache, restart_rx).await;
 
     // Cleanup: stop harpoon + nftables
     harpoon.lock().await.shutdown().await;
+}
+
+/// How long shutdown cleanup may take before we exit anyway.
+const SHUTDOWN_TIMEOUT_SECS: u64 = 5;
+
+/// Listen for SIGTERM/SIGINT and run the same shutdown path as the NATS
+/// Shutdown command.
+fn spawn_signal_handler(harpoon: Arc<Mutex<HarpoonEngine>>, nats: NatsClient) {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    tokio::spawn(async move {
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to install SIGTERM handler: {}", e);
+                return;
+            }
+        };
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("SIGTERM received, shutting down"),
+            _ = tokio::signal::ctrl_c() => info!("SIGINT received, shutting down"),
+        }
+
+        graceful_shutdown(harpoon, &nats).await;
+    });
+}
+
+/// Graceful shutdown: stop the proxy engine, remove the nftables table,
+/// flush NATS, exit 0. Shared by SIGTERM/SIGINT and the NATS Shutdown
+/// command so there is exactly one cleanup path.
+///
+/// The cleanup work runs on a blocking thread: nftables cleanup shells out
+/// to `nft`, and a hung subprocess must not wedge the async runtime (on a
+/// single-vCPU box it would also prevent this timeout from ever firing).
+/// All cleanup is idempotent, so a timeout followed by exit (and later a
+/// repeated `Drop`) cannot double-remove anything.
+pub(crate) async fn graceful_shutdown(harpoon: Arc<Mutex<HarpoonEngine>>, nats: &NatsClient) -> ! {
+    let nats = nats.clone();
+    let rt = tokio::runtime::Handle::current();
+
+    let cleanup = tokio::task::spawn_blocking(move || {
+        rt.block_on(async move {
+            // Same path as before: stop engine, delete the nftables table.
+            harpoon.lock().await.shutdown().await;
+            // Push any buffered packets out before we die.
+            nats.inner().flush().await
+        })
+    });
+
+    match tokio::time::timeout(Duration::from_secs(SHUTDOWN_TIMEOUT_SECS), cleanup).await {
+        Ok(Ok(Ok(()))) => info!("Shutdown cleanup complete"),
+        Ok(Ok(Err(e))) => error!(
+            "Shutdown cleanup failed: {} (nftables table may remain, remove with `nft delete table inet red-eye-agent`)",
+            e
+        ),
+        Ok(Err(e)) => error!("Shutdown cleanup task panicked: {}", e),
+        Err(_) => error!(
+            "Shutdown cleanup timed out after {}s, exiting anyway \
+             (nftables table may remain, remove with `nft delete table inet red-eye-agent`)",
+            SHUTDOWN_TIMEOUT_SECS
+        ),
+    }
+
+    std::process::exit(0)
 }
