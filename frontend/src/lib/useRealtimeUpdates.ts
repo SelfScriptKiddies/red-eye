@@ -1,13 +1,12 @@
-import { useWebSocket } from './useWebSocket';
+import { useWebSocket, type ActivityFlush } from './useWebSocket';
 import { useConnectionStatus } from './useConnectionStatus';
-import type { StreamPatch } from './activityEvents';
 
 export function useRealtimeUpdates(
     enabled: boolean,
-    onPatchStreams?: (_patches: Map<number, StreamPatch>) => void,
+    onActivity?: (_flush: ActivityFlush) => void,
     selectedStreamIds?: number[],
 ) {
-    const wsState = useWebSocket(enabled, onPatchStreams, selectedStreamIds);
+    const wsState = useWebSocket(enabled, onActivity, selectedStreamIds);
     const connectionStatus = useConnectionStatus(wsState);
     return connectionStatus;
 }

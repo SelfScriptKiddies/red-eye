@@ -97,8 +97,17 @@ describe('mergeActivityFrames', () => {
         expect(mergeActivityFrames([])).toEqual({
             patches: new Map(),
             hasNewStreams: false,
+            newStreamIds: [],
             packetsAvailable: [],
         });
+    });
+
+    it('unions new_stream ids across frames of one flush', () => {
+        const { newStreamIds } = mergeActivityFrames([
+            frame({ new_streams: [5, 6] }),
+            frame({ new_streams: [6, 7] }),
+        ]);
+        expect(newStreamIds).toEqual([5, 6, 7]);
     });
 });
 

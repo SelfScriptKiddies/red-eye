@@ -2,7 +2,7 @@ import { useCallback, CSSProperties } from "react";
 import './PacketsPage.css'
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { List as VirtualList, useDynamicRowHeight } from 'react-window';
+import { List as VirtualList, useListRef } from 'react-window';
 import { StreamCard } from '../../components/StreamCard'
 import { ServiceCard } from '../../components/ServiceCard'
 import { PacketCard } from '../../components/PacketCard';
@@ -14,6 +14,7 @@ import { shq, pyStr } from '../../lib/exportEscaping';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
+import { useStableRowHeight } from '../../lib/useStableRowHeight';
 import { useRedEye } from '../../context/RedEyeContext';
 
 
@@ -62,55 +63,36 @@ interface PacketRowProps {
     selectedStreamL7: string | null;
     diffLeft: any | null;
     addHeaderFilter: (_name: string, _value: string, _exclude?: boolean) => void;
-    setDiffLeft: (_p: any | null) => void;
-    setDiffRight: (_p: any | null) => void;
-    setDiffOpen: (_v: boolean) => void;
+    onHeaderExclude: (_name: string, _value: string) => void;
+    onQuickBlock: (_pattern: string) => void;
+    onDiffSelect: (_p: any) => void;
 }
 
-function PacketRow({ index = 0, style, packets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter, setDiffLeft, setDiffRight, setDiffOpen }: PacketRowProps & { index?: number; style?: CSSProperties; ariaAttributes?: object }) {
+// Stable per-packet row identity: heights and effects are keyed by it, not
+// by array index (see useStableRowHeight).
+const packetRowKey = (packet: any): string => `${packet._stream_id ?? packet.stream_id}:${packet.id}`;
+
+const PacketRow = ({ index = 0, style, packets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter, onHeaderExclude, onQuickBlock, onDiffSelect }: PacketRowProps & { index?: number; style?: CSSProperties; ariaAttributes?: object }) => {
     const packet = packets[index];
     if (!packet) return null;
+    const rowKey = packetRowKey(packet);
     return (
-        <div style={style}>
+        <div style={style} data-row-key={rowKey}>
             <PacketCard
-                key={`${packet._stream_id ?? packet.stream_id}-${packet.id}`}
+                key={rowKey}
                 {...packet}
                 showStreamId={isMultiSelect}
                 isHttp={selectedStreamL7 === 'http1'}
                 isGrpc={selectedStreamL7 === 'grpc'}
                 onHeaderSearch={addHeaderFilter}
-                onHeaderExclude={(name: string, value: string) => addHeaderFilter(name, value, true)}
+                onHeaderExclude={onHeaderExclude}
                 diffSelected={diffLeft?.id === packet.id}
-                onDiffSelect={(pkt: any) => {
-                    if (!diffLeft) {
-                        setDiffLeft(pkt);
-                    } else if (diffLeft.id === pkt.id) {
-                        setDiffLeft(null);
-                    } else {
-                        setDiffRight(pkt);
-                        setDiffOpen(true);
-                    }
-                }}
-                onQuickBlock={(pattern: string) => {
-                    if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
-                    const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
-                    fetch('/api/tag/names', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            name: `block-${pattern.slice(0, 20)}`,
-                            color: 0,
-                            template_type: isHex ? 'bsubstr' : 'substr',
-                            template: pattern,
-                            direction: 'both',
-                            special_type: 'block'
-                        })
-                    });
-                }}
+                onDiffSelect={onDiffSelect}
+                onQuickBlock={onQuickBlock}
             />
         </div>
     );
-}
+};
 
 export function PacketsPage() {
     const [servicesArray, setServices] = useState([]);
@@ -151,12 +133,15 @@ export function PacketsPage() {
 
     const {
         streams: streamsArray,
+        newStreamsCount,
+        scrollToken,
         isLoadingMore,
         hasMoreStreams,
         updateStream,
         clearStreams,
         loadMore,
-        patchStreams,
+        acceptNew,
+        onActivity,
     } = useStreams({
         tags: streamTags,
         services: streamServices,
@@ -180,7 +165,7 @@ export function PacketsPage() {
 
     // Live OFF stops the WS subscription; enabled:false on useStreams already
     // halts its refetchInterval, so no auto-updates fire until the user hits Update.
-    useRealtimeUpdates(live, patchStreams, selectedStreamIds);
+    useRealtimeUpdates(live, onActivity, selectedStreamIds);
 
     // One-shot manual refresh: pull newest streams + currently visible packets.
     const handleManualUpdate = useCallback(() => {
@@ -373,20 +358,71 @@ export function PacketsPage() {
         tagColors,
     }), [filteredStreams, selectedStreamIds, handleStreamClick, handleFavoriteToggle, addHeaderFilter, tagColors]);
 
+    // Stabilized packet-card callbacks. Previously these were inline arrows
+    // inside PacketRow — new identities every render broke memo(PacketCard),
+    // so every mounted card re-rendered (and re-ran its async loads) on any
+    // parent update.
+    const onHeaderExclude = useCallback((name: string, value: string) => {
+        addHeaderFilter(name, value, true);
+    }, [addHeaderFilter]);
+
+    const onQuickBlock = useCallback((pattern: string) => {
+        if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
+        const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
+        fetch('/api/tag/names', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: `block-${pattern.slice(0, 20)}`,
+                color: 0,
+                template_type: isHex ? 'bsubstr' : 'substr',
+                template: pattern,
+                direction: 'both',
+                special_type: 'block'
+            })
+        });
+    }, []);
+
+    const onDiffSelect = useCallback((pkt: any) => {
+        if (!diffLeft) {
+            setDiffLeft(pkt);
+        } else if (diffLeft.id === pkt.id) {
+            setDiffLeft(null);
+        } else {
+            setDiffRight(pkt);
+            setDiffOpen(true);
+        }
+    }, [diffLeft]);
+
     const packetRowProps = useMemo(() => ({
         packets: mergedPackets,
         isMultiSelect,
         selectedStreamL7,
         diffLeft,
         addHeaderFilter,
-        setDiffLeft,
-        setDiffRight,
-        setDiffOpen,
-    }), [mergedPackets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter]);
+        onHeaderExclude,
+        onQuickBlock,
+        onDiffSelect,
+    }), [mergedPackets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter, onHeaderExclude, onQuickBlock, onDiffSelect]);
 
     // Packet cards expand on click, so their height is variable. A fixed rowHeight
     // makes an expanded card overlap the rows below it — measure each row instead.
-    const packetRowHeight = useDynamicRowHeight({ defaultRowHeight: 120 });
+    // Heights are cached by stable packet identity (stream_id:packet_id), not by
+    // array index: switching streams or re-merging must not leak the previous
+    // list's heights onto new cards (they rendered wrong and jumped).
+    const packetRowHeight = useStableRowHeight({ defaultRowHeight: 120, items: mergedPackets, getKey: packetRowKey });
+
+    // Streams list imperative handle: scroll to top when the user accepts
+    // the «N новых» plaque (the frozen snapshot is replaced by the fresh
+    // page — without this the viewport would stay where the user scrolled).
+    const streamsListRef = useListRef();
+    const lastScrollTokenRef = useRef(scrollToken);
+    useEffect(() => {
+        if (scrollToken === lastScrollTokenRef.current) return;
+        lastScrollTokenRef.current = scrollToken;
+        if (scrollToken === 0) return;
+        streamsListRef.current?.scrollToRow({ index: 0, align: 'start', behavior: 'auto' });
+    }, [scrollToken, streamsListRef]);
 
     // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
@@ -636,6 +672,15 @@ export function PacketsPage() {
                         )}
                     </div>
                 )}
+                {/* «⏸ N новых»: while Live is on, background refetches and WS
+                    activity do NOT touch the frozen list below — new streams
+                    accumulate here instead. Clicking unfreezes: refetch,
+                    replace the view, scroll to top. */}
+                {newStreamsCount > 0 && (
+                    <button className="new-streams-plaque" onClick={acceptNew}>
+                        ⏸ {newStreamsCount} новых
+                    </button>
+                )}
                 <div id="streams" className="streams">
                     {filteredStreams.length > 0 ? (
                         <VirtualList
@@ -645,6 +690,7 @@ export function PacketsPage() {
                             rowProps={streamRowProps}
                             onRowsRendered={handleStreamsRowsRendered}
                             defaultHeight={400}
+                            listRef={streamsListRef}
                         />
                     ) : null}
                     {isLoadingMore && (

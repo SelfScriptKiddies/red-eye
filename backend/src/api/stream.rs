@@ -68,7 +68,14 @@ async fn get_stream_by_id(
 #[derive(Debug, Deserialize, IntoParams)]
 struct StreamQuery {
     pub limit: Option<i64>,
+    /// Deprecated: offset pagination over `ORDER BY last_time DESC` is
+    /// unstable while traffic flows (rows shift between refetches).
+    /// Kept for legacy callers; prefer `cursor`.
     pub offset: Option<i64>,
+    /// Opaque keyset cursor "last_time:id" — take it from the LAST row of the
+    /// previous page (`{last_packet_time}:{id}`). First page: omit.
+    /// Supersedes `offset` when both are given.
+    pub cursor: Option<String>,
 
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_comma_separated_numbers")]
@@ -122,10 +129,22 @@ async fn get_all_streams(
     query: web::Query<StreamQuery>
 ) -> Result<impl Responder, actix_web::error::Error> {
     info!("Getting all streams with query: {:?}", query);
+    // Malformed cursor → 400 (a silently ignored cursor would re-serve the
+    // first page and duplicate rows the caller already has).
+    let cursor = match query.cursor.as_deref().map(stream_service::parse_cursor) {
+        None => None,
+        Some(Ok(parsed)) => parsed,
+        Some(Err(())) => {
+            return Ok(HttpResponse::BadRequest().json(
+                json!({"error": "invalid cursor, expected \"last_time:id\" (two integers)"})
+            ));
+        }
+    };
     let started = std::time::Instant::now();
     let result = stream_service.get_all_streams_with_details(
         query.limit,
         query.offset,
+        cursor,
         query.tags.clone(),
         query.services.clone(),
         query.start_time,

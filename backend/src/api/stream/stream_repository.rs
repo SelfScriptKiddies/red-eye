@@ -40,7 +40,17 @@ impl StreamRepository {
     /// recomputation, so the list can't freeze on statement_timeout at game
     /// volumes. Output shape is IDENTICAL to the old matview-based query
     /// (same columns, same types, same INNER service join).
-    pub async fn get_streams_with_tags(&self, limit: i64, offset: i64, tags: Option<Vec<i64>>, services: Option<Vec<i64>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
+    ///
+    /// Pagination: keyset-first. `cursor` is the opaque "last_time:id" of the
+    /// last row of the previous page; the predicate
+    /// `(last_time, stream_id) < (cursor)` + `ORDER BY last_time DESC, id DESC`
+    /// is a stable page even while `last_time` keeps changing under load
+    /// (OFFSET pagination on a continuously-updated sort key re-serves
+    /// shifted rows on every refetch). The row-value comparison uses the
+    /// expression index idx_stream_last_time_id (see
+    /// database/migrations/stream_keyset_index.sql). `offset` is kept for
+    /// legacy callers (deprecated) and ignored when `cursor` is set.
+    pub async fn get_streams_with_tags(&self, limit: i64, offset: i64, cursor: Option<(i64, i64)>, tags: Option<Vec<i64>>, services: Option<Vec<i64>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
         let mut sql = String::from(r#"
             SELECT
                 stream_id,
@@ -112,6 +122,20 @@ impl StreamRepository {
             where_clauses.push(format!("first_time <= ${param_idx}"));
         }
 
+        // Keyset cursor: strictly older than the last row of the previous
+        // page. Row-value comparison on the SAME expressions as the ORDER BY
+        // (COALESCE(last_packet_time,0), id) so the expression index
+        // idx_stream_last_time_id serves both the filter and the sort.
+        if cursor.is_some() {
+            param_idx += 1;
+            let cursor_time_idx = param_idx;
+            param_idx += 1;
+            let cursor_id_idx = param_idx;
+            where_clauses.push(format!(
+                "(last_time, stream_id) < (${cursor_time_idx}, ${cursor_id_idx})"
+            ));
+        }
+
         if !where_clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&where_clauses.join(" AND "));
@@ -121,12 +145,14 @@ impl StreamRepository {
         let limit_idx = param_idx;
         param_idx += 1;
         let offset_idx = param_idx;
+        // `stream_id` tiebreaker makes even the legacy OFFSET path
+        // deterministic when several rows share one last_time.
         sql.push_str(&format!(
-            " ORDER BY last_time DESC LIMIT ${limit_idx} OFFSET ${offset_idx}"
+            " ORDER BY last_time DESC, stream_id DESC LIMIT ${limit_idx} OFFSET ${offset_idx}"
         ));
 
         log::debug!("SQL Query: {}", sql);
-        log::debug!("Params: tags={:?}, services={:?}, start_time={:?}, end_time={:?}, limit={}, offset={}", tags, services, start_time, end_time, limit, offset);
+        log::debug!("Params: tags={:?}, services={:?}, start_time={:?}, end_time={:?}, cursor={:?}, limit={}, offset={}", tags, services, start_time, end_time, cursor, limit, offset);
 
         let mut query = sqlx::query_as::<_, (i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>(&sql);
 
@@ -152,8 +178,14 @@ impl StreamRepository {
             query = query.bind(end);
         }
 
-        // Bind limit and offset
-        query = query.bind(limit).bind(offset);
+        // Bind cursor params (before limit/offset, matching clause order)
+        if let Some((cursor_last_time, cursor_id)) = cursor {
+            query = query.bind(cursor_last_time).bind(cursor_id);
+        }
+
+        // Bind limit and offset (offset is 0 on the keyset path)
+        let effective_offset = if cursor.is_some() { 0 } else { offset };
+        query = query.bind(limit).bind(effective_offset);
 
         query.fetch_all(&self.pgpool).await
     }

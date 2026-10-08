@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from './api';
+import { mergeAdjacentPackets, splitPackets } from './mergePackets';
 
 const MAX_PACKETS = 500;
 const MAX_SELECTED_STREAMS = 10;
@@ -131,25 +132,12 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
 
     const mergedPackets = useMemo(() => {
         if (!packetData || packetData.length === 0) return [];
-        if (!shouldMerge) return packetData.map(p => ({ ...p, _merged_count: 1 }));
-        const groups: any[] = [];
-        for (const pkt of packetData) {
-            const last = groups[groups.length - 1];
-            if (last && last.direction === pkt.direction && last._stream_id === pkt._stream_id) {
-                const a = atob(last.packet_data);
-                const b = atob(pkt.packet_data);
-                const merged = new Uint8Array(a.length + b.length);
-                for (let i = 0; i < a.length; i++) merged[i] = a.charCodeAt(i);
-                for (let i = 0; i < b.length; i++) merged[a.length + i] = b.charCodeAt(i);
-                let binary = '';
-                for (let i = 0; i < merged.length; i++) binary += String.fromCharCode(merged[i]);
-                last.packet_data = btoa(binary);
-                last._merged_count = (last._merged_count || 1) + 1;
-            } else {
-                groups.push({ ...pkt, _merged_count: 1 });
-            }
-        }
-        return groups;
+        // Pure, linear merge (lib/mergePackets.ts — unit-tested there);
+        // the old inline loop re-encoded the accumulated payload per
+        // appended packet, O(bytes × run) instead of O(bytes).
+        return shouldMerge
+            ? mergeAdjacentPackets(packetData)
+            : splitPackets(packetData);
     }, [packetData, shouldMerge]);
 
     return {
