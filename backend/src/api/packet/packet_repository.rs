@@ -13,7 +13,7 @@ impl PacketRepository {
         }
     }
 
-    pub async fn get_packet_by_id(&self, packet_id: i32) -> Result<Packet, sqlx::Error> {
+    pub async fn get_packet_by_id(&self, packet_id: i64) -> Result<Packet, sqlx::Error> {
         sqlx::query_as::<_, Packet>(
             r#"
             SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
@@ -25,7 +25,7 @@ impl PacketRepository {
             .await
     }
 
-    pub async fn get_packet_by_stream_id(&self, stream_id: i32, limit: i32) -> Result<Vec<Packet>, sqlx::Error> {
+    pub async fn get_packet_by_stream_id(&self, stream_id: i64, limit: i64) -> Result<Vec<Packet>, sqlx::Error> {
         sqlx::query_as::<_, Packet>(
             r#"
             SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
@@ -48,13 +48,13 @@ impl PacketRepository {
         if let Some(id) = last_id {
             query_builder
                 .push("WHERE p.timestamp < (SELECT timestamp FROM packets WHERE id = ")
-                .push_bind(id as i32)
+                .push_bind(id as i64)
                 .push(") ");
         }
 
         query_builder
             .push("ORDER BY p.timestamp DESC, p.timestamp_microseconds DESC LIMIT ")
-            .push_bind(limit as i32);
+            .push_bind(limit as i64);
 
         query_builder
             .build_query_as::<Packet>()

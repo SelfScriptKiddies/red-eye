@@ -26,7 +26,7 @@ impl TagRepository {
         .await
     }
 
-    pub async fn get_tags_by_packet_id(&self, packet_id: i32) -> Result<Vec<Tag>, sqlx::Error> {
+    pub async fn get_tags_by_packet_id(&self, packet_id: i64) -> Result<Vec<Tag>, sqlx::Error> {
         sqlx::query_as::<_, Tag>(
             "SELECT id, packet_id, tag_id, start_index, end_index
              FROM tag
@@ -37,7 +37,7 @@ impl TagRepository {
         .await
     }
 
-    pub async fn get_tag_name_by_id(&self, id: i32) -> Result<TagName, sqlx::Error> {
+    pub async fn get_tag_name_by_id(&self, id: i64) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
             "SELECT id, name, color, template_type, template, direction, special_type
              FROM tag_name WHERE id = $1"
@@ -47,7 +47,7 @@ impl TagRepository {
         .await
     }
 
-    pub async fn update_tag_name(&self, id: i32, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
+    pub async fn update_tag_name(&self, id: i64, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
         sqlx::query_as::<_, TagName>(
             "UPDATE tag_name SET name = $1, color = $2, template_type = $3, template = $4, direction = $5, special_type = $6
              WHERE id = $7
@@ -64,7 +64,7 @@ impl TagRepository {
         .await
     }
 
-    pub async fn delete_tag(&self, id: i32) -> Result<(), sqlx::Error> {
+    pub async fn delete_tag(&self, id: i64) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM tag WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -72,7 +72,7 @@ impl TagRepository {
         Ok(())
     }
 
-    pub async fn delete_tag_name(&self, id: i32) -> Result<(), sqlx::Error> {
+    pub async fn delete_tag_name(&self, id: i64) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM tag_name WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -80,7 +80,7 @@ impl TagRepository {
         Ok(())
     }
 
-    pub async fn get_tags_by_stream_id(&self, stream_id: i32) -> Result<Vec<Tag>, sqlx::Error> {
+    pub async fn get_tags_by_stream_id(&self, stream_id: i64) -> Result<Vec<Tag>, sqlx::Error> {
         sqlx::query_as::<_, Tag>(
             "SELECT t.id, tn.name, tn.color, t.packet_id, t.tag_id, t.start_index, t.end_index
              FROM tag t
@@ -103,8 +103,8 @@ impl TagRepository {
     }
 
     /// Get flag incoming/outgoing counts per service for the last N minutes
-    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
-        sqlx::query_as::<_, (i32, String, i64, i64)>(
+    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, String, i64, i64)>(
             "SELECT s.id as service_id, s.name as service_name,
                     COUNT(*) FILTER (WHERE p.direction = 'dest') as incoming,
                     COUNT(*) FILTER (WHERE p.direction = 'orig') as outgoing
@@ -124,8 +124,8 @@ impl TagRepository {
     }
 
     /// Get tag trigger counts aggregated by minute for the last N minutes
-    pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i32, String, i64, i64)>, sqlx::Error> {
-        sqlx::query_as::<_, (i32, String, i64, i64)>(
+    pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, String, i64, i64)>(
             "SELECT tn.id, tn.name,
                     (t.timestamp / 60) * 60 as minute_ts,
                     COUNT(*) as trigger_count

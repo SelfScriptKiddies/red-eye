@@ -1,8 +1,11 @@
 -- L7 protocol analysis tables
+-- All ids BIGINT end-to-end: http_message/grpc_message are high-volume
+-- (int4 sequence exhaustion = ingest stops) and their FK columns must not
+-- mix int4/int8 with the referenced BIGINT ids.
 
 -- Deduplicated header sets (small table, not partitioned)
 CREATE TABLE IF NOT EXISTS header_set (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     hash BIGINT UNIQUE NOT NULL,
     headers JSONB NOT NULL
 );
@@ -11,9 +14,9 @@ CREATE INDEX IF NOT EXISTS idx_header_set_headers ON header_set USING GIN (heade
 
 -- HTTP messages (partitioned by timestamp)
 CREATE TABLE IF NOT EXISTS http_message (
-    id SERIAL,
-    stream_id INTEGER NOT NULL,
-    packet_id INTEGER NOT NULL,
+    id BIGSERIAL,
+    stream_id BIGINT NOT NULL,
+    packet_id BIGINT NOT NULL,
     is_request BOOLEAN NOT NULL,
     method VARCHAR(10),
     path TEXT,
@@ -23,7 +26,7 @@ CREATE TABLE IF NOT EXISTS http_message (
     content_length INTEGER,
     body_offset INTEGER,
     body_length INTEGER,
-    header_set_id INTEGER,
+    header_set_id BIGINT,
     timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
     PRIMARY KEY (id, timestamp)
 ) PARTITION BY RANGE (timestamp);
@@ -36,20 +39,20 @@ CREATE INDEX IF NOT EXISTS idx_http_message_header_set ON http_message(header_se
 
 -- Deduplicated gRPC body set (like header_set)
 CREATE TABLE IF NOT EXISTS grpc_body_set (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     hash BIGINT UNIQUE NOT NULL,
     decoded_json TEXT NOT NULL
 );
 
 -- gRPC messages (partitioned by timestamp)
 CREATE TABLE IF NOT EXISTS grpc_message (
-    id SERIAL,
-    stream_id INTEGER NOT NULL,
-    http_message_id INTEGER NOT NULL,
+    id BIGSERIAL,
+    stream_id BIGINT NOT NULL,
+    http_message_id BIGINT NOT NULL,
     service_name VARCHAR(255),
     method_name VARCHAR(255),
     is_request BOOLEAN NOT NULL,
-    body_set_id INTEGER,
+    body_set_id BIGINT,
     timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
     PRIMARY KEY (id, timestamp)
 ) PARTITION BY RANGE (timestamp);
@@ -60,8 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_grpc_message_http_msg ON grpc_message(http_messag
 
 -- Proto file storage for gRPC decoding
 CREATE TABLE IF NOT EXISTS proto_file (
-    id SERIAL PRIMARY KEY,
-    service_id INTEGER REFERENCES service(id) ON DELETE CASCADE,
+    id BIGSERIAL PRIMARY KEY,
+    service_id BIGINT REFERENCES service(id) ON DELETE CASCADE,
     filename VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()

@@ -12,7 +12,7 @@ impl StreamRepository {
         }
     }
 
-    pub async fn get_packet_by_id(&self, stream_id: i32) -> Result<Stream, sqlx::Error> {
+    pub async fn get_packet_by_id(&self, stream_id: i64) -> Result<Stream, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
             SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
@@ -34,7 +34,7 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn get_streams_with_tags(&self, limit: i32, offset: i32, tags: Option<Vec<i32>>, services: Option<Vec<i32>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
+    pub async fn get_streams_with_tags(&self, limit: i64, offset: i64, tags: Option<Vec<i64>>, services: Option<Vec<i64>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
         let mut sql = String::from(r#"
             SELECT
                 stream_id,
@@ -102,7 +102,7 @@ impl StreamRepository {
         log::debug!("SQL Query: {}", sql);
         log::debug!("Params: tags={:?}, services={:?}, start_time={:?}, end_time={:?}, limit={}, offset={}", tags, services, start_time, end_time, limit, offset);
 
-        let mut query = sqlx::query_as::<_, (i32, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i32>, bool, String, Option<String>, Option<String>)>(&sql);
+        let mut query = sqlx::query_as::<_, (i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>(&sql);
 
         // Bind tag IDs
         if let Some(ref tag_ids) = tags {
@@ -132,8 +132,8 @@ impl StreamRepository {
         query.fetch_all(&self.pgpool).await
     }
 
-    pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i32, String, i64)>, sqlx::Error> {
-        sqlx::query_as::<_, (i64, i32, String, i64)>(
+    pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i64, String, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, i64, String, i64)>(
             r#"
             SELECT (last_time / $1) * $1 AS bucket_ts,
                    service_id,
@@ -149,7 +149,7 @@ impl StreamRepository {
             .await
     }
 
-    pub async fn set_favorite(&self, stream_id: i32, favorite: bool) -> Result<bool, sqlx::Error> {
+    pub async fn set_favorite(&self, stream_id: i64, favorite: bool) -> Result<bool, sqlx::Error> {
         sqlx::query_scalar::<_, bool>(
             r#"
             UPDATE stream

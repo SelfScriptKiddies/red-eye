@@ -21,15 +21,15 @@ impl PacketService {
         )
     }
 
-    pub async fn get_packet_by_id(&self, id: i32) -> Result<Packet, sqlx::Error> {
+    pub async fn get_packet_by_id(&self, id: i64) -> Result<Packet, sqlx::Error> {
         self.packet_repository.get_packet_by_id(id).await
     }
 
-    pub async fn get_packets_by_stream_id(&self, stream_id: i32) -> Result<Vec<Packet>, Error> {
+    pub async fn get_packets_by_stream_id(&self, stream_id: i64) -> Result<Vec<Packet>, Error> {
         self.packet_repository.get_packet_by_stream_id(stream_id, 500).await
     }
 
-    pub async fn get_packets_by_stream_id_limited(&self, stream_id: i32, limit: i32) -> Result<Vec<Packet>, Error> {
+    pub async fn get_packets_by_stream_id_limited(&self, stream_id: i64, limit: i64) -> Result<Vec<Packet>, Error> {
         self.packet_repository.get_packet_by_stream_id(stream_id, limit).await
     }
 

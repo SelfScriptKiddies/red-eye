@@ -1,9 +1,10 @@
 -- Create partitioned 'tag' table (filter matches on packets)
 -- No FK to packets — cleanup handled by partition drops
+-- BIGINT ids end-to-end (packet_id -> packets.id, tag_id -> tag_name.id)
 CREATE TABLE IF NOT EXISTS tag (
-    id SERIAL,
-    packet_id INTEGER NOT NULL,
-    tag_id INTEGER NOT NULL,
+    id BIGSERIAL,
+    packet_id BIGINT NOT NULL,
+    tag_id BIGINT NOT NULL,
     start_index INTEGER NOT NULL,
     end_index INTEGER NOT NULL,
     timestamp BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,

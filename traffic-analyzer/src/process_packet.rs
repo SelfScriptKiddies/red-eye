@@ -21,7 +21,7 @@ pub enum Direction {
 
 #[derive(Debug)]
 pub struct PacketEvent {
-    pub packet_id: i32,
+    pub packet_id: i64,
     pub stream_id: usize,
     pub timestamp_seconds: u64,
     pub timestamp_microseconds: u64,

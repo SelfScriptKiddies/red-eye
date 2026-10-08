@@ -51,10 +51,10 @@ use crate::api::tag::tag_dto::TagNameCreate;
 #[get("/tag/stream_id/{id}")]
 async fn get_tags_by_stream_id(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     tag_service: web::Data<TagService>
 ) -> Result<impl Responder, actix_web::error::Error> {
-    let stream_id: i32 = path.into_inner().0;
+    let stream_id: i64 = path.into_inner().0;
 
     match tag_service.get_tags_by_stream_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream)),
@@ -116,7 +116,7 @@ async fn get_all_tag_names(
 #[get("/tag/names/{id}")]
 async fn get_tag_name_by_id(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     tag_service: web::Data<TagService>
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
@@ -177,7 +177,7 @@ async fn create_tag_name(
 #[put("/tag/names/{id}")]
 async fn update_tag_name(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
     updater: web::Data<UpdateAgent>,
@@ -218,7 +218,7 @@ async fn update_tag_name(
 #[delete("/tag/names/{id}")]
 async fn delete_tag_name(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     tag_service: web::Data<TagService>,
     updater: web::Data<UpdateAgent>,
     agent_service: web::Data<Arc<AgentService>>,

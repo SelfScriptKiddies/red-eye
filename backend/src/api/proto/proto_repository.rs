@@ -10,7 +10,7 @@ impl ProtoRepository {
         Self { pool }
     }
 
-    pub async fn get_by_service(&self, service_id: i32) -> Result<Vec<ProtoFile>, Error> {
+    pub async fn get_by_service(&self, service_id: i64) -> Result<Vec<ProtoFile>, Error> {
         sqlx::query_as::<_, ProtoFile>(
             "SELECT id, service_id, filename, content FROM proto_file WHERE service_id = $1 ORDER BY filename"
         )
@@ -19,7 +19,7 @@ impl ProtoRepository {
         .await
     }
 
-    pub async fn get_by_id(&self, id: i32) -> Result<ProtoFile, Error> {
+    pub async fn get_by_id(&self, id: i64) -> Result<ProtoFile, Error> {
         sqlx::query_as::<_, ProtoFile>(
             "SELECT id, service_id, filename, content FROM proto_file WHERE id = $1"
         )
@@ -28,7 +28,7 @@ impl ProtoRepository {
         .await
     }
 
-    pub async fn create(&self, service_id: i32, filename: &str, content: &str) -> Result<ProtoFile, Error> {
+    pub async fn create(&self, service_id: i64, filename: &str, content: &str) -> Result<ProtoFile, Error> {
         sqlx::query_as::<_, ProtoFile>(
             "INSERT INTO proto_file (service_id, filename, content) VALUES ($1, $2, $3)
              RETURNING id, service_id, filename, content"
@@ -40,7 +40,7 @@ impl ProtoRepository {
         .await
     }
 
-    pub async fn delete(&self, id: i32) -> Result<(), Error> {
+    pub async fn delete(&self, id: i64) -> Result<(), Error> {
         sqlx::query("DELETE FROM proto_file WHERE id = $1")
             .bind(id)
             .execute(&self.pool)

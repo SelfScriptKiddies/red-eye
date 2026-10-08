@@ -13,7 +13,7 @@ impl ServiceService {
         }
     }
 
-    pub async fn get_service_by_id(&self, id: i32) -> Result<Service, sqlx::Error> {
+    pub async fn get_service_by_id(&self, id: i64) -> Result<Service, sqlx::Error> {
         self.repository.get_service_by_id(id).await
     }
 
@@ -29,7 +29,7 @@ impl ServiceService {
         self.repository.update_service(service).await
     }
 
-    pub async fn delete_service(&self, id: i32) -> Result<(), sqlx::Error> {
+    pub async fn delete_service(&self, id: i64) -> Result<(), sqlx::Error> {
         self.repository.delete_service(id).await
     }
 }

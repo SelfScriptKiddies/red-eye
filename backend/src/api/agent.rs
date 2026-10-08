@@ -126,7 +126,7 @@ async fn get_agent_services(
     pool: web::Data<sqlx::PgPool>,
 ) -> impl Responder {
     let agent_id = id.into_inner();
-    let services = sqlx::query_scalar::<_, i32>(
+    let services = sqlx::query_scalar::<_, i64>(
         "SELECT service_id FROM agent_service WHERE agent_id = $1"
     )
     .bind(&agent_id)
@@ -141,7 +141,7 @@ async fn get_agent_services(
 
 #[derive(Deserialize)]
 struct BindRequest {
-    service_id: i32,
+    service_id: i64,
 }
 
 #[post("/agent/{id}/services/bind")]

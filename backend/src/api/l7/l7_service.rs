@@ -16,18 +16,18 @@ impl L7Service {
 
     pub async fn get_messages_by_stream(
         &self,
-        stream_id: i32,
+        stream_id: i64,
     ) -> Result<Vec<HttpMessage>, Error> {
         self.repository.get_messages_by_stream(stream_id).await
     }
 
-    pub async fn get_message_full(&self, message_id: i32) -> Result<HttpMessageFull, Error> {
+    pub async fn get_message_full(&self, message_id: i64) -> Result<HttpMessageFull, Error> {
         let message = self.repository.get_message_by_id(message_id).await?;
         let headers = self.repository.get_headers_by_message(message_id).await?;
         Ok(HttpMessageFull { message, headers })
     }
 
-    pub async fn get_headers(&self, message_id: i32) -> Result<serde_json::Value, Error> {
+    pub async fn get_headers(&self, message_id: i64) -> Result<serde_json::Value, Error> {
         self.repository.get_headers_by_message(message_id).await
     }
 
@@ -36,7 +36,7 @@ impl L7Service {
         name: &str,
         value: Option<&str>,
         limit: i64,
-    ) -> Result<(Vec<i32>, i64), Error> {
+    ) -> Result<(Vec<i64>, i64), Error> {
         let stream_ids = if name == "_path" {
             self.repository
                 .search_streams_by_path(value.unwrap_or(""), limit)
@@ -58,7 +58,7 @@ impl L7Service {
         &self,
         filters: &[(String, Option<String>)],
         limit: i64,
-    ) -> Result<Vec<i32>, Error> {
+    ) -> Result<Vec<i64>, Error> {
         self.repository
             .search_streams_by_headers(filters, limit)
             .await
@@ -66,7 +66,7 @@ impl L7Service {
 
     pub async fn get_grpc_messages(
         &self,
-        stream_id: i32,
+        stream_id: i64,
     ) -> Result<Vec<super::l7_dto::GrpcMessage>, Error> {
         self.repository
             .get_grpc_messages_by_stream(stream_id)

@@ -53,6 +53,34 @@ fn flush_batch(tx: &broadcast::Sender<String>, events: Vec<serde_json::Value>) {
     }
 }
 
+/// Ensure DEFAULT partitions exist for all partitioned tables (idempotent).
+/// Inlined SQL twin of ensure_default_partitions() from
+/// database/init/06_partitions.sql: the DB-side function only exists after a
+/// fresh init, so this runtime path must not depend on it. Pure catalog
+/// reads when all DEFAULT partitions already exist.
+async fn ensure_default_partitions(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DO $$
+         DECLARE t text;
+         BEGIN
+             FOREACH t IN ARRAY ARRAY['packets','tag','http_message','grpc_message'] LOOP
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_inherits i
+                     JOIN pg_class c ON c.oid = i.inhrelid
+                     WHERE i.inhparent = t::regclass
+                       AND c.relname = t || '_default'
+                 ) THEN
+                     EXECUTE format('CREATE TABLE %I PARTITION OF %I DEFAULT',
+                                    t || '_default', t);
+                 END IF;
+             END LOOP;
+         END $$;",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 fn init() -> ApplicationConfig {
     let config: ApplicationConfig = match ApplicationConfig::parse() {
         Ok(config) => config,
@@ -152,12 +180,22 @@ pub async fn run() -> std::io::Result<()> {
         let interval_minutes = config.cleanup_interval_minutes;
         let max_disk_mb = config.cleanup_max_disk_mb;
         tokio::spawn(async move {
-            use tokio::time::{interval, Duration};
+            use tokio::time::{interval, sleep, Duration};
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
+
+            // Partitioned tables managed here (kept in sync with
+            // database/init/06_partitions.sql).
+            const PARTITIONED_TABLES: [&str; 4] =
+                ["packets", "tag", "http_message", "grpc_message"];
+
             loop {
                 ticker.tick().await;
 
-                // Ensure partitions exist for upcoming data
+                // Ensure partitions exist for upcoming data.
+                // ensure_current_partitions() warns (does not fail) when a
+                // range partition cannot be created because rows for that
+                // range already sit in DEFAULT — those rows keep landing in
+                // DEFAULT until an operator resolves the overlap.
                 match sqlx::query_scalar::<_, i32>(
                     "SELECT ensure_current_partitions(60, 120, 300)"
                 )
@@ -172,7 +210,18 @@ pub async fn run() -> std::io::Result<()> {
                     Err(e) => error!("Failed to create partitions: {}", e),
                 }
 
-                // Drop old partitions + orphaned streams
+                // Runtime DEFAULT-partition ensure (idempotent, live-safe:
+                // inlined here because the DB-side function only exists
+                // after a fresh init; the runtime path must not depend on
+                // it). DEFAULT partitions make out-of-range timestamps
+                // (clock skew, long backend outage) degrade into misfiled
+                // rows instead of failed INSERTs that drop whole ingest
+                // batches. Pure catalog reads when all defaults exist.
+                if let Err(e) = ensure_default_partitions(&cleanup_pool).await {
+                    error!("Failed to ensure DEFAULT partitions: {}", e);
+                }
+
+                // Drop old partitions + prune DEFAULT partitions + orphaned streams
                 match sqlx::query_as::<_, (i32, i64)>(
                     "SELECT * FROM cleanup_old_data($1)"
                 )
@@ -191,8 +240,30 @@ pub async fn run() -> std::io::Result<()> {
                     Err(e) => error!("Cleanup failed: {}", e),
                 }
 
-                // Disk pressure check: drop oldest partitions if total exceeds max_disk_mb
+                // Disk pressure check: free space WITHOUT ever taking the
+                // write target away from the ingest writer:
+                //   1. drop only partitions strictly older than the CURRENT
+                //      one (floor computed in Rust so protection also holds
+                //      against a DB still running the pre-protection
+                //      drop_old_partitions / cleanup_old_data);
+                //   2. prune old skewed rows from the DEFAULT partitions;
+                //   3. trim OLD rows (older than KEEP_WINDOW_SECS, well
+                //      above the flush buffer window) from the remaining
+                //      current window in bounded 10k chunks.
+                // Even at max pressure the current + future partitions and
+                // the last few minutes of rows always stay. The old
+                // cleanup_old_data(0) call is gone on purpose: it could drop
+                // the partition receiving current writes.
                 if max_disk_mb > 0 {
+                    // Must match the partition interval used by
+                    // ensure_current_partitions(60, 120, 300) above.
+                    const PARTITION_INTERVAL_SECS: i64 = 300;
+                    // Rows newer than this are never deleted under pressure
+                    // (flush buffer headroom; batches hold at most seconds
+                    // of packets).
+                    const KEEP_WINDOW_SECS: i64 = 300;
+                    const DELETE_CHUNK: i64 = 10_000;
+
                     loop {
                         let total_mb: Option<i64> = sqlx::query_scalar(
                             "SELECT (sum(pg_total_relation_size(inhrelid::regclass)) / (1024*1024))::bigint
@@ -207,10 +278,66 @@ pub async fn run() -> std::io::Result<()> {
                         match total_mb {
                             Some(mb) if mb > max_disk_mb => {
                                 info!("Disk pressure: {}MB > {}MB limit, dropping oldest partitions", mb, max_disk_mb);
-                                // Drop the single oldest partition from each table
-                                let _ = sqlx::query("SELECT cleanup_old_data(0)")
+
+                                let now_ts = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs() as i64)
+                                    .unwrap_or(0);
+                                // Start of the CURRENT partition: this and
+                                // every later partition are untouchable.
+                                let protected_from =
+                                    (now_ts / PARTITION_INTERVAL_SECS) * PARTITION_INTERVAL_SECS;
+
+                                for table in PARTITIONED_TABLES {
+                                    // (1) clamped partition drops
+                                    let _ = sqlx::query(
+                                        "SELECT drop_old_partitions($1, $2)"
+                                    )
+                                    .bind(table)
+                                    .bind(protected_from)
                                     .execute(&cleanup_pool)
                                     .await;
+
+                                    // (2) old skewed rows in DEFAULT
+                                    // (exists by now: ensured earlier this
+                                    // tick; table name is from the const
+                                    // array, not user input)
+                                    let _ = sqlx::query(&format!(
+                                        "DELETE FROM {table}_default WHERE timestamp < $1"
+                                    ))
+                                    .bind(protected_from)
+                                    .execute(&cleanup_pool)
+                                    .await;
+                                }
+
+                                // (3) trim old rows from the current write
+                                // window in bounded chunks; keep the fresh
+                                // landing zone intact.
+                                let trim_before = now_ts - KEEP_WINDOW_SECS;
+                                for table in PARTITIONED_TABLES {
+                                    loop {
+                                        let chunk_sql = format!(
+                                            "DELETE FROM {table} WHERE ctid IN \
+                                             (SELECT ctid FROM {table} WHERE timestamp < $1 LIMIT {DELETE_CHUNK})"
+                                        );
+                                        match sqlx::query(&chunk_sql)
+                                            .bind(trim_before)
+                                            .execute(&cleanup_pool)
+                                            .await
+                                        {
+                                            Ok(res) if res.rows_affected() >= DELETE_CHUNK as u64 => {
+                                                // full chunk deleted — pause to
+                                                // stay friendly to the writer
+                                                sleep(Duration::from_millis(50)).await;
+                                            }
+                                            Ok(_) => break,
+                                            Err(e) => {
+                                                error!("Pressure trim of {} failed: {}", table, e);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             _ => break,
                         }
@@ -306,7 +433,7 @@ pub async fn run() -> std::io::Result<()> {
         // Decode packet event (same structure as in traffic-analyzer)
         #[derive(serde::Serialize, serde::Deserialize, bincode::Decode)]
         struct PacketEvent {
-            packet_id: i32,
+            packet_id: i64,
             stream_id: usize,
             timestamp_seconds: u64,
             timestamp_microseconds: u64,

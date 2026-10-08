@@ -84,7 +84,7 @@ async fn get_all_services(
 async fn get_service_by_id(
     _identity: Identity,
     service: web::Data<ServiceService>,
-    id: web::Path<i32>
+    id: web::Path<i64>
 ) -> impl Responder {
     match service.get_service_by_id(id.into_inner()).await {
         Ok(service) => HttpResponse::Ok().json(service),
@@ -189,7 +189,7 @@ async fn update_service(
     _identity: Identity,
     service: web::Data<ServiceService>,
     updater: web::Data<UpdateAgent>,
-    id: web::Path<i32>,
+    id: web::Path<i64>,
     updated_service: web::Json<ServiceTransfer>
 ) -> impl Responder {
     let mut service_data: Service = updated_service.into_inner().into();
@@ -222,7 +222,7 @@ async fn delete_service(
     _identity: Identity,
     service: web::Data<ServiceService>,
     updater: web::Data<UpdateAgent>,
-    id: web::Path<i32>
+    id: web::Path<i64>
 ) -> impl Responder {
     let id = id.into_inner();
     match service.delete_service(id).await {

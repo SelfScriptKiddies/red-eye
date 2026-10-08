@@ -24,10 +24,10 @@ pub(crate) mod packet_service;
 #[get("/packet/{id}")]
 async fn get_packet_by_id(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     packet_repository: web::Data<PacketService>
 ) -> Result<impl Responder, actix_web::error::Error> {
-    let packet_id: i32 = path.into_inner().0;
+    let packet_id: i64 = path.into_inner().0;
 
     match packet_repository.get_packet_by_id(packet_id).await {
         Ok(pkt) => Ok(HttpResponse::Ok().json(pkt.to_response())),
@@ -50,12 +50,12 @@ async fn get_packet_by_id(
 #[get("/packet/stream_id/{id}")]
 async fn get_packets_by_stream_id(
     _identity: Identity,
-    path: web::Path<(i32,)>,
+    path: web::Path<(i64,)>,
     packet_repository: web::Data<PacketService>
 ) -> Result<impl Responder, actix_web::error::Error> {
-    let packet_id: i32 = path.into_inner().0;
+    let stream_id: i64 = path.into_inner().0;
 
-    match packet_repository.get_packets_by_stream_id(packet_id).await {
+    match packet_repository.get_packets_by_stream_id(stream_id).await {
         Ok(packets) => {
             let response_packets: Vec<PacketResponse> = packets
                 .iter()

@@ -30,7 +30,7 @@ pub struct HttpMessageData {
     pub content_length: Option<i32>,
     pub body_offset: i32,
     pub body_length: i32,
-    pub header_set_id: Option<i32>,
+    pub header_set_id: Option<i64>,
     pub timestamp: i64,
     pub l7_protocol: String,
     pub grpc: Option<GrpcMessageData>,
@@ -170,14 +170,14 @@ async fn flush_batch(
 
     // 3. Batch INSERT HTTP messages (multi-row, RETURNING id), then batch the
     //    dependent gRPC inserts and l7-protocol UPDATEs.
-    let http_rows: Vec<(i32, &HttpMessageData)> = buffer.iter().enumerate()
+    let http_rows: Vec<(i64, &HttpMessageData)> = buffer.iter().enumerate()
         .filter_map(|(idx, pkt)| pkt.http_message.as_ref().map(|http| (packet_ids[idx], http)))
         .collect();
     if !http_rows.is_empty() {
         match db.insert_http_messages_batch(&http_rows).await {
             Ok(msg_ids) if msg_ids.len() == http_rows.len() => {
                 // gRPC inserts keyed by the returned http_message ids.
-                let grpc_rows: Vec<(i32, &GrpcMessageData)> = http_rows.iter().enumerate()
+                let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows.iter().enumerate()
                     .filter_map(|(i, (_, http))| http.grpc.as_ref().map(|grpc| (msg_ids[i], grpc)))
                     .collect();
                 if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
@@ -253,7 +253,7 @@ async fn flush_batch(
 /// for a flushed batch. `packet_ids[i]` is the DB id of `buffer[i]`, so each
 /// trigger row pairs with ITS OWN packet's capture timestamp — this is what
 /// keeps `JOIN packets p ON p.timestamp = t.timestamp` correct in the backend.
-fn build_trigger_rows(packet_ids: &[i32], buffer: &[ProcessedPacket]) -> Vec<(i32, usize, usize, usize, i64)> {
+fn build_trigger_rows(packet_ids: &[i64], buffer: &[ProcessedPacket]) -> Vec<(i64, usize, usize, usize, i64)> {
     let mut rows = Vec::new();
     for (idx, pkt) in buffer.iter().enumerate() {
         let packet_id = packet_ids[idx];
@@ -321,7 +321,7 @@ mod tests {
 /// Insert the packet batch, retrying once after a short backoff on error or
 /// id-count mismatch. Returns the packet ids, or None if the batch should be
 /// dropped (logged at warn with the count lost).
-async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Option<Vec<i32>> {
+async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Option<Vec<i64>> {
     match db.insert_packets_batch(buffer).await {
         Ok(ids) if ids.len() == buffer.len() => return Some(ids),
         Ok(ids) => error!("Batch insert returned {} ids for {} packets — retrying", ids.len(), buffer.len()),
