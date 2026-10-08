@@ -22,8 +22,6 @@ use crate::api::{
 };
 use std::sync::Arc;
 use async_nats::ConnectOptions;
-use futures_util::StreamExt;
-use bincode::config;
 use tokio::sync::broadcast;
 
 
@@ -32,26 +30,9 @@ mod configuration;
 mod db;
 mod db_watchdog;
 mod health;
+mod ws_activity;
 
 
-
-// Serialize a batch of packet events once and broadcast as a single frame.
-// Wire contract: {"type":"packet_batch","events":[ E1, E2, ... ]} where each E
-// is the same per-event JSON object shape sent before batching was introduced.
-fn flush_batch(tx: &broadcast::Sender<String>, events: Vec<serde_json::Value>) {
-    if events.is_empty() {
-        return;
-    }
-    let count = events.len();
-    let batch = serde_json::json!({ "type": "packet_batch", "events": events });
-    match serde_json::to_string(&batch) {
-        Ok(json) => match tx.send(json) {
-            Ok(_) => debug!("Broadcasted packet batch of {} events", count),
-            Err(e) => debug!("No WebSocket clients connected or channel full: {}", e),
-        },
-        Err(e) => error!("Failed to serialize packet batch to JSON: {}", e),
-    }
-}
 
 /// Ensure DEFAULT partitions exist for all partitioned tables (idempotent).
 /// Inlined SQL twin of ensure_default_partitions() from
@@ -416,77 +397,16 @@ pub async fn run() -> std::io::Result<()> {
         broadcaster_tx.clone(),
     );
 
-    // Subscribe to NATS events and broadcast to WebSocket clients.
+    // Subscribe to NATS per-packet events and broadcast ONE aggregated
+    // "activity" frame per second to WebSocket clients (see ws_activity.rs
+    // for the wire format and the aggregation semantics).
     // Reuse the already-connected agent client: a client connected inside this
     // spawned task never delivers messages under the actix runtime.
-    let broadcaster_tx_clone = broadcaster_tx.clone();
-    let ws_nats_client = agent_nats_client.clone();
-    let ws_topic = config.nats_websocket_topic.clone();
-    tokio::spawn(async move {
-        info!("Subscribing to NATS topic {} for WebSocket events", ws_topic);
-
-        let mut subscriber = match ws_nats_client.subscribe(ws_topic.clone()).await {
-            Ok(sub) => sub,
-            Err(e) => {
-                error!("Failed to subscribe to NATS topic {}: {}", ws_topic, e);
-                return;
-            }
-        };
-
-        // Decode packet event (same structure as in traffic-analyzer)
-        #[derive(serde::Serialize, serde::Deserialize, bincode::Decode)]
-        struct PacketEvent {
-            packet_id: i64,
-            stream_id: usize,
-            timestamp_seconds: u64,
-            timestamp_microseconds: u64,
-            direction: String,
-        }
-
-        // Coalesce incoming packet events into batches to avoid one serialization +
-        // broadcast + socket write per packet at high packet rates. Flush at most
-        // every 100ms or once 100 events accumulate, whichever comes first.
-        use tokio::time::{sleep_until, Duration, Instant};
-        let mut buffer: Vec<serde_json::Value> = Vec::new();
-        let mut flush_deadline: Option<Instant> = None;
-
-        loop {
-            // When no batch is pending, the timer branch must never fire; a
-            // pending() future keeps it disabled without unwrapping the deadline.
-            let flush_timer = async {
-                match flush_deadline {
-                    Some(d) => sleep_until(d).await,
-                    None => std::future::pending::<()>().await,
-                }
-            };
-            tokio::select! {
-                maybe_msg = subscriber.next() => {
-                    let Some(message) = maybe_msg else { break };
-                    let payload = message.payload.to_vec();
-                    match serde_json::from_slice::<PacketEvent>(&payload) {
-                        Ok(event) => match serde_json::to_value(&event) {
-                            Ok(v) => {
-                                if buffer.is_empty() {
-                                    flush_deadline = Some(Instant::now() + Duration::from_millis(100));
-                                }
-                                buffer.push(v);
-                                if buffer.len() >= 100 {
-                                    flush_batch(&broadcaster_tx_clone, std::mem::take(&mut buffer));
-                                    flush_deadline = None;
-                                }
-                            }
-                            Err(e) => error!("Failed to serialize packet event to JSON: {}", e),
-                        },
-                        Err(e) => error!("Failed to decode packet event from NATS: {}", e),
-                    }
-                }
-                _ = flush_timer => {
-                    flush_batch(&broadcaster_tx_clone, std::mem::take(&mut buffer));
-                    flush_deadline = None;
-                }
-            }
-        }
-    });
+    ws_activity::spawn_ws_bridge(
+        agent_nats_client.clone(),
+        broadcaster_tx.clone(),
+        config.nats_websocket_topic.clone(),
+    );
 
     HttpServer::new(move || {
         App::new()

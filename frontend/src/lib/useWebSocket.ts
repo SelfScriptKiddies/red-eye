@@ -1,73 +1,65 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { queryClient } from './queryClient';
 import { subscribeWs, type WsState } from './wsBus';
+import {
+    isActivityFrame,
+    mergeActivityFrames,
+    type ActivityFrame,
+    type StreamPatch,
+} from './activityEvents';
 
 export type { WsState } from './wsBus';
 
-interface WsEvent {
-    type: string;
-    stream_id?: number;
-    count?: number;
-    last_time?: number;
-    service_id?: number;
-    service_name?: string;
-    packet_id?: number;
-    direction?: string;
-}
-
 const WS_BATCH_INTERVAL_MS = 300;
 const WS_BATCH_MAX_SIZE = 50;
+// new_streams → 'streams' query invalidation is throttled: frames arrive at
+// most once per second, and refetching the whole list more often than every
+// 2s is wasted work — per-window count deltas already keep the list fresh
+// between refetches.
+const STREAMS_INVALIDATE_THROTTLE_MS = 2000;
 
 export function useWebSocket(
     enabled: boolean,
-    onPatchStreams?: (_patches: Map<number, Partial<{ count: number; last_time: number }>>) => void,
+    onPatchStreams?: (_patches: Map<number, StreamPatch>) => void,
     selectedStreamIds?: number[],
 ) {
     const [state, setState] = useState<WsState>('disconnected');
-    const bufferRef = useRef<WsEvent[]>([]);
+    const bufferRef = useRef<ActivityFrame[]>([]);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const onPatchStreamsRef = useRef(onPatchStreams);
     const selectedStreamIdsRef = useRef(selectedStreamIds);
+    const lastStreamsInvalidateRef = useRef(0);
 
     onPatchStreamsRef.current = onPatchStreams;
     selectedStreamIdsRef.current = selectedStreamIds;
 
     const flush = useCallback(() => {
-        const events = bufferRef.current;
+        const frames = bufferRef.current;
         bufferRef.current = [];
         if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-        if (events.length === 0) return;
+        if (frames.length === 0) return;
 
-        const patches = new Map<number, { count?: number; last_time?: number }>();
-        const invalidateKeys = new Set<string>();
+        const { patches, hasNewStreams, packetsAvailable } = mergeActivityFrames(frames);
 
-        for (const evt of events) {
-            if (evt.type === 'packet_count' && evt.stream_id != null) {
-                patches.set(evt.stream_id, { count: evt.count, last_time: evt.last_time });
-            } else if (evt.type === 'stream_tags_changed' && evt.stream_id != null) {
-                invalidateKeys.add(`tags-${evt.stream_id}`);
-                invalidateKeys.add('streams');
-            } else if (evt.type === 'packets_available' && evt.stream_id != null) {
-                if (selectedStreamIdsRef.current?.includes(evt.stream_id)) {
-                    invalidateKeys.add(`packets-${evt.stream_id}`);
-                }
-            } else if (evt.type === 'new_stream') {
-                invalidateKeys.add('streams');
-            }
-        }
-
+        // Additive patch: the server sends per-second count DELTAS, the
+        // consumer adds them to the displayed counts (authoritative totals
+        // come from the 'streams' query refetch below).
         if (patches.size > 0 && onPatchStreamsRef.current) {
             onPatchStreamsRef.current(patches);
         }
 
-        for (const key of invalidateKeys) {
-            if (key === 'streams') {
+        if (hasNewStreams) {
+            const now = Date.now();
+            if (now - lastStreamsInvalidateRef.current >= STREAMS_INVALIDATE_THROTTLE_MS) {
+                lastStreamsInvalidateRef.current = now;
                 queryClient.invalidateQueries({ queryKey: ['streams'] });
-            } else if (key.startsWith('tags-')) {
-                const id = parseInt(key.split('-')[1]);
-                queryClient.invalidateQueries({ queryKey: ['tags', id] });
-            } else if (key.startsWith('packets-')) {
-                const id = parseInt(key.split('-')[1]);
+            }
+        }
+
+        // Server does not know which streams the tab has open — it reports
+        // every stream with fresh packets; only invalidate the selected ones.
+        for (const id of packetsAvailable) {
+            if (selectedStreamIdsRef.current?.includes(id)) {
                 queryClient.invalidateQueries({ queryKey: ['packets', id] });
             }
         }
@@ -88,16 +80,11 @@ export function useWebSocket(
         // Live toggles or page switches.
         const unsubscribe = subscribeWs({
             onMessage: (data) => {
-                const parsed = data as WsEvent & { events?: WsEvent[] };
-                if (parsed && parsed.type === 'packet_batch') {
-                    const events: WsEvent[] = parsed.events ?? [];
-                    if (!Array.isArray(events) || events.length === 0) return;
-                    for (const evt of events) bufferRef.current.push(evt);
-                } else if (parsed) {
-                    bufferRef.current.push(parsed);
-                } else {
-                    return;
-                }
+                // Only activity frames are consumed here. Alert frames ride
+                // the same bus and are handled by their own subscribers
+                // (AlertToast); anything else is ignored.
+                if (!isActivityFrame(data)) return;
+                bufferRef.current.push(data);
                 if (bufferRef.current.length >= WS_BATCH_MAX_SIZE) {
                     flush();
                 } else {

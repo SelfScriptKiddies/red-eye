@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from './api';
+import { applyStreamPatches, type StreamPatch } from './activityEvents';
 
 const MAX_STREAMS = 200;
 const PAGE_SIZE = 20;
@@ -64,14 +65,12 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
         setAllStreams(prev => prev.map(s => s.id === streamId ? updater(s) : s));
     }, []);
 
-    const patchStreams = useCallback((patches: Map<number, any>) => {
-        setAllStreams(prev => prev.map(s => {
-            const patch = patches.get(s.id);
-            if (patch) {
-                return { ...s, packet_count: patch.count ?? s.packet_count, last_time: patch.last_time ?? s.last_time };
-            }
-            return s;
-        }));
+    // Applies per-second count DELTAS from the WS activity frames (see
+    // activityEvents.ts): deltas are ADDED to the displayed packet_count.
+    // Authoritative totals arrive via the react-query 'streams' refetch,
+    // which replaces allStreams wholesale.
+    const patchStreams = useCallback((patches: Map<number, StreamPatch>) => {
+        setAllStreams(prev => applyStreamPatches(prev, patches));
     }, []);
 
     const clearStreams = useCallback(() => {
