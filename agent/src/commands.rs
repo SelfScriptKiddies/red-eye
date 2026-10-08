@@ -98,6 +98,10 @@ pub enum AgentCommand {
     // IP ban via nftables
     IpBan { ip: String },
     IpUnban { ip: String },
+
+    // Docker container discovery (UI "add service by container").
+    // The agent replies on `agent_docker.{agent_id}` — see docker.rs.
+    DockerListContainers,
 }
 
 pub fn spawn_command_listener(
@@ -323,6 +327,32 @@ async fn handle_command(
                 error!("Failed to unban IP '{}': {}", ip, e);
             }
         }
+
+        AgentCommand::DockerListContainers => {
+            info!("DockerListContainers command received");
+            // Own task: Docker may be absent/slow on this host, and that must
+            // never delay the command loop (Shutdown included). The handler
+            // is timeout-bounded and answers with an error reply on failure.
+            let nats = nats.clone();
+            tokio::spawn(async move {
+                crate::docker::handle_list_containers(nats).await;
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The backend dispatches exactly this JSON (agent_service.rs:
+    /// `serde_json::json!({ "type": "DockerListContainers" })`) on
+    /// `agent_commands.{agent_id}` — lock the wire contract.
+    #[test]
+    fn backend_dispatch_json_parses_as_agent_command() {
+        let cmd: AgentCommand =
+            serde_json::from_str(r#"{"type":"DockerListContainers"}"#).expect("parse dispatch");
+        assert!(matches!(cmd, AgentCommand::DockerListContainers));
     }
 }
 

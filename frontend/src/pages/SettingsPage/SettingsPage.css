@@ -93,6 +93,56 @@
     border-color: var(--re-accent);
 }
 
+.header-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* "Add by container" modal status feedback */
+.spinner {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border: 3px solid var(--re-bg-card);
+    border-top-color: var(--re-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.containers-status {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--re-text-secondary);
+    margin-bottom: 15px;
+}
+
+.containers-status.error {
+    color: var(--re-danger);
+}
+
+.containers-hint {
+    font-size: 12px;
+    color: var(--re-text-secondary);
+}
+
+.modal-footer button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.modal-footer button:disabled:hover {
+    border-color: transparent;
+    background-color: var(--re-accent);
+}
+
 #root:has(div.eye__apple__focus) .add-btn:hover {
     border-color: var(--re-danger);
 }

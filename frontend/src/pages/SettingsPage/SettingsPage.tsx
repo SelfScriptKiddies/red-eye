@@ -1,5 +1,6 @@
 import './SettingsPage.css'
 import { useState, useEffect } from 'react';
+import { AgentContainerInfo, AgentListItem, fetchAgentContainers } from '../../lib/api';
 
 interface Service {
     id?: number;
@@ -60,6 +61,23 @@ export function SettingsPage() {
         direction: 'both',
         special_type: null
     });
+
+    // "Add by container" state
+    const [containerModalOpen, setContainerModalOpen] = useState(false);
+    const [agentsList, setAgentsList] = useState<AgentListItem[]>([]);
+    const [containerAgentId, setContainerAgentId] = useState('');
+    // null = still loading/polling the agent reply
+    const [containers, setContainers] = useState<AgentContainerInfo[] | null>(null);
+    const [containersError, setContainersError] = useState<string | null>(null);
+    // true when the error came from the agent's Docker (daemon down / socket
+    // missing) — drives the "is Docker running?" hint
+    const [containersDockerError, setContainersDockerError] = useState(false);
+    const [containersStaleAgeSec, setContainersStaleAgeSec] = useState<number | null>(null);
+    const [selectedContainerName, setSelectedContainerName] = useState('');
+    const [containerPortCustom, setContainerPortCustom] = useState(false);
+    const [containerPort, setContainerPort] = useState(0);
+    const [containerServiceName, setContainerServiceName] = useState('');
+    const [creatingFromContainer, setCreatingFromContainer] = useState(false);
 
     // Proto files state
     const [protoFiles, setProtoFiles] = useState<{id: number, service_id: number, filename: string}[]>([]);
@@ -215,6 +233,141 @@ export function SettingsPage() {
         }
     };
 
+    // "Add by container" — fetch agent list on open, poll containers on agent select
+    const openContainerModal = async () => {
+        setContainers(null);
+        setContainersError(null);
+        setContainersDockerError(false);
+        setContainersStaleAgeSec(null);
+        setSelectedContainerName('');
+        setContainerServiceName('');
+        setContainerPort(0);
+        setContainerPortCustom(false);
+        setContainerModalOpen(true);
+        try {
+            const resp = await fetch(`${API_URL}/agent`);
+            if (resp.ok) {
+                const data = await resp.json();
+                const list: AgentListItem[] = Array.isArray(data) ? data : Object.values(data);
+                setAgentsList(list);
+                // Preselect the first online agent (agent must be reachable
+                // to answer the DockerListContainers command)
+                const preferred = list.find(a => a.online) || list[0];
+                if (preferred) setContainerAgentId(preferred.agent_id);
+            }
+        } catch (e) { console.error('Error fetching agents:', e); }
+    };
+
+    const closeContainerModal = () => {
+        setContainerModalOpen(false);
+        // Reset the selected agent so reopening the modal re-triggers the
+        // containers fetch (data may be stale by then)
+        setContainerAgentId('');
+    };
+
+    // Poll GET /api/agent/{id}/containers while the modal is open.
+    // `pending` means the agent reply hasn't arrived at the backend yet —
+    // re-poll up to 3 times ~1s apart, then surface a timeout error.
+    useEffect(() => {
+        if (!containerModalOpen || !containerAgentId) return;
+        const controller = new AbortController();
+        let cancelled = false;
+        let attempt = 0;
+
+        const poll = async () => {
+            setContainers(null);
+            setContainersError(null);
+            setContainersDockerError(false);
+            setContainersStaleAgeSec(null);
+            setSelectedContainerName('');
+            while (!cancelled) {
+                attempt++;
+                let resp;
+                try {
+                    resp = await fetchAgentContainers(containerAgentId, controller.signal);
+                } catch (e) {
+                    if (cancelled || controller.signal.aborted) return;
+                    console.error('Error fetching agent containers:', e);
+                    setContainers([]);
+                    setContainersError('Не удалось получить список контейнеров');
+                    return;
+                }
+                if (cancelled) return;
+                if (resp.state === 'pending' && attempt <= 3) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    continue;
+                }
+                if (resp.state === 'pending') {
+                    // Agent never replied — offline agent or wedged command path
+                    setContainers([]);
+                    setContainersError('Агент не ответил на запрос списка контейнеров');
+                    return;
+                }
+                setContainersStaleAgeSec(
+                    resp.state === 'stale' && resp.age_ms != null ? Math.round(resp.age_ms / 1000) : null
+                );
+                if (resp.error) {
+                    setContainersDockerError(true);
+                    setContainersError(resp.error);
+                }
+                setContainers(resp.containers);
+                return;
+            }
+        };
+        poll();
+        return () => { cancelled = true; controller.abort(); };
+    }, [containerModalOpen, containerAgentId]);
+
+    const pickContainer = (name: string) => {
+        setSelectedContainerName(name);
+        const c = containers?.find(x => x.name === name);
+        if (!c) return;
+        // Service name is just a prefill from the container name — editable
+        setContainerServiceName(c.name);
+        // Prefer host-published ports (they are what an external client
+        // connects to); agent already sorted them, published first below
+        const preferred = c.ports.find(p => p.published) || c.ports[0];
+        if (preferred) {
+            setContainerPortCustom(false);
+            setContainerPort(preferred.port);
+        } else {
+            setContainerPortCustom(true);
+            setContainerPort(0);
+        }
+    };
+
+    const saveContainerService = async () => {
+        if (!containerServiceName.trim() || !containerPort) return;
+        setCreatingFromContainer(true);
+        try {
+            // Same create API and defaults as the manual "add by port" form
+            const response = await fetch(`${API_URL}/service`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: containerServiceName,
+                    port: containerPort,
+                    chunked_transfer_encoding: false,
+                    urldecode: false,
+                    merge_adjacent_packets: false,
+                    inflate_websockets: false,
+                    decrypt_tls: false,
+                    http_parse: false,
+                    http2_parse: false,
+                    alert_flag_leak: false
+                })
+            });
+            if (response.ok) {
+                await fetchServices();
+                closeContainerModal();
+            }
+        } catch (error) {
+            console.error('Error creating service from container:', error);
+        } finally {
+            setCreatingFromContainer(false);
+        }
+    };
+
     // Filters CRUD operations
     const fetchFilters = async () => {
         try {
@@ -305,7 +458,10 @@ export function SettingsPage() {
                 <div className="settings-column">
                     <div className="column-header">
                         <h2>Сервисы</h2>
-                        <button className="add-btn" onClick={() => openServiceModal()}>+ Добавить</button>
+                        <div className="header-actions">
+                            <button className="add-btn" onClick={() => openServiceModal()}>+ По порту</button>
+                            <button className="add-btn" onClick={openContainerModal}>+ По контейнеру</button>
+                        </div>
                     </div>
                     <div className="items-list">
                         {services.map((service) => (
@@ -552,6 +708,123 @@ export function SettingsPage() {
                         <div className="modal-footer">
                             <button onClick={closeServiceModal}>Отмена</button>
                             <button onClick={saveService}>Сохранить</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Add Service by Container Modal */}
+            {containerModalOpen && (
+                <div className="modal-overlay" onClick={closeContainerModal}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h3>Добавить сервис по контейнеру</h3>
+                            <button className="close-btn" onClick={closeContainerModal}>✕</button>
+                        </div>
+                        <div className="modal-body">
+                            <select
+                                className="select-input"
+                                value={containerAgentId}
+                                onChange={(e) => setContainerAgentId(e.target.value)}
+                            >
+                                <option value="">Выберите агента</option>
+                                {agentsList.map(a => (
+                                    <option key={a.agent_id} value={a.agent_id}>
+                                        {a.agent_id}{a.online ? '' : ' (офлайн)'}
+                                    </option>
+                                ))}
+                            </select>
+
+                            {containers === null && !containersError && (
+                                <div className="containers-status">
+                                    <div className="spinner" />
+                                    <span>Запрашиваем список контейнеров у агента…</span>
+                                </div>
+                            )}
+                            {containersError && (
+                                <div className="containers-status error">
+                                    <span>⚠ {containersError}</span>
+                                    {containersDockerError && (
+                                        <span className="containers-hint">Проверьте, запущен ли Docker на хосте агента.</span>
+                                    )}
+                                </div>
+                            )}
+
+                            {containers !== null && !containersError && containers.length === 0 && (
+                                <div className="containers-status">
+                                    <span>На хосте агента нет запущенных контейнеров Docker.</span>
+                                </div>
+                            )}
+
+                            {containers !== null && !containersError && containers.length > 0 && (
+                                <>
+                                    {containersStaleAgeSec !== null && (
+                                        <div className="containers-status">
+                                            <span>Данные получены {containersStaleAgeSec} с назад — запрошены свежие у агента.</span>
+                                        </div>
+                                    )}
+                                    <select
+                                        className="select-input"
+                                        value={selectedContainerName}
+                                        onChange={(e) => pickContainer(e.target.value)}
+                                    >
+                                        <option value="">Выберите контейнер</option>
+                                        {containers.map(c => (
+                                            <option key={c.name} value={c.name}>
+                                                {c.name} — {c.image} ({c.state})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {selectedContainerName && (
+                                        <>
+                                            <select
+                                                className="select-input"
+                                                value={containerPortCustom ? 'custom' : String(containerPort)}
+                                                onChange={(e) => {
+                                                    if (e.target.value === 'custom') {
+                                                        setContainerPortCustom(true);
+                                                    } else {
+                                                        setContainerPortCustom(false);
+                                                        setContainerPort(parseInt(e.target.value) || 0);
+                                                    }
+                                                }}
+                                            >
+                                                {[...containers.find(c => c.name === selectedContainerName)?.ports || []]
+                                                    .sort((a, b) => Number(b.published) - Number(a.published))
+                                                    .map(p => (
+                                                        <option key={`${p.port}/${p.protocol}`} value={String(p.port)}>
+                                                            {p.port}/{p.protocol}{p.published ? ' — публикуется' : ' — внутри контейнера'}
+                                                        </option>
+                                                    ))}
+                                                <option value="custom">Другой порт…</option>
+                                            </select>
+                                            {containerPortCustom && (
+                                                <input
+                                                    type="number"
+                                                    placeholder="Порт"
+                                                    value={containerPort || ''}
+                                                    onChange={(e) => setContainerPort(parseInt(e.target.value) || 0)}
+                                                />
+                                            )}
+                                            <input
+                                                type="text"
+                                                placeholder="Название сервиса"
+                                                value={containerServiceName}
+                                                onChange={(e) => setContainerServiceName(e.target.value)}
+                                            />
+                                        </>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                        <div className="modal-footer">
+                            <button onClick={closeContainerModal}>Отмена</button>
+                            <button
+                                onClick={saveContainerService}
+                                disabled={creatingFromContainer || !selectedContainerName || !containerServiceName.trim() || !containerPort}
+                            >
+                                {creatingFromContainer ? 'Создание…' : 'Создать сервис'}
+                            </button>
                         </div>
                     </div>
                 </div>

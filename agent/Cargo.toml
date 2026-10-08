@@ -24,3 +24,4 @@ harpoon-core = { path = "../../harpoon/crates/harpoon-core", features = ["regex-
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 hex = "0.4"
+bollard = "0.21"
