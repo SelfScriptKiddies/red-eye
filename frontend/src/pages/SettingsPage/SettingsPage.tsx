@@ -1,4 +1,3 @@
-import { ReactElement } from "react";
 import './SettingsPage.css'
 import { useState, useEffect } from 'react';
 
@@ -30,7 +29,7 @@ export function SettingsPage() {
     // Settings state
     const [farmUrl, setFarmUrl] = useState('');
     const [farmEnabled, setFarmEnabled] = useState(false);
-    const [settingsLoaded, setSettingsLoaded] = useState(false);
+    const [, setSettingsLoaded] = useState(false);
 
     // Services state
     const [services, setServices] = useState<Service[]>([]);
@@ -96,7 +95,7 @@ export function SettingsPage() {
         try {
             const resp = await fetch(`${API_URL}/proto`);
             if (resp.ok) setProtoFiles(await resp.json());
-        } catch {}
+        } catch { /* proto listing is non-critical */ }
     };
 
     const uploadProto = async () => {
@@ -235,12 +234,13 @@ export function SettingsPage() {
             setFilterForm(filter);
         } else {
             setEditingFilter(null);
-            setFilterForm({ 
-                name: '', 
+            setFilterForm({
+                name: '',
                 color: 0,
                 template_type: 'regex',
                 template: '',
-                direction: 'both'
+                direction: 'both',
+                special_type: null
             });
         }
         setFilterModalOpen(true);

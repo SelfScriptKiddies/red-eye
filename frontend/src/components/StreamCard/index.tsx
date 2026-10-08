@@ -1,1 +1,1 @@
-export { StreamCard } from "./StreamCard.tsx";
+export { StreamCard } from "./StreamCard";

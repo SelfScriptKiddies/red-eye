@@ -86,6 +86,12 @@ export default function AgentsPage() {
   const [replayModal, setReplayModal] = useState(false);
   const [replayForm, setReplayForm] = useState<ReplayForm>(defaultReplay);
 
+  // Sniffer config state — previously missing entirely, which made the
+  // "Настроить" button throw a ReferenceError at runtime. The modal UI that
+  // will read these values is not implemented yet; only the setters are used.
+  const [, setSnifferModal] = useState(false);
+  const [, setSnifferPorts] = useState('');
+
   const [services, setServices] = useState<Service[]>([]);
   const [boundServices, setBoundServices] = useState<number[]>([]);
 
@@ -259,13 +265,8 @@ export default function AgentsPage() {
     setReplayForm(defaultReplay);
   };
 
-  // Sniffer
-  const saveSniffer = () => {
-    if (!selected) return;
-    const ports = snifferPorts.split(',').map(p => parseInt(p.trim())).filter(p => !isNaN(p));
-    sendCommand(selected, { type: 'SnifferConfig', ports });
-    setSnifferModal(false);
-  };
+  // Sniffer config is applied via the (not yet implemented) sniffer modal;
+  // when it lands it should build on setSnifferPorts above.
 
   return (
     <div className="AgentsPage">

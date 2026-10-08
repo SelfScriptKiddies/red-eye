@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { queryClient } from './queryClient';
+import { subscribeWs, type WsState } from './wsBus';
 
-type WsState = 'connected' | 'connecting' | 'disconnected';
+export type { WsState } from './wsBus';
 
 interface WsEvent {
     type: string;
@@ -19,15 +20,12 @@ const WS_BATCH_MAX_SIZE = 50;
 
 export function useWebSocket(
     enabled: boolean,
-    onPatchStreams?: (patches: Map<number, Partial<{ count: number; last_time: number }>>) => void,
+    onPatchStreams?: (_patches: Map<number, Partial<{ count: number; last_time: number }>>) => void,
     selectedStreamIds?: number[],
 ) {
     const [state, setState] = useState<WsState>('disconnected');
-    const wsRef = useRef<WebSocket | null>(null);
     const bufferRef = useRef<WsEvent[]>([]);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const attemptRef = useRef(0);
     const onPatchStreamsRef = useRef(onPatchStreams);
     const selectedStreamIdsRef = useRef(selectedStreamIds);
 
@@ -81,55 +79,40 @@ export function useWebSocket(
         }
     }, [flush]);
 
-    const connect = useCallback(() => {
+    useEffect(() => {
         if (!enabled) return;
-        setState('connecting');
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${proto}//${window.location.host}/api/ws`);
-        wsRef.current = ws;
 
-        ws.onopen = () => {
-            setState('connected');
-            attemptRef.current = 0;
-        };
-
-        ws.onmessage = (msg) => {
-            try {
-                const parsed = JSON.parse(msg.data);
-                if (parsed.type === 'packet_batch') {
-                    const events: WsEvent[] = parsed.events;
+        // All consumers share ONE socket per tab via the bus (see wsBus.ts).
+        // Unsubscribing here drops our refcount; when it hits zero the bus
+        // closes the socket and cannot reconnect — no zombie sockets after
+        // Live toggles or page switches.
+        const unsubscribe = subscribeWs({
+            onMessage: (data) => {
+                const parsed = data as WsEvent & { events?: WsEvent[] };
+                if (parsed && parsed.type === 'packet_batch') {
+                    const events: WsEvent[] = parsed.events ?? [];
                     if (!Array.isArray(events) || events.length === 0) return;
                     for (const evt of events) bufferRef.current.push(evt);
+                } else if (parsed) {
+                    bufferRef.current.push(parsed);
                 } else {
-                    bufferRef.current.push(parsed as WsEvent);
+                    return;
                 }
                 if (bufferRef.current.length >= WS_BATCH_MAX_SIZE) {
                     flush();
                 } else {
                     scheduleFlush();
                 }
-            } catch {}
-        };
+            },
+            onState: setState,
+        });
 
-        ws.onclose = () => {
-            setState('disconnected');
-            wsRef.current = null;
-            if (enabled) {
-                const delay = Math.min(1000 * 2 ** attemptRef.current, 30000);
-                attemptRef.current++;
-                reconnectRef.current = setTimeout(connect, delay);
-            }
+        return () => {
+            unsubscribe();
+            if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+            bufferRef.current = [];
         };
     }, [enabled, flush, scheduleFlush]);
-
-    useEffect(() => {
-        if (enabled) { connect(); }
-        return () => {
-            wsRef.current?.close();
-            if (reconnectRef.current) clearTimeout(reconnectRef.current);
-            if (timerRef.current) clearTimeout(timerRef.current);
-        };
-    }, [enabled, connect]);
 
     return state;
 }
