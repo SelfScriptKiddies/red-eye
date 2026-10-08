@@ -127,13 +127,14 @@ pub async fn run() {
 
     let flusher_db = db::DB::init(&config).await.unwrap();
     let flusher_nats = message_broker::create_consumer(&config).await.ok();
+    let flusher_cache = cache.clone();
     let batch_size = config.batch_size;
     let flush_interval = config.batch_flush_interval_ms;
     let nats_ws_topic = config.nats_websocket_packets_topic.clone();
     tokio::spawn(async move {
         batch_flusher::run_batch_flusher(
             batch_rx, flusher_db, batch_size, flush_interval,
-            flusher_nats, nats_ws_topic,
+            flusher_nats, nats_ws_topic, flusher_cache,
         ).await;
     });
 

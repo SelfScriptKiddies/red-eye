@@ -36,6 +36,14 @@ impl StreamsCache {
         self.last_seen.insert(key, Instant::now());
     }
 
+    /// Remove a cached tuple -> stream id mapping, returning the id.
+    /// Used by the TCP SYN lifecycle: a new connection on a reused 4-tuple
+    /// must not keep attributing packets to the old stream.
+    pub fn remove_by_key(&self, key: &str) -> Option<usize> {
+        self.last_seen.remove(key);
+        self.entries.remove(key).map(|e| e.1)
+    }
+
     pub fn contains_key(&self, key: &str) -> bool {
         self.entries.contains_key(key)
     }

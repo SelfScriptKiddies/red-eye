@@ -328,45 +328,11 @@ pub async fn run() -> std::io::Result<()> {
         });
     }
 
-    // Materialized view refresh via LISTEN/NOTIFY
-    {
-        let refresh_pool = pool.clone();
-        tokio::spawn(async move {
-            use tokio::time::{sleep, Duration, Instant};
-
-            let mut listener = sqlx::postgres::PgListener::connect_with(&refresh_pool).await.unwrap();
-            listener.listen("refresh_streams").await.unwrap();
-            info!("Listening for refresh_streams notifications");
-
-            let debounce = Duration::from_secs(5);
-            let mut last_refresh = Instant::now() - debounce;
-
-            loop {
-                match listener.recv().await {
-                    Ok(_) => {
-                        let since_last = last_refresh.elapsed();
-                        if since_last < debounce {
-                            sleep(debounce - since_last).await;
-                        }
-                        match sqlx::query("SELECT refresh_streams_view()")
-                            .execute(&refresh_pool)
-                            .await
-                        {
-                            Ok(_) => {
-                                debug!("Refreshed streams_list_view");
-                                last_refresh = Instant::now();
-                            }
-                            Err(e) => error!("Failed to refresh mat view: {}", e),
-                        }
-                    }
-                    Err(e) => {
-                        error!("LISTEN error: {}", e);
-                        sleep(Duration::from_secs(1)).await;
-                    }
-                }
-            }
-        });
-    }
+    // NOTE: the old streams_list_view materialized view refresh via
+    // LISTEN/NOTIFY ('refresh_streams' channel) was removed together with
+    // the matview itself: the streams list now reads stream LEFT JOIN
+    // aggregated stream_tag, maintained incrementally by the
+    // traffic-analyzer batch flusher. Nothing needs a refresh signal.
 
     // Create AgentService for agent management
     let agent_nats_client = ConnectOptions::with_user_and_password(

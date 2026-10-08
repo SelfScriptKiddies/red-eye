@@ -5,6 +5,7 @@ pub mod filterDTO;
 
 use log::{error, debug};
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::sync::RwLock;
 use crate::filters::filterDTO::{Filter, FilterDirection};
 use crate::filters::regex::RegexFilter;
@@ -100,6 +101,15 @@ pub fn edit_filter(index: usize, pattern_name: String, pattern_type: String, pay
 pub fn get_filter_ids() -> Vec<usize> {
     let filters = PACKET_FILTERS.read().unwrap();
     filters.iter().map(|entry| entry.filter.get_id()).collect()
+}
+
+/// Snapshot of filter_id -> tag name (tag_name.name in the DB). Used by the
+/// batch flusher to maintain stream_tag with the SAME strings the old
+/// materialized view produced (tag rows store tag_name.id; the view joined
+/// them back to names), so UI semantics don't change.
+pub fn filter_names_snapshot() -> HashMap<usize, String> {
+    let filters = PACKET_FILTERS.read().unwrap();
+    filters.iter().map(|entry| (entry.filter.get_id(), entry.filter.get_pattern_name())).collect()
 }
 
 pub fn sync_filters(filters_data: Vec<(usize, String, String, Vec<u8>, FilterDirection)>) {
