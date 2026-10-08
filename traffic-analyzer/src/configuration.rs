@@ -168,7 +168,7 @@ pub struct ApplicationConfig {
         clap(short='l', long="logging-level", help="Logging level (trace|debug|info|warn|error)", help_heading = "Logging"),
         env = "LOGGING_LEVEL",
         config = "logging.level",
-        default = "trace"
+        default = "info"
     )]
     pub logging_level: String,
 }
@@ -189,7 +189,13 @@ pub fn init() -> ApplicationConfig {
         "info" => log::LevelFilter::Info,
         "warn" => log::LevelFilter::Warn,
         "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Trace,
+        _ => {
+            eprintln!(
+                "Unknown LOGGING_LEVEL '{}', falling back to info",
+                config.logging_level
+            );
+            log::LevelFilter::Info
+        }
     };
 
     let mut clog = colog::default_builder();

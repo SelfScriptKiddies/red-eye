@@ -1,0 +1,22 @@
+# Example backend configuration. Copy to backend/config.toml and fill in real
+# values. The real config.toml is gitignored — never commit credentials.
+
+[web]
+host = "0.0.0.0"
+port = 8000
+password = "<PASSWORD>"
+
+[database]
+host = "db"
+port = 5432
+username = "red-eye-user"
+password = "<PASSWORD>"
+schema = "red-eye"
+
+[nats]
+host = "nats:4222"
+login = "red-eye-client"
+password = "<PASSWORD>"
+
+[kafka]
+host = "127.0.0.1"

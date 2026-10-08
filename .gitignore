@@ -2,3 +2,4 @@
 test/**
 volume/
 agent/target-docker/
+backend/config.toml

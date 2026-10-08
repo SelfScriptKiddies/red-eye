@@ -34,6 +34,8 @@ services:
         max-size: "50m"
         max-file: "3"
     command: -c /etc/nats/nats.conf
+    env_file:
+      - .env
     ports:
       - "4222:4222" # client port
       # - "6222:6222" # cluster port
