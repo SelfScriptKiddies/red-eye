@@ -144,6 +144,14 @@ impl UpdateListener {
                             info!("Received config sync: {} services, {} filters", 
                                 services.len(), filters.len());
                             
+                            // Duplicate safety vs the startup DB warm-up
+                            // (lib.rs::warm_filters_from_db): sync_filters does
+                            // NOT blindly replace the set — it diffs BY ID,
+                            // adding only missing ids and removing stale ones.
+                            // A ConfigSync carrying the same rows the warm-up
+                            // just loaded is therefore a no-op (no duplicates);
+                            // this is pinned by tests in filters.rs
+                            // (sync_filters_right_after_warmup_does_not_duplicate).
                             // Sync services
                             let incoming_ids: HashSet<usize> = services.iter().map(|(id, _)| *id).collect();
                             {
