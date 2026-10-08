@@ -127,19 +127,34 @@ async fn create_service(
                 log::error!("Failed to send update: {}", e);
             }
 
-            // Bind to all agents by default and sync their ports
-            // Bind new service to all known agents in one query
-            let _ = sqlx::query(
-                "INSERT INTO agent_service (agent_id, service_id)
-                 SELECT agent_id, $1 FROM agent
-                 ON CONFLICT DO NOTHING"
-            )
-            .bind(created.id)
-            .execute(pool.get_ref())
-            .await;
+            // Bind new service to all live agents and sync their ports.
+            // Agent ids live only in the in-memory registry (NATS heartbeats);
+            // there is no `agent` table in the DB, so the ids must come from
+            // AgentService, not from a set-based INSERT ... SELECT FROM agent.
+            let agents = agent_svc.list_agents().await;
+            if agents.is_empty() {
+                log::info!(
+                    "No live agents yet: service '{}' (id {}) will be bound when agents connect",
+                    created.name, created.id
+                );
+            }
+            for a in &agents {
+                let bind = sqlx::query(
+                    "INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+                )
+                .bind(&a.agent_id)
+                .bind(created.id)
+                .execute(pool.get_ref())
+                .await;
+                if let Err(e) = bind {
+                    log::error!(
+                        "Failed to bind service '{}' (id {}) to agent '{}': {} — service will not be sniffed on this agent",
+                        created.name, created.id, a.agent_id, e
+                    );
+                }
+            }
 
             // Sync ports for all agents
-            let agents = agent_svc.list_agents().await;
             for a in &agents {
                 crate::api::agent::sync_agent_ports(&a.agent_id, pool.get_ref(), &agent_svc).await;
             }
