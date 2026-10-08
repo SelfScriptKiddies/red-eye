@@ -2,6 +2,7 @@ use actix_web::{get, web, HttpResponse};
 use serde::Serialize;
 use sqlx::PgPool;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use log::{warn, error, info};
@@ -20,6 +21,9 @@ pub struct HealthMonitor {
     healthy_since: Arc<RwLock<Option<Instant>>>,
     warn_ms: u64,
     critical_ms: u64,
+    /// Total queries cancelled by the stuck-query watchdog (lifetime
+    /// counter, reported as `stuck_queries_cancelled` in /api/health).
+    stuck_queries_cancelled: AtomicU64,
 }
 
 impl HealthMonitor {
@@ -30,6 +34,7 @@ impl HealthMonitor {
             healthy_since: Arc::new(RwLock::new(None)),
             warn_ms,
             critical_ms,
+            stuck_queries_cancelled: AtomicU64::new(0),
         }
     }
 
@@ -96,6 +101,14 @@ impl HealthMonitor {
         let window = self.window.read().unwrap();
         Self::compute_p95(&window)
     }
+
+    pub fn record_stuck_query_cancelled(&self) {
+        self.stuck_queries_cancelled.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn stuck_queries_cancelled(&self) -> u64 {
+        self.stuck_queries_cancelled.load(Ordering::Relaxed)
+    }
 }
 
 #[derive(Serialize)]
@@ -106,6 +119,7 @@ struct HealthResponse {
     pool_idle: u32,
     pool_max: u32,
     uptime_secs: u64,
+    stuck_queries_cancelled: u64,
 }
 
 static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -127,10 +141,25 @@ pub async fn health_endpoint(
         pool_idle: pool.num_idle() as u32,
         pool_max: pool.size(),
         uptime_secs: uptime,
+        stuck_queries_cancelled: monitor.stuck_queries_cancelled(),
     };
     HttpResponse::Ok().json(resp)
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(health_endpoint);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stuck_query_cancel_counter_counts_monotonically() {
+        let monitor = HealthMonitor::new(1000, 2000);
+        assert_eq!(monitor.stuck_queries_cancelled(), 0);
+        monitor.record_stuck_query_cancelled();
+        monitor.record_stuck_query_cancelled();
+        assert_eq!(monitor.stuck_queries_cancelled(), 2);
+    }
 }

@@ -30,6 +30,7 @@ use tokio::sync::broadcast;
 mod api;
 mod configuration;
 mod db;
+mod db_watchdog;
 mod health;
 
 
@@ -125,6 +126,10 @@ pub async fn run() -> std::io::Result<()> {
         config.health_query_critical_ms,
     ));
     let health_data = web::Data::new(health_monitor.clone());
+
+    // Stuck-query watchdog: cancels queries active beyond
+    // HEALTH_KILL_QUERY_AFTER_MS and counts them in /api/health.
+    db_watchdog::spawn(&config, health_monitor.clone());
 
     // Создаём UpdateAgent для использования в web и фоновой задаче
     let updater_arc = Arc::new(UpdateAgent::new(&config).await);
