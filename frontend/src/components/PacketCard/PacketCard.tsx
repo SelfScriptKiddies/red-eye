@@ -326,13 +326,21 @@ export const PacketCard = memo(function PacketCard({ direction, id, packet_data,
     // Cached + aborted HTTP message list (shared across cards of the same stream).
     const { data: httpMessages } = useHttpMessages(isExpanded && isHttp ? stream_id : null);
 
-    // Load triggers for highlight
+    // Load triggers for highlight. Cached + deduped via react-query: every
+    // card of the same stream wants the SAME per-stream tag list, and cards
+    // remount as the virtualized list scrolls — a raw fetch here meant one
+    // request per card per mount.
     useEffect(() => {
         if (!isExpanded) return;
-        fetch(`/api/tag/stream_id/${stream_id}`)
-            .then(r => r.json())
+        let cancelled = false;
+        queryClient.fetchQuery({
+            queryKey: ['streamTriggers', stream_id],
+            queryFn: ({ signal }) => apiFetch<any[]>(`/api/tag/stream_id/${stream_id}`, signal),
+            staleTime: 10_000,
+        })
             .then((tags: any[]) => {
-                const mine = tags
+                if (cancelled) return;
+                const mine = (tags ?? [])
                     .filter((t: any) => t.packet_id === id)
                     .map((t: any) => ({
                         start_index: t.start_index,
@@ -343,6 +351,7 @@ export const PacketCard = memo(function PacketCard({ direction, id, packet_data,
                 setTriggers(mine);
             })
             .catch(() => {});
+        return () => { cancelled = true; };
     }, [isExpanded, id, stream_id]);
 
     // Match this packet's HTTP message from the (cached) list, then fetch its headers.
@@ -377,16 +386,20 @@ export const PacketCard = memo(function PacketCard({ direction, id, packet_data,
             .finally(() => setHttpLoading(false));
     }, [isExpanded, isHttp, id, httpMessages]);
 
-    // Load gRPC data
+    // Load gRPC data (cached per stream, shared by every card of the stream)
     useEffect(() => {
-        if (isExpanded && isGrpc && !grpcData && !grpcLoading) {
-            setGrpcLoading(true);
-            fetch(`/api/grpc/stream/${stream_id}`)
-                .then(r => r.json())
-                .then((msgs: any[]) => setGrpcData(msgs || []))
-                .catch(() => setGrpcData([]))
-                .finally(() => setGrpcLoading(false));
-        }
+        if (!isExpanded || !isGrpc || grpcData || grpcLoading) return;
+        let cancelled = false;
+        setGrpcLoading(true);
+        queryClient.fetchQuery({
+            queryKey: ['grpcMessages', stream_id],
+            queryFn: ({ signal }) => apiFetch<any[]>(`/api/grpc/stream/${stream_id}`, signal),
+            staleTime: 10_000,
+        })
+            .then((msgs: any[]) => { if (!cancelled) setGrpcData(msgs || []); })
+            .catch(() => { if (!cancelled) setGrpcData([]); })
+            .finally(() => { if (!cancelled) setGrpcLoading(false); });
+        return () => { cancelled = true; };
     }, [isExpanded, isGrpc, stream_id]);
 
     const getContent = (): string => {

@@ -10,6 +10,14 @@ import {
 
 export type { WsState } from './wsBus';
 
+/** One flush of buffered activity frames, already merged per stream. */
+export interface ActivityFlush {
+    /** Additive per-stream count deltas (see activityEvents.ts). */
+    patches: Map<number, StreamPatch>;
+    /** First-seen stream ids from this flush (for the «N новых» plaque). */
+    newStreamIds: number[];
+}
+
 const WS_BATCH_INTERVAL_MS = 300;
 const WS_BATCH_MAX_SIZE = 50;
 // new_streams → 'streams' query invalidation is throttled: frames arrive at
@@ -20,17 +28,17 @@ const STREAMS_INVALIDATE_THROTTLE_MS = 2000;
 
 export function useWebSocket(
     enabled: boolean,
-    onPatchStreams?: (_patches: Map<number, StreamPatch>) => void,
+    onActivity?: (_flush: ActivityFlush) => void,
     selectedStreamIds?: number[],
 ) {
     const [state, setState] = useState<WsState>('disconnected');
     const bufferRef = useRef<ActivityFrame[]>([]);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const onPatchStreamsRef = useRef(onPatchStreams);
+    const onActivityRef = useRef(onActivity);
     const selectedStreamIdsRef = useRef(selectedStreamIds);
     const lastStreamsInvalidateRef = useRef(0);
 
-    onPatchStreamsRef.current = onPatchStreams;
+    onActivityRef.current = onActivity;
     selectedStreamIdsRef.current = selectedStreamIds;
 
     const flush = useCallback(() => {
@@ -39,13 +47,15 @@ export function useWebSocket(
         if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
         if (frames.length === 0) return;
 
-        const { patches, hasNewStreams, packetsAvailable } = mergeActivityFrames(frames);
+        const { patches, hasNewStreams, newStreamIds, packetsAvailable } = mergeActivityFrames(frames);
 
         // Additive patch: the server sends per-second count DELTAS, the
         // consumer adds them to the displayed counts (authoritative totals
-        // come from the 'streams' query refetch below).
-        if (patches.size > 0 && onPatchStreamsRef.current) {
-            onPatchStreamsRef.current(patches);
+        // come from the 'streams' query refetch below). newStreamIds (and
+        // deltas for streams not on the current page) feed the «N новых»
+        // plaque — see streamsFreeze.ts.
+        if ((patches.size > 0 || newStreamIds.length > 0) && onActivityRef.current) {
+            onActivityRef.current({ patches, newStreamIds });
         }
 
         if (hasNewStreams) {

@@ -37,6 +37,8 @@ export interface ActivityEffects {
     patches: Map<number, StreamPatch>;
     /** True when any frame reported first-seen stream ids. */
     hasNewStreams: boolean;
+    /** First-seen stream ids (union across frames of one flush). */
+    newStreamIds: number[];
     /** Stream ids that received packets (union across frames). */
     packetsAvailable: number[];
 }
@@ -58,6 +60,7 @@ export function isActivityFrame(data: unknown): data is ActivityFrame {
 export function mergeActivityFrames(frames: ActivityFrame[]): ActivityEffects {
     const patches = new Map<number, StreamPatch>();
     let hasNewStreams = false;
+    const newStreamIds = new Set<number>();
     const packetsAvailable = new Set<number>();
 
     for (const frame of frames) {
@@ -72,15 +75,16 @@ export function mergeActivityFrames(frames: ActivityFrame[]): ActivityEffects {
                 patches.set(s.id, { count_delta: s.count, last_time: s.last_time });
             }
         }
-        if ((frame.new_streams ?? []).length > 0) {
+        for (const id of frame.new_streams ?? []) {
             hasNewStreams = true;
+            newStreamIds.add(id);
         }
         for (const id of frame.packets_available ?? []) {
             packetsAvailable.add(id);
         }
     }
 
-    return { patches, hasNewStreams, packetsAvailable: [...packetsAvailable] };
+    return { patches, hasNewStreams, newStreamIds: [...newStreamIds], packetsAvailable: [...packetsAvailable] };
 }
 
 /**

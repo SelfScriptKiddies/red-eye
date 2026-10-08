@@ -176,6 +176,28 @@
     font-size: 12px;
 }
 
+/* «⏸ N новых» plaque: new streams accumulate here while the frozen list
+   below stays untouched (see lib/streamsFreeze.ts). */
+.new-streams-plaque {
+    align-self: center;
+    margin: 6px auto 2px;
+    display: block;
+    background: var(--re-accent);
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    transition: filter 0.15s ease;
+}
+
+.new-streams-plaque:hover {
+    filter: brightness(1.15);
+}
+
 .filter-indicator > span {
     color: var(--re-accent);
     font-weight: 600;

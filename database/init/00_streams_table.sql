@@ -17,7 +17,16 @@ CREATE TABLE IF NOT EXISTS stream (
     last_packet_time BIGINT
 );
 
-CREATE INDEX IF NOT EXISTS idx_stream_last_packet ON stream(last_packet_time DESC);
+-- Streams list keyset pagination: the list orders by
+-- COALESCE(last_packet_time, 0) DESC (NULL last_time = 0 = oldest) with id
+-- DESC as the unique tiebreaker, and pages via the row-value cursor
+-- (COALESCE(last_packet_time, 0), id) < (cursor_time, cursor_id). The
+-- expression index matches both the ORDER BY and the cursor predicate
+-- (a plain (last_packet_time) index cannot serve the COALESCE expression).
+-- Online migration for existing databases:
+-- database/migrations/stream_keyset_index.sql
+CREATE INDEX IF NOT EXISTS idx_stream_last_time_id
+    ON stream (COALESCE(last_packet_time, 0) DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_stream_service_id ON stream(service_id);
 -- Per-packet stream lookup (analyzer find_stream_id: WHERE 4-tuple AND
 -- active ORDER BY id DESC LIMIT 1). Without it every cache miss/TTL-expiry
