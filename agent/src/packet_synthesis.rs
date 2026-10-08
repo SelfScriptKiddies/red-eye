@@ -99,9 +99,11 @@ pub fn synthesize_raw_frame(packet: &CapturedPacket, machine_ip: IpAddr) -> Vec<
     }
 }
 
-/// Encode a CapturedPacket into the same bincode format the sniffer uses:
-/// (tv_usec: i64, tv_sec: i64, raw_ethernet_bytes: Vec<u8>)
-pub fn encode_for_nats(packet: &CapturedPacket, machine_ip: IpAddr) -> Option<Vec<u8>> {
+/// Build the raw packet tuple for the NATS batching queue, in the same
+/// shape the sniffer produces: (tv_usec: i64, tv_sec: i64,
+/// raw_ethernet_bytes: Vec<u8>). The bincode envelope encoding happens per
+/// batch inside the NATS client (see nats.rs RAW_PACKET_WIRE_VERSION).
+pub fn encode_for_nats(packet: &CapturedPacket, machine_ip: IpAddr) -> Option<(i64, i64, Vec<u8>)> {
     let raw = synthesize_raw_frame(packet, machine_ip);
     if raw.is_empty() {
         return None;
@@ -110,5 +112,5 @@ pub fn encode_for_nats(packet: &CapturedPacket, machine_ip: IpAddr) -> Option<Ve
     let tv_sec = (packet.timestamp_ms / 1000) as i64;
     let tv_usec = ((packet.timestamp_ms % 1000) * 1000) as i64;
 
-    bincode::encode_to_vec((tv_usec, tv_sec, raw), bincode::config::standard()).ok()
+    Some((tv_usec, tv_sec, raw))
 }

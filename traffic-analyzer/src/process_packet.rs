@@ -3,11 +3,10 @@ use crate::ethernet::{self, PacketInfo, Protocol};
 use crate::filters::apply_filters;
 use crate::http_parser;
 use crate::grpc_parser;
-use crate::batch_flusher::{ProcessedPacket, HttpMessageData, GrpcMessageData, NatsEventData};
+use crate::batch_flusher::{ProcessedPacket, HttpMessageData, GrpcMessageData, NatsEventData, ShardedBatchSender};
 use log::{debug, error};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
 use crate::cache::Cache;
 use crate::cache::streams::StreamsCache;
 use crate::configuration::ApplicationConfig;
@@ -32,11 +31,11 @@ pub struct PacketEvent {
     cache: Arc<Cache>,
     config: Arc<ApplicationConfig>,
     db: DB,
-    batch_tx: mpsc::Sender<ProcessedPacket>,
+    batch_tx: Arc<ShardedBatchSender>,
  }
 
 impl PacketProcessor {
-    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, batch_tx: mpsc::Sender<ProcessedPacket>) -> Self {
+    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, batch_tx: Arc<ShardedBatchSender>) -> Self {
         Self {
             cache,
             config,
@@ -134,7 +133,7 @@ impl PacketProcessor {
 
         // Create new stream
         let stream_id = self.db.create_stream(&src_ip, src_port, &dst_ip, dst_port, &packet.protocol, &packet.ip_version, service_id, packet.timestamp_seconds as i64).await
-            .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Stream creation failed: {:?}", e)))?;
+            .map_err(|e| Error::other(format!("Stream creation failed: {:?}", e)))?;
 
         self.cache.streams.insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
         Ok(stream_id)
@@ -188,7 +187,7 @@ impl PacketProcessor {
     pub async fn process_packet(&self, packet: PacketInfo) -> Result<(), Error> {
         // Find service and direction
         let (service_id, direction) = self.find_service_and_direction(&packet)
-                                                            .ok_or(Error::new(std::io::ErrorKind::Other, "Service not found"))?;
+                                                            .ok_or(Error::other("Service not found"))?;
 
         debug!("Processing packet: \nService ID: {:?}\nDirection: {:?}", service_id, direction);
 
@@ -358,8 +357,12 @@ impl PacketProcessor {
             nats_event,
         };
 
-        self.batch_tx.send(processed).await
-            .map_err(|e| Error::new(std::io::ErrorKind::Other, format!("Batch channel send failed: {}", e)))?;
+        // Route to this stream's flusher queue. Never blocks (a full queue
+        // drops the packet with a counter inside) — blocking here would hold
+        // one of the analyzer's concurrency permits and backpressure the
+        // NATS consumer.
+        self.batch_tx.send(processed)
+            .map_err(|e| Error::other(format!("Batch channel send failed: {}", e)))?;
 
         Ok(())
     }

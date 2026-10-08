@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 use log::{info, warn, error, debug};
-use async_nats::Client;
 use std::sync::Arc;
 
 use crate::cache::Cache;
 use crate::db::DB;
+use crate::ws_aggregator::SharedWsAggregator;
 
 /// A fully-processed packet ready for batch insertion.
 pub struct ProcessedPacket {
@@ -54,8 +55,114 @@ pub struct NatsEventData {
     pub direction: String,
 }
 
-pub fn create_batch_channel(buffer_size: usize) -> (mpsc::Sender<ProcessedPacket>, mpsc::Receiver<ProcessedPacket>) {
-    mpsc::channel(buffer_size)
+/// Sender side of the sharded flusher pool. One bounded channel per flusher
+/// task; a packet is routed by its stream id so all packets of a stream are
+/// buffered and flushed by ONE flusher (per-stream order preserved, and a
+/// stream's stats/last_packet_time updates never race themselves).
+///
+/// Shard rule: `stream_id % N`. Deterministic, and because stream ids are
+/// sequential, concurrent connections round-robin across flushers.
+///
+/// Ordering note: packet PROCESSING tasks already run concurrently
+/// (semaphore in message_broker), so packets of one stream may reach this
+/// sender slightly out of capture order — same as before sharding; the
+/// shard only guarantees they stay on one flusher.
+pub struct ShardedBatchSender {
+    senders: Vec<mpsc::Sender<ProcessedPacket>>,
+}
+
+/// Packets dropped because every flusher queue a packet maps to was full.
+/// Losing a packet is acceptable degradation; blocking the NATS consumer
+/// (or a processing task holding one of the concurrency permits) is not.
+static FLUSHER_QUEUE_DROPS: AtomicU64 = AtomicU64::new(0);
+
+pub fn flusher_queue_drops() -> u64 {
+    FLUSHER_QUEUE_DROPS.load(Ordering::Relaxed)
+}
+
+impl ShardedBatchSender {
+    pub fn shard_count(&self) -> usize {
+        self.senders.len()
+    }
+
+    /// Which flusher queue a stream maps to (exposed for tests and for the
+    /// sharding determinism guarantee).
+    pub fn shard_for(&self, stream_id: usize) -> usize {
+        stream_id % self.senders.len()
+    }
+
+    /// Route one processed packet to its flusher queue. Never blocks: a
+    /// full queue drops the packet and counts it (warn every 1000th drop),
+    /// keeping the NATS consumer and the processing permits flowing.
+    pub fn send(&self, packet: ProcessedPacket) -> Result<(), String> {
+        let shard = self.shard_for(packet.stream_id);
+        match self.senders[shard].try_send(packet) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let dropped = FLUSHER_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+                if dropped.is_multiple_of(1000) {
+                    warn!("Flusher queue {} full — {} packets dropped so far", shard, dropped);
+                }
+                Ok(()) // counted degradation, not an error
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err("flusher queue closed (flusher task died)".to_string())
+            }
+        }
+    }
+}
+
+/// Create N flusher tasks (N >= 1), each with its own bounded queue of
+/// `queue_capacity` packets, sharing one DB pool, one cache and one WS
+/// activity aggregator. Flush cadence and batch size are per flusher and
+/// unchanged from the single-flusher design.
+///
+/// The `ws_aggregator` is the analyzer-side WebSocket activity aggregation:
+/// flushers record per-packet events into it and
+/// `ws_aggregator::spawn_ws_aggregate_publisher` publishes one summary
+/// frame per second on the WS topic (replaces the old per-packet NATS
+/// publishes — see ws_aggregator.rs for the wire format).
+pub fn spawn_flushers(
+    flushers: usize,
+    queue_capacity: usize,
+    db: DB,
+    opts: FlusherOptions,
+    cache: Arc<Cache>,
+    ws_aggregator: SharedWsAggregator,
+) -> ShardedBatchSender {
+    let n = flushers.max(1);
+    let (sender, rxs) = sharded_channels(n, queue_capacity);
+    for (i, rx) in rxs.into_iter().enumerate() {
+        let db = db.clone(); // PgPool is internally Arc — one shared pool
+        let cache = cache.clone();
+        let ws_aggregator = ws_aggregator.clone();
+        tokio::spawn(async move {
+            run_batch_flusher(i, n, rx, db, opts, cache, ws_aggregator).await;
+        });
+    }
+    info!("Spawned {} batch flusher(s) (batch_size={}, flush_interval={}ms, queue={} packets each)",
+        n, opts.batch_size, opts.flush_interval_ms, queue_capacity);
+    sender
+}
+
+/// Flush cadence knobs shared by every flusher (values from batch config).
+#[derive(Clone, Copy)]
+pub struct FlusherOptions {
+    pub batch_size: usize,
+    pub flush_interval_ms: u64,
+}
+
+/// Create the flusher queues without spawning the consumers (shared by
+/// spawn_flushers and the sharding tests).
+fn sharded_channels(n: usize, queue_capacity: usize) -> (ShardedBatchSender, Vec<mpsc::Receiver<ProcessedPacket>>) {
+    let mut senders = Vec::with_capacity(n);
+    let mut receivers = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (tx, rx) = mpsc::channel::<ProcessedPacket>(queue_capacity);
+        senders.push(tx);
+        receivers.push(rx);
+    }
+    (ShardedBatchSender { senders }, receivers)
 }
 
 /// Background task that collects processed packets and flushes them in batches.
@@ -67,19 +174,22 @@ pub fn create_batch_channel(buffer_size: usize) -> (mpsc::Sender<ProcessedPacket
 /// Also drains the TCP lifecycle dirty set (`cache.drain_closed_streams`)
 /// each flush, so FIN/RST closes and SYN retirements become one batched
 /// `UPDATE stream SET active = false` instead of per-packet UPDATEs.
+///
+/// `index`/`total` identify the flusher in logs (N of these run in
+/// parallel, sharded by stream id — see [`spawn_flushers`]).
 pub async fn run_batch_flusher(
+    index: usize,
+    total: usize,
     mut rx: mpsc::Receiver<ProcessedPacket>,
     db: DB,
-    batch_size: usize,
-    flush_interval_ms: u64,
-    nats_client: Option<Client>,
-    nats_ws_topic: String,
+    opts: FlusherOptions,
     cache: Arc<Cache>,
+    ws_aggregator: SharedWsAggregator,
 ) {
-    info!("Batch flusher started: batch_size={}, flush_interval={}ms", batch_size, flush_interval_ms);
+    info!("Batch flusher {}/{} started: batch_size={}, flush_interval={}ms", index + 1, total, opts.batch_size, opts.flush_interval_ms);
 
-    let flush_duration = Duration::from_millis(flush_interval_ms);
-    let mut buffer: Vec<ProcessedPacket> = Vec::with_capacity(batch_size);
+    let flush_duration = Duration::from_millis(opts.flush_interval_ms);
+    let mut buffer: Vec<ProcessedPacket> = Vec::with_capacity(opts.batch_size);
     let mut deadline: Option<Instant> = None;
 
     loop {
@@ -97,10 +207,10 @@ pub async fn run_batch_flusher(
                         None => {
                             // Channel closed — flush remaining and exit.
                             if !buffer.is_empty() {
-                                flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+                                flush_batch(&db, &mut buffer, &ws_aggregator).await;
                             }
                             flush_lifecycle(&db, &cache).await;
-                            info!("Batch flusher: channel closed, shutting down");
+                            info!("Batch flusher {}/{}: channel closed, shutting down", index + 1, total);
                             return;
                         }
                     }
@@ -122,9 +232,9 @@ pub async fn run_batch_flusher(
                     match result {
                         Some(pkt) => Some(pkt),
                         None => {
-                            flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+                            flush_batch(&db, &mut buffer, &ws_aggregator).await;
                             flush_lifecycle(&db, &cache).await;
-                            info!("Batch flusher: channel closed, shutting down");
+                            info!("Batch flusher {}/{}: channel closed, shutting down", index + 1, total);
                             return;
                         }
                     }
@@ -144,11 +254,11 @@ pub async fn run_batch_flusher(
         }
 
         // Flush if buffer is full OR timeout expired.
-        let should_flush = buffer.len() >= batch_size
+        let should_flush = buffer.len() >= opts.batch_size
             || (!buffer.is_empty() && deadline.map(|d| Instant::now() >= d).unwrap_or(false));
 
         if should_flush {
-            flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+            flush_batch(&db, &mut buffer, &ws_aggregator).await;
             flush_lifecycle(&db, &cache).await;
             deadline = None;
         }
@@ -173,12 +283,11 @@ async fn flush_lifecycle(db: &DB, cache: &Cache) {
     }
 }
 
-/// Flush a batch of processed packets to the database and send NATS events.
+/// Flush a batch of processed packets to the database and record WS activity.
 async fn flush_batch(
     db: &DB,
     buffer: &mut Vec<ProcessedPacket>,
-    nats_client: &Option<Client>,
-    nats_ws_topic: &str,
+    ws_aggregator: &SharedWsAggregator,
 ) {
     if buffer.is_empty() {
         return;
@@ -272,22 +381,13 @@ async fn flush_batch(
         }
     }
 
-    // 6. Send NATS events for WebSocket
-    if let Some(ref client) = nats_client {
-        for (idx, pkt) in buffer.iter().enumerate() {
+    // 6. Record WebSocket activity into the shared aggregator. The
+    // publisher task (ws_aggregator.rs) turns it into ONE NATS message per
+    // second instead of the per-packet publishes this loop used to do.
+    if let Ok(mut agg) = ws_aggregator.lock() {
+        for pkt in buffer.iter() {
             if let Some(ref evt) = pkt.nats_event {
-                let event = serde_json::json!({
-                    "packet_id": packet_ids[idx],
-                    "stream_id": evt.stream_id,
-                    "timestamp_seconds": evt.timestamp_seconds,
-                    "timestamp_microseconds": evt.timestamp_microseconds,
-                    "direction": evt.direction,
-                });
-                if let Ok(payload) = serde_json::to_vec(&event) {
-                    if let Err(e) = client.publish(nats_ws_topic.to_string(), payload.into()).await {
-                        error!("Failed to send NATS event: {}", e);
-                    }
-                }
+                agg.record(evt.stream_id, evt.timestamp_seconds);
             }
         }
     }
@@ -331,6 +431,32 @@ fn build_stream_tag_pairs(buffer: &[ProcessedPacket], names: &HashMap<usize, Str
         }
     }
     pairs
+}
+
+/// Insert the packet batch, retrying once after a short backoff on error or
+/// id-count mismatch. Returns the packet ids, or None if the batch should be
+/// dropped (logged at warn with the count lost).
+async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Option<Vec<i64>> {
+    match db.insert_packets_batch(buffer).await {
+        Ok(ids) if ids.len() == buffer.len() => return Some(ids),
+        Ok(ids) => error!("Batch insert returned {} ids for {} packets — retrying", ids.len(), buffer.len()),
+        Err(e) => error!("Batch packet insert failed: {:?} — retrying", e),
+    }
+
+    tokio::time::sleep(Duration::from_millis(75)).await;
+
+    match db.insert_packets_batch(buffer).await {
+        Ok(ids) if ids.len() == buffer.len() => Some(ids),
+        Ok(ids) => {
+            warn!("Batch insert still mismatched after retry ({} ids for {} packets) — dropping {} packets",
+                ids.len(), buffer.len(), buffer.len());
+            None
+        }
+        Err(e) => {
+            warn!("Batch packet insert failed after retry: {:?} — dropping {} packets", e, buffer.len());
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -435,30 +561,59 @@ mod tests {
         let names = HashMap::new();
         assert!(build_stream_tag_pairs(&buffer, &names).is_empty());
     }
-}
 
-/// Insert the packet batch, retrying once after a short backoff on error or
-/// id-count mismatch. Returns the packet ids, or None if the batch should be
-/// dropped (logged at warn with the count lost).
-async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Option<Vec<i64>> {
-    match db.insert_packets_batch(buffer).await {
-        Ok(ids) if ids.len() == buffer.len() => return Some(ids),
-        Ok(ids) => error!("Batch insert returned {} ids for {} packets — retrying", ids.len(), buffer.len()),
-        Err(e) => error!("Batch packet insert failed: {:?} — retrying", e),
+    #[test]
+    fn sharding_is_deterministic_and_covers_all_shards() {
+        // Same stream id must always map to the same shard (per-stream
+        // order guarantee), and sequential stream ids must spread over all
+        // shards (even load — connections are created sequentially).
+        let (sender, _rxs) = sharded_channels(4, 8);
+        assert_eq!(sender.shard_count(), 4);
+        for stream_id in 0..100usize {
+            assert_eq!(sender.shard_for(stream_id), stream_id % 4);
+        }
+        // Every shard receives traffic for sequential stream ids.
+        let covered: HashSet<usize> = (0..40usize).map(|s| sender.shard_for(s)).collect();
+        assert_eq!(covered, [0, 1, 2, 3].into_iter().collect(), "all shards used");
     }
 
-    tokio::time::sleep(Duration::from_millis(75)).await;
+    #[tokio::test]
+    async fn packets_of_one_stream_land_in_one_queue_in_send_order() {
+        let (sender, mut rxs) = sharded_channels(3, 16);
+        let mut other_stream = packet(2_000, vec![]);
+        other_stream.stream_id = 2; // shard 2 — a different queue than 7
+        let mut s1 = packet(1_000, vec![]);
+        s1.stream_id = 7; // shard 1
+        let mut s2 = packet(1_001, vec![]);
+        s2.stream_id = 7;
 
-    match db.insert_packets_batch(buffer).await {
-        Ok(ids) if ids.len() == buffer.len() => Some(ids),
-        Ok(ids) => {
-            warn!("Batch insert still mismatched after retry ({} ids for {} packets) — dropping {} packets",
-                ids.len(), buffer.len(), buffer.len());
-            None
+        sender.send(s1).unwrap();
+        sender.send(other_stream).unwrap();
+        sender.send(s2).unwrap();
+
+        let shard = sender.shard_for(7);
+        // Drain all queues; stream 7's two packets must both be in its shard
+        // queue, in send order (and only its own packets).
+        let mut got7 = Vec::new();
+        for (i, rx) in rxs.iter_mut().enumerate() {
+            while let Ok(pkt) = rx.try_recv() {
+                if i == shard {
+                    got7.push(pkt.timestamp_seconds);
+                }
+            }
         }
-        Err(e) => {
-            warn!("Batch packet insert failed after retry: {:?} — dropping {} packets", e, buffer.len());
-            None
+        assert_eq!(got7, vec![1_000, 1_001]);
+    }
+
+    #[tokio::test]
+    async fn full_queue_drops_and_counts_instead_of_blocking() {
+        // Capacity 1, no consumer: further sends must return Ok (counted
+        // degradation) and the drop counter must increase — never block.
+        let (sender, _rxs) = sharded_channels(1, 1);
+        let before = flusher_queue_drops();
+        for _ in 0..5 {
+            sender.send(packet(1_000, vec![])).unwrap();
         }
+        assert!(flusher_queue_drops() >= before + 4, "4 of 5 packets dropped and counted");
     }
 }

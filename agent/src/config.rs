@@ -35,6 +35,14 @@ pub struct AgentConfig {
     #[arg(long, env = "NATS_RAW_PACKETS_TOPIC", default_value = "raw_packets")]
     pub nats_raw_packets_topic: String,
 
+    /// Packets per NATS message (batching; 1 disables batching)
+    #[arg(long, env = "NATS_BATCH_SIZE", default_value_t = 32)]
+    pub nats_batch_size: usize,
+
+    /// Max ms before a partial packet batch is published
+    #[arg(long, env = "NATS_BATCH_INTERVAL_MS", default_value_t = 10)]
+    pub nats_batch_interval_ms: u64,
+
     /// NATS updates topic
     #[arg(long, env = "NATS_UPDATES_TOPIC", default_value = "updates")]
     pub nats_updates_topic: String,

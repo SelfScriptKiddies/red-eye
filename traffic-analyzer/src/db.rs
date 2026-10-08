@@ -1,13 +1,66 @@
 use std::collections::HashMap;
 use sqlx::{postgres::PgPoolOptions, PgPool, Error, Row};
-use log::{info, error};
+use log::{info, error, warn};
 use crate::ethernet::{PacketInfo, Protocol, IpVersion};
 use crate::configuration::ApplicationConfig;
 use std::net::IpAddr;
 use crate::process_packet::Direction;
 
+/// Build the COPY FROM STDIN body for a packet batch in PostgreSQL's
+/// BINARY copy format. Why binary and not text:
+///
+/// - bytea in text COPY must be hex (`\x...` with the backslash itself
+///   COPY-escaped to `\\x`), which doubles the payload bytes on the wire —
+///   measured on the scratch stand, a 50k x 700 B batch hex stream is
+///   ~70 MB and the transfer, not the server, becomes the bottleneck.
+///   Binary copy sends payload bytes raw.
+/// - No per-byte escaping work client-side: rows are a few length-prefixed
+///   memcpy's (i64 fields network order, direction as UTF-8 bytes).
+///
+/// Format (PG docs "Binary Format"): 11-byte signature, i32 flags, i32
+/// header extension length, then per tuple an i16 field count and per field
+/// an i32 byte length followed by the raw value, terminated by i16 -1.
+fn encode_packets_copy_body_binary(ids: &[i64], packets: &[crate::batch_flusher::ProcessedPacket]) -> Vec<u8> {
+    fn push_i16be(out: &mut Vec<u8>, v: i16) { out.extend_from_slice(&v.to_be_bytes()); }
+    fn push_i32be(out: &mut Vec<u8>, v: i32) { out.extend_from_slice(&v.to_be_bytes()); }
+    /// One field: i32 length + raw bytes.
+    fn push_field(out: &mut Vec<u8>, bytes: &[u8]) {
+        push_i32be(out, bytes.len() as i32);
+        out.extend_from_slice(bytes);
+    }
+
+    let mut body: Vec<u8> = Vec::with_capacity(packets.len() * (2 + 6 * 4 + 8 * 4 + 4) + packets.iter().map(|p| p.payload.len() + 4).sum::<usize>());
+    body.extend_from_slice(b"PGCOPY\n\xFF\r\n\x00"); // signature
+    push_i32be(&mut body, 0); // flags
+    push_i32be(&mut body, 0); // header extension length
+
+    for (id, pkt) in ids.iter().zip(packets.iter()) {
+        let direction_bytes: &[u8] = match pkt.direction.as_str() {
+            "inbound" => b"dest",
+            _ => b"orig",
+        };
+        push_i16be(&mut body, 6); // 6 fields per tuple
+        push_field(&mut body, &id.to_be_bytes());
+        push_field(&mut body, &(pkt.timestamp_seconds as i64).to_be_bytes());
+        push_field(&mut body, &(pkt.timestamp_microseconds as i64).to_be_bytes());
+        push_field(&mut body, direction_bytes);
+        push_field(&mut body, &(pkt.stream_id as i64).to_be_bytes());
+        push_field(&mut body, &pkt.payload);
+    }
+
+    push_i16be(&mut body, -1); // end of data
+    body
+}
+
 pub struct DB {
     pgpool: PgPool,
+}
+
+impl Clone for DB {
+    /// Cheap: PgPool is internally Arc — clones share one connection pool.
+    fn clone(&self) -> Self {
+        Self { pgpool: self.pgpool.clone() }
+    }
 }
 
 impl DB {
@@ -81,7 +134,7 @@ impl DB {
 
     pub async fn create_stream(&self, src_ip: &str, src_port: u16, dst_ip: &str, dst_port: u16, protocol: &Protocol, ip_version: &IpVersion, service_id: usize, first_packet_time: i64) -> Result<usize, Error> {
         let protocol_str: &'static str = protocol.into();
-        let ip_version_str: &'static str = ip_version.into();
+        let _ip_version_str: &'static str = ip_version.into();
 
         let src_ip_addr: IpAddr = src_ip.parse().unwrap();
         let dst_ip_addr: IpAddr = dst_ip.parse().unwrap();
@@ -318,11 +371,78 @@ impl DB {
         .map(|row| row.get::<i64, _>("id"))
     }
 
-    /// Batch insert packets with a single multi-row INSERT.
-    /// Returns the list of generated packet IDs in insertion order.
+    /// Batch insert packets. Hot path uses COPY FROM STDIN (text format)
+    /// with pre-fetched sequence ids; on COPY failure it degrades to the
+    /// old multi-row INSERT for the same batch (a lost COPY is a slow batch,
+    /// never a lost batch). Returns the packet ids in insertion order.
     pub async fn insert_packets_batch(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
         if packets.is_empty() { return Ok(vec![]); }
 
+        match self.insert_packets_batch_copy(packets).await {
+            Ok(ids) => Ok(ids),
+            Err(e) => {
+                warn!("Packet batch COPY failed ({:?}) — falling back to multi-row INSERT for this batch", e);
+                self.insert_packets_batch_insert(packets).await
+            }
+        }
+    }
+
+    /// Insert a packet batch via `COPY ... FROM STDIN` (text format).
+    ///
+    /// COPY cannot RETURNING, so packet ids for the tag/stream_tag rows are
+    /// obtained by pre-fetching `packets.len()` values from the sequence:
+    /// `SELECT nextval('packets_id_seq') FROM generate_series(1, $n)`.
+    /// The ids are written WITH the rows (id is the first COPY column) and
+    /// handed back to the caller in row order. nextval is the same source
+    /// the DEFAULT column uses, so concurrent writers never collide (ids
+    /// merely interleave across flushers — gaps are fine, BIGINT has
+    /// headroom; per-stream insertion order is preserved because flushers
+    /// are sharded by stream).
+    async fn insert_packets_batch_copy(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
+        // 1. Pre-fetch ids from the sequence (BIGSERIAL on packets). One
+        //    row back (comma-joined) instead of n rows: 50k ids as a
+        //    50k-row result set costs ~17 ms of row-decode on the client,
+        //    the joined string a fraction of that. Order inside the string
+        //    is unspecified — irrelevant, ids are assigned to rows
+        //    arbitrarily.
+        let ids_csv: String = sqlx::query_scalar(
+            "SELECT string_agg(nextval('packets_id_seq')::text, ',') FROM generate_series(1, $1)")
+            .bind(packets.len() as i64)
+            .fetch_one(&self.pgpool)
+            .await?;
+        let ids: Vec<i64> = ids_csv.split(',').map(|s| s.parse::<i64>()).collect::<Result<_, _>>()
+            .map_err(|e| Error::Io(std::io::Error::other(format!("bad nextval output: {}", e))))?;
+        if ids.len() != packets.len() {
+            return Err(Error::Io(std::io::Error::other(format!(
+                "sequence prefetch returned {} ids for {} packets", ids.len(), packets.len()))));
+        }
+
+        // 2. Build the binary COPY body.
+        let body = encode_packets_copy_body_binary(&ids, packets);
+
+        // 3. Stream it in on a dedicated connection.
+        let mut conn = self.pgpool.acquire().await?;
+        let mut copy = conn
+            .copy_in_raw("COPY packets (id, timestamp, timestamp_microseconds, direction, stream_id, packet_data) FROM STDIN WITH (FORMAT binary)")
+            .await?;
+        if let Err(e) = copy.send(body.as_slice()).await {
+            // Leave the connection in a clean state for the next pool user
+            // (best effort; sqlx also recovers on drop).
+            let _ = copy.abort("batch copy send failed").await;
+            return Err(e);
+        }
+        let inserted = copy.finish().await?;
+        if inserted != packets.len() as u64 {
+            return Err(Error::Io(std::io::Error::other(format!(
+                "COPY inserted {} rows, expected {}", inserted, packets.len()))));
+        }
+        Ok(ids)
+    }
+
+    /// Batch insert packets with a single multi-row INSERT.
+    /// Returns the list of generated packet IDs in insertion order.
+    /// Now the fallback path for when COPY fails (degradation, not crash).
+    async fn insert_packets_batch_insert(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
         let mut query = String::from(
             "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES "
         );
@@ -557,5 +677,228 @@ impl DB {
             result.entry(svc_id).or_default().push((filename, content));
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pkt(payload: Vec<u8>, direction: &str, stream_id: usize) -> crate::batch_flusher::ProcessedPacket {
+        crate::batch_flusher::ProcessedPacket {
+            timestamp_seconds: 1_700_000_000,
+            timestamp_microseconds: 123_456,
+            direction: direction.to_string(),
+            stream_id,
+            payload,
+            triggers: vec![],
+            http_message: None,
+            grpc_message: None,
+            nats_event: None,
+        }
+    }
+
+    #[test]
+    fn binary_copy_body_header_and_row_shape() {
+        let ids = [7i64];
+        let packets = vec![pkt(vec![0xde, 0xad], "inbound", 42)];
+        let body = encode_packets_copy_body_binary(&ids, &packets);
+
+        // Signature + flags + ext len.
+        assert_eq!(&body[..11], b"PGCOPY\n\xFF\r\n\x00");
+        assert_eq!(&body[11..15], &0i32.to_be_bytes());
+        assert_eq!(&body[15..19], &0i32.to_be_bytes());
+
+        // Row: i16 field count 6, then per field i32 len + bytes.
+        let mut p = 19usize;
+        let next_i16 = |p: &mut usize| -> i16 { let v = i16::from_be_bytes([body[*p], body[*p+1]]); *p += 2; v };
+        let next_field = |p: &mut usize| -> Vec<u8> {
+            let len = i32::from_be_bytes(body[*p..*p+4].try_into().unwrap()) as usize;
+            *p += 4;
+            let v = body[*p..*p+len].to_vec();
+            *p += len;
+            v
+        };
+        assert_eq!(next_i16(&mut p), 6);
+        assert_eq!(next_field(&mut p), 7i64.to_be_bytes().to_vec());          // id
+        assert_eq!(next_field(&mut p), 1_700_000_000i64.to_be_bytes().to_vec()); // timestamp
+        assert_eq!(next_field(&mut p), 123_456i64.to_be_bytes().to_vec());    // timestamp_microseconds
+        assert_eq!(next_field(&mut p), b"dest".to_vec());                     // direction
+        assert_eq!(next_field(&mut p), 42i64.to_be_bytes().to_vec());         // stream_id
+        assert_eq!(next_field(&mut p), vec![0xde, 0xad]);                     // packet_data, raw
+        assert_eq!(next_i16(&mut p), -1, "trailer");
+        assert_eq!(p, body.len(), "no trailing bytes");
+    }
+
+    #[test]
+    fn binary_copy_body_empty_payload_is_zero_length_field() {
+        let body = encode_packets_copy_body_binary(&[9i64], &[pkt(vec![], "outbound", 1)]);
+        // A zero-length field is length 0 and no bytes — the row must still
+        // parse server-side (bytea '').
+        assert!(body.windows(4).any(|w| w == 0i32.to_be_bytes()));
+    }
+
+    async fn test_db() -> Option<DB> {
+        let url = std::env::var("DATABASE_TEST_URL").ok()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&url)
+            .await
+            .expect("scratch PG reachable");
+        Some(DB::new(pool))
+    }
+
+    /// Live COPY round-trip: every byte value (incl. \n \t \ \ .), then
+    /// SELECT back and byte-compare payloads; ids must match the prefetched
+    /// ones. Ignored by default — needs a scratch PG with the Red Eye schema:
+    /// `DATABASE_TEST_URL=postgres://scratch:scratch@127.0.0.1:5599/scratch \
+    ///  cargo test -p traffic-analyzer copy_roundtrip -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "requires scratch PG (DATABASE_TEST_URL, Red Eye schema applied)"]
+    async fn copy_roundtrip_all_bytes_live() {
+        let Some(db) = test_db().await else { eprintln!("DATABASE_TEST_URL not set, skipping"); return; };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        // 257 rows: one per byte value plus a multi-KB pseudo-random payload.
+        let mut packets = Vec::new();
+        for b in 0u8..=255 {
+            packets.push(pkt(vec![b, b.wrapping_add(1), 0x0a, 0x09, 0x5c, 0x2e], if b % 2 == 0 { "inbound" } else { "outbound" }, 1));
+        }
+        let big: Vec<u8> = (0..5000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        packets.push(pkt(big, "inbound", 1));
+        for p in &mut packets { p.timestamp_seconds = now; }
+
+        let ids = db.insert_packets_batch(&packets).await.expect("batch insert (COPY) ok");
+        assert_eq!(ids.len(), packets.len(), "one id per row");
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len(), "ids unique");
+
+        let rows = sqlx::query("SELECT id, packet_data FROM packets WHERE stream_id = 1 AND timestamp = $1 ORDER BY id")
+            .bind(now as i64)
+            .fetch_all(db.pool()).await.unwrap();
+        assert_eq!(rows.len(), packets.len(), "all rows landed");
+        for (row, (id, p)) in rows.iter().zip(ids.iter().zip(packets.iter())) {
+            assert_eq!(row.get::<i64, _>("id"), *id);
+            let data: Vec<u8> = row.get("packet_data");
+            assert_eq!(data, p.payload, "payload byte-identical for id {}", id);
+        }
+    }
+
+    /// Live benchmark: multi-row INSERT vs COPY at 5k and 50k rows.
+    /// Reports wall time per strategy. Payloads ~700 B of pseudo-random bytes
+    /// (typical game mix of small and full-MTU frames).
+    #[tokio::test]
+    #[ignore = "requires scratch PG (DATABASE_TEST_URL); benchmark, run with --nocapture"]
+    async fn bench_insert_vs_copy_live() {
+        let Some(db) = test_db().await else { eprintln!("DATABASE_TEST_URL not set, skipping"); return; };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+
+        let make = |n: usize| -> Vec<crate::batch_flusher::ProcessedPacket> {
+            (0..n).map(|i| {
+                let mut p = pkt(
+                    (0..700usize).map(|j| ((i * 31 + j * 17) % 256) as u8).collect(),
+                    if i % 3 == 0 { "inbound" } else { "outbound" },
+                    1 + i % 50,
+                );
+                p.timestamp_seconds = now;
+                p
+            }).collect()
+        };
+
+        for &n in &[500usize, 1_000, 2_000, 5_000, 50_000] {
+            let packets = make(n);
+
+            // COPY is not bound by the 65535-parameter limit, but multi-row
+            // INSERT is (5 params/row -> max ~13k rows per statement): chunk
+            // the INSERT side the way a real flusher would have to.
+            let t0 = std::time::Instant::now();
+            let mut ids_ins = Vec::with_capacity(n);
+            for chunk in packets.chunks(10_000) {
+                let ids = db.insert_packets_batch_insert(chunk).await.expect("INSERT ok");
+                ids_ins.extend(ids);
+            }
+            let insert_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(ids_ins.len(), n);
+
+            sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+
+            // Phase timings for COPY (what the flusher actually pays).
+            let t0 = std::time::Instant::now();
+            let ids_csv: String = sqlx::query_scalar(
+                "SELECT string_agg(nextval('packets_id_seq')::text, ',') FROM generate_series(1, $1)")
+                .bind(n as i64)
+                .fetch_one(db.pool()).await.unwrap();
+            let nextval_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let t0 = std::time::Instant::now();
+            let ids: Vec<i64> = ids_csv.split(',').map(|s| s.parse().unwrap()).collect();
+            let body = encode_packets_copy_body_binary(&ids, &packets);
+            let build_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let t0 = std::time::Instant::now();
+            let mut conn = db.pool().acquire().await.unwrap();
+            let mut copy = conn
+                .copy_in_raw("COPY packets (id, timestamp, timestamp_microseconds, direction, stream_id, packet_data) FROM STDIN WITH (FORMAT binary)")
+                .await.unwrap();
+            copy.send(body.as_slice()).await.unwrap();
+            let inserted = copy.finish().await.unwrap();
+            let stream_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            drop(conn);
+            assert_eq!(inserted as usize, n);
+
+            // The phase-instrumented COPY above already landed n rows —
+            // clear before measuring the full wrapper path.
+            sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+
+            let t0 = std::time::Instant::now();
+            let ids_copy = db.insert_packets_batch_copy(&packets).await.expect("COPY ok");
+            let copy_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(ids_copy.len(), n);
+
+            let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM packets")
+                .fetch_one(db.pool()).await.unwrap();
+            assert_eq!(count as usize, n, "COPY landed all rows");
+
+            eprintln!("BENCH rows={:>6}  multi-row INSERT (10k chunks): {:8.1} ms ({:6.0} rows/s)   COPY: {:8.1} ms ({:6.0} rows/s)  speedup {:.2}x   [COPY phases: nextval {:5.1} ms, build {:5.1} ms, stream {:5.1} ms]",
+                n, insert_ms, n as f64 / (insert_ms / 1000.0), copy_ms, n as f64 / (copy_ms / 1000.0),
+                insert_ms / copy_ms, nextval_ms, build_ms, stream_ms);
+
+            sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+        }
+    }
+
+    /// Live: sequence-prefetch id assignment under concurrency — two tasks
+    /// each prefetch interleaved nextval batches; all ids must be unique.
+    /// This is what multiple flushers do at runtime.
+    #[tokio::test]
+    #[ignore = "requires scratch PG (DATABASE_TEST_URL)"]
+    async fn nextval_batches_unique_under_concurrency_live() {
+        let Some(db) = test_db().await else { eprintln!("DATABASE_TEST_URL not set, skipping"); return; };
+        let db = std::sync::Arc::new(db);
+
+        let mut handles = Vec::new();
+        for t in 0..2 {
+            let db = db.clone();
+            handles.push(tokio::spawn(async move {
+                let mut ids = Vec::with_capacity(20 * 500);
+                for i in 0..20 {
+                    // Small stagger so the two tasks' nextval calls interleave.
+                    if i % 2 == t { tokio::time::sleep(std::time::Duration::from_micros(200)).await; }
+                    let batch: Vec<i64> = sqlx::query_scalar(
+                        "SELECT nextval('packets_id_seq') FROM generate_series(1, $1)")
+                        .bind(500i64)
+                        .fetch_all(db.pool()).await.unwrap();
+                    ids.extend(batch);
+                }
+                ids
+            }));
+        }
+        let mut all = Vec::new();
+        for h in handles { all.extend(h.await.unwrap()); }
+        let uniq: std::collections::HashSet<i64> = all.iter().copied().collect();
+        assert_eq!(all.len(), 2 * 20 * 500);
+        assert_eq!(uniq.len(), all.len(), "no id collisions across interleaved prefetches");
     }
 }

@@ -448,7 +448,7 @@ pub fn spawn_capture_forwarder(
             match rx.recv().await {
                 Ok(packet) => {
                     if let Some(encoded) = packet_synthesis::encode_for_nats(&packet, machine_ip) {
-                        nats.send_packet(encoded).await;
+                        nats.send_packet(encoded);
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

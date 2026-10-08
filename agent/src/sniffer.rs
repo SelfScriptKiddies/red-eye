@@ -138,8 +138,10 @@ impl SnifferEngine {
         let health = Arc::clone(&self.health);
         // Bounded async channel: the capture thread only ever try_sends
         // (drop-with-counter on full), and the consumer awaits recv() so it
-        // never blocks a tokio worker thread.
-        let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(PACKET_QUEUE_CAPACITY);
+        // never blocks a tokio worker thread. Payloads are raw tuples —
+        // bincode encoding happens once per BATCH inside the NATS client's
+        // batcher, not per packet in the capture thread.
+        let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<crate::nats::RawPacket>(PACKET_QUEUE_CAPACITY);
         self.active.store(true, Ordering::SeqCst);
         self.health.set_active(true);
         let active = Arc::clone(&self.active);
@@ -182,21 +184,11 @@ impl SnifferEngine {
                     Err(_) => (0, 0),
                 };
 
-                let payload = match bincode::encode_to_vec(
-                    (tv_usec, tv_sec, frame.to_vec()),
-                    bincode::config::standard(),
-                ) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        warn!("Serialization error: {}", e);
-                        continue;
-                    }
-                };
-
-                let payload_len = payload.len();
+                let packet = (tv_usec as i64, tv_sec, frame.to_vec());
+                let payload_len = packet.2.len();
                 // Never block the capture thread: a full queue means we are
                 // producing faster than NATS can absorb - drop and count.
-                match tx.try_send(payload) {
+                match tx.try_send(packet) {
                     Ok(_) => trace!("Packet captured, {} bytes", payload_len),
                     Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                         let dropped = health.queue_drops.fetch_add(1, Ordering::Relaxed) + 1;
@@ -218,10 +210,11 @@ impl SnifferEngine {
         }));
 
         tokio::spawn(async move {
-            // Same send path as before; recv() is now async and no longer
-            // starves the tokio runtime on single-vCPU hosts.
-            while let Some(packet_data) = packet_rx.recv().await {
-                nats.send_packet(packet_data).await;
+            // Forward into the NATS client's batching queue (which does the
+            // per-batch bincode encode + publish); recv() stays async so the
+            // runtime is never starved on single-vCPU hosts.
+            while let Some(packet) = packet_rx.recv().await {
+                nats.send_packet(packet);
             }
             trace!("NATS sender task finished");
         });

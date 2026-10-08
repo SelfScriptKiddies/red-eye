@@ -9,6 +9,7 @@ pub mod http_parser;
 pub mod grpc_parser;
 pub mod proto_schema;
 pub mod batch_flusher;
+pub mod ws_aggregator;
 use crate::configuration::init;
 use log::{info, debug, error};
 use std::sync::Arc;
@@ -122,23 +123,39 @@ pub async fn run() {
         info!("Loaded {} services from DB into cache", services.len());
     }
 
-    // Create batch channel and spawn the flusher
-    let (batch_tx, batch_rx) = batch_flusher::create_batch_channel(config.batch_size * 4);
+    // Create the shared WS activity aggregator (flushers record into it,
+    // one publisher task sends a single summary frame per second on the
+    // WS topic — replaces per-packet NATS publishes, see ws_aggregator.rs).
+    let ws_aggregator = ws_aggregator::shared_aggregator();
+    if let Ok(ws_nats) = message_broker::create_consumer(&config).await {
+        ws_aggregator::spawn_ws_aggregate_publisher(
+            ws_nats,
+            config.nats_websocket_packets_topic.clone(),
+            ws_aggregator.clone(),
+        );
+    } else {
+        // No NATS for WS events: aggregation still runs (cheap), frames
+        // just have no publisher — browsers rely on periodic refresh.
+        log::warn!("No NATS connection for WS activity publishing — WebSocket live updates disabled");
+    }
 
+    // Spawn the sharded batch flushers: N tasks, each owning the streams
+    // whose ids hash to it (per-stream order), bounded queue per task with
+    // drop+count on overflow so the NATS consumer never blocks.
     let flusher_db = db::DB::init(&config).await.unwrap();
-    let flusher_nats = message_broker::create_consumer(&config).await.ok();
-    let flusher_cache = cache.clone();
-    let batch_size = config.batch_size;
-    let flush_interval = config.batch_flush_interval_ms;
-    let nats_ws_topic = config.nats_websocket_packets_topic.clone();
-    tokio::spawn(async move {
-        batch_flusher::run_batch_flusher(
-            batch_rx, flusher_db, batch_size, flush_interval,
-            flusher_nats, nats_ws_topic, flusher_cache,
-        ).await;
-    });
+    let batch_tx = batch_flusher::spawn_flushers(
+        config.batch_flushers,
+        config.batch_size * 4,
+        flusher_db,
+        batch_flusher::FlusherOptions {
+            batch_size: config.batch_size,
+            flush_interval_ms: config.batch_flush_interval_ms,
+        },
+        cache.clone(),
+        ws_aggregator,
+    );
 
-    match message_broker::consume_raw_packets(consumer, cache, Arc::new(config), db, batch_tx).await {
+    match message_broker::consume_raw_packets(consumer, cache, Arc::new(config), db, Arc::new(batch_tx)).await {
         Ok(_) => (),
         Err(e) => {
             error!("Error consuming raw packets: {}", e);

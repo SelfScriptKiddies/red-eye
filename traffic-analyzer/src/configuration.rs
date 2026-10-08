@@ -147,6 +147,14 @@ pub struct ApplicationConfig {
     pub batch_flush_interval_ms: u64,
 
     #[source(
+        clap(long="batch-flushers", help="Number of parallel flusher tasks, sharded by stream id (0 or 1 = single flusher)", help_heading = "Batch"),
+        env = "BATCH_FLUSHERS",
+        config = "batch.flushers",
+        default = 4
+    )]
+    pub batch_flushers: usize,
+
+    #[source(
         clap(long="analyzer-concurrency", help="Max concurrent packet processing tasks", help_heading = "Performance"),
         env = "ANALYZER_CONCURRENCY",
         config = "performance.concurrency",
