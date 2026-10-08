@@ -30,14 +30,14 @@ pub struct ApplicationConfig {
         clap(long="web-password", help="Backend web password for login", help_heading = "Web-application config"),
         env = "WEB_PASSWORD",
         config = "web.password",
-        default = "fbfd83ebcabfd05ace9c03cd8a2ea2f4".to_string()
+        default = "".to_string()
     )]
     pub web_password: String,
     #[source(
-        clap(long="web-cookie-key", help="Backend web cookie key", help_heading = "Web-application config"),
+        clap(long="web-cookie-key", help="Backend web cookie key (min 32 bytes, e.g. `openssl rand -base64 32`)", help_heading = "Web-application config"),
         env = "COOKIE_KEY",
         config = "web.cookie_key",
-        default = "024e7bbdd3dcf8fcb6e82f7b3edae798661704d8b2e167e1ca680cb9fd4b1ac7".to_string()
+        default = "".to_string()
     )]
     pub cookie_key: String,
 
@@ -120,7 +120,7 @@ pub struct ApplicationConfig {
         clap(short, long="logging-level", help="Logging level (trace|debug|info|warn|error)", help_heading = "Logging config"),
         env = "LOGGING_LEVEL",
         config = "logging.level",
-        default = "trace".to_string()
+        default = "info".to_string()
     )]
     pub logging_level: String,
 

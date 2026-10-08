@@ -41,7 +41,7 @@ pub struct ApplicationConfig {
         clap(long="db-password", short='p', help="Database password", help_heading = "Database"),
         env = "DB_PASSWORD",
         config = "database.password",
-        default = "7b375636c1c9ba28")
+        default = "")
     ]
     pub db_password: String,
     #[source(
@@ -168,7 +168,7 @@ pub struct ApplicationConfig {
         clap(short='l', long="logging-level", help="Logging level (trace|debug|info|warn|error)", help_heading = "Logging"),
         env = "LOGGING_LEVEL",
         config = "logging.level",
-        default = "trace"
+        default = "info"
     )]
     pub logging_level: String,
 }
@@ -182,6 +182,17 @@ pub fn init() -> ApplicationConfig {
         }
     };
 
+    // Database password is mandatory: the old hardcoded default was a real
+    // credential. Checked before connecting to the database or broker.
+    if config.db_password.is_empty() {
+        eprintln!(
+            "DB_PASSWORD is not set.\n\
+             Set it in .env (or pass --db-password, or database.password in the config file):\n\
+             DB_PASSWORD=<your database password>"
+        );
+        std::process::exit(1);
+    }
+
     // Possible values: trace|debug|info|warn|error
     let logging_level = match config.logging_level.to_lowercase().as_str() {
         "trace" => log::LevelFilter::Trace,
@@ -189,7 +200,13 @@ pub fn init() -> ApplicationConfig {
         "info" => log::LevelFilter::Info,
         "warn" => log::LevelFilter::Warn,
         "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Trace,
+        _ => {
+            eprintln!(
+                "Unknown LOGGING_LEVEL '{}', falling back to info",
+                config.logging_level
+            );
+            log::LevelFilter::Info
+        }
     };
 
     let mut clog = colog::default_builder();

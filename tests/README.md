@@ -188,7 +188,7 @@ Go to `http://dev.lan:3000/settings`, create two services:
 sudo /home/tonysd/programming/traffic-analyzer-stack/red-eye/agent/target/release/red-eye-agent \
   --nats-host 127.0.0.1:4222 \
   --nats-login red-eye-client \
-  --nats-password 6781261b9d9f2d24 \
+  --nats-password <NATS_PASSWORD> \
   --interface eth1 \
   --ports 31337,31338 \
   --data-dir /tmp/red-eye-agent

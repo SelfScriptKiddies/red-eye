@@ -61,6 +61,30 @@ fn init() -> ApplicationConfig {
         }
     };
 
+    // Session cookie encryption key is mandatory: a known default key would
+    // let anyone who reads the repo forge session cookies. Checked before
+    // anything else starts (DB pool, NATS, HTTP listener).
+    if config.cookie_key.len() < 32 {
+        eprintln!(
+            "COOKIE_KEY is missing or too short ({} bytes, need at least 32).\n\
+             Generate a key and set it in .env (or pass --web-cookie-key):\n\
+             COOKIE_KEY=$(openssl rand -base64 32)",
+            config.cookie_key.len()
+        );
+        std::process::exit(1);
+    }
+
+    // Web login password is mandatory: the old hardcoded default was a real
+    // credential committed to the repo.
+    if config.web_password.is_empty() {
+        eprintln!(
+            "WEB_PASSWORD is not set.\n\
+             Set the web login password in .env (or pass --web-password):\n\
+             WEB_PASSWORD=<your web login password>"
+        );
+        std::process::exit(1);
+    }
+
     // Possible values: trace|debug|info|warn|error
     let logging_level = match config.logging_level.to_lowercase().as_str() {
         "trace" => log::LevelFilter::Trace,
@@ -68,7 +92,13 @@ fn init() -> ApplicationConfig {
         "info" => log::LevelFilter::Info,
         "warn" => log::LevelFilter::Warn,
         "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Trace,
+        _ => {
+            eprintln!(
+                "Unknown LOGGING_LEVEL '{}', falling back to info",
+                config.logging_level
+            );
+            log::LevelFilter::Info
+        }
     };
 
     let mut clog = colog::default_builder();
