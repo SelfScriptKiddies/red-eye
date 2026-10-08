@@ -3,6 +3,11 @@ services:
     build:
       context: ./database
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     shm_size: 512m
     env_file:
       - .env
@@ -23,6 +28,11 @@ services:
   nats:
     image: nats:alpine
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     command: -c /etc/nats/nats.conf
     ports:
       - "4222:4222" # client port
@@ -41,6 +51,11 @@ services:
     build:
       context: ./backend
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     env_file:
       - .env
     ports:
@@ -58,6 +73,11 @@ services:
     build:
       context: ./traffic-analyzer
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     env_file:
       - .env
     depends_on:
@@ -67,6 +87,11 @@ services:
   frontend:
     build: ./frontend
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
       - "3000:80"
     depends_on:
@@ -77,6 +102,11 @@ services:
   prometheus:
     image: prom/prometheus:latest
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
       - "9099:9090"
     volumes:
@@ -90,6 +120,11 @@ services:
   grafana:
     image: grafana/grafana:latest
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
       - "3001:3000"
     environment:
