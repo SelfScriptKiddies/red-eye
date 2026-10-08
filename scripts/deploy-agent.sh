@@ -38,7 +38,7 @@ usage() {
     echo "  --ports PORTS          Comma-separated ports to sniff (required)"
     echo "  --binary PATH          Path to agent binary (default: ./agent/target/release/red-eye-agent)"
     echo "  --env-file FILE        Read settings from .env file"
-    echo "  --install-nftables     Install and enable nftables on target host"
+    echo "  --install-nftables     Install nftables package if missing (service NOT enabled)"
     echo "  --uninstall            Remove agent from target host"
     echo ""
     echo "Example:"
@@ -128,11 +128,18 @@ scp -q "$AGENT_BINARY" "${TARGET_HOST}:${REMOTE_DIR}/red-eye-agent"
 ssh "$TARGET_HOST" "chmod +x ${REMOTE_DIR}/red-eye-agent"
 
 # 2. Install nftables (optional)
+# SAFETY: we only ensure the `nft` BINARY is present. We must NOT enable or
+# start nftables.service: on Debian the stock /etc/nftables.conf begins with
+# "flush ruleset", so starting the service wipes ALL nftables/iptables rules
+# on the host (including Docker's). The agent applies/removes its OWN table
+# (inet red-eye-agent) at runtime via NftablesManager, and the red-eye-agent
+# systemd unit re-applies rules on boot — the host-wide service is neither
+# needed nor safe to touch from a deploy script.
 if [ "$INSTALL_NFTABLES" = true ]; then
-    echo -e "${YELLOW}[2/5] Installing nftables...${NC}"
+    echo -e "${YELLOW}[2/5] Ensuring nft binary is present (package only)...${NC}"
     ssh "$TARGET_HOST" bash -s << 'NFTEOF'
         if command -v nft &>/dev/null; then
-            echo "nftables already installed"
+            echo "nft binary already present: $(nft --version)"
         else
             if command -v apt-get &>/dev/null; then
                 apt-get update -qq && apt-get install -y -qq nftables
@@ -145,9 +152,16 @@ if [ "$INSTALL_NFTABLES" = true ]; then
                 exit 1
             fi
         fi
-        systemctl enable nftables 2>/dev/null || true
-        systemctl start nftables 2>/dev/null || true
-        echo "nftables ready: $(nft --version)"
+        # Do not enable/start nftables.service (see SAFETY note above).
+        # If it is already active on the host, leave it alone: its config
+        # governs, and we never restart/stop a running host's rules.
+        if command -v systemctl &>/dev/null && systemctl is-active --quiet nftables 2>/dev/null; then
+            echo "NOTE: nftables.service is already active on this host;"
+            echo "      leaving it untouched (its /etc/nftables.conf governs)."
+        fi
+        echo "nftables ready (package only; service NOT enabled — the agent manages"
+        echo "its own table. Enabling nftables.service loads /etc/nftables.conf which"
+        echo "may 'flush ruleset' and break Docker.)"
 NFTEOF
     STEPS=5
 else

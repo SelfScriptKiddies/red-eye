@@ -67,7 +67,8 @@ Binary: `agent/target/release/red-eye-agent`
   --interface eth0 \
   --ports 8080,443
 
-# With nftables (needed for proxy/firewall features)
+# With the nftables package preinstalled if missing (needed for
+# proxy/firewall features; nftables.service is NOT enabled)
 ./scripts/deploy-agent.sh root@10.0.0.1 \
   --nats 10.0.0.100:4222 \
   --nats-password YOUR_NATS_PASSWORD \
@@ -84,7 +85,7 @@ Binary: `agent/target/release/red-eye-agent`
 
 The script:
 1. Uploads binary via scp
-2. Installs nftables (optional, `--install-nftables`)
+2. Installs the nftables package if the `nft` binary is missing (optional, `--install-nftables`). It deliberately does NOT enable or start `nftables.service`: loading `/etc/nftables.conf` runs `flush ruleset` and would wipe all host rules (e.g. Docker's). The agent manages its own `inet red-eye-agent` table at runtime.
 3. Creates systemd service with `CAP_NET_RAW` + `CAP_NET_ADMIN`
 4. Starts and enables the service
 
