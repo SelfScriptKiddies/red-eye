@@ -32,7 +32,7 @@ async fn get_packet_by_id(
     match packet_repository.get_packet_by_id(packet_id).await {
         Ok(pkt) => Ok(HttpResponse::Ok().json(pkt.to_response())),
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Packet not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -64,7 +64,7 @@ async fn get_packets_by_stream_id(
             Ok(HttpResponse::Ok().json(json!(response_packets)))
         },
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Packets for stream not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -104,9 +104,7 @@ async fn get_packet(
                 .collect();
             HttpResponse::Ok().json(json!(response_packets))
         },
-        Err(e) => HttpResponse::InternalServerError().json(json!({
-            "error": format!("Error occurred: {:?}", e)
-        }))
+        Err(e) => crate::api::sqlx_error_response(&e)
     }
 }
 

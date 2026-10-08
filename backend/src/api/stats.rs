@@ -27,6 +27,10 @@ async fn get_rate(
     .await
     {
         Ok(count) => HttpResponse::Ok().json(RateStats { packets_per_minute: count }),
+        // Pool overload is a distinct, retryable condition — surface it as 503
+        // instead of silently reporting 0 packets/min (frontend retries on Retry-After).
+        Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
+        // Other DB errors keep the graceful degradation: report 0, never fail the poller.
         Err(_) => HttpResponse::Ok().json(RateStats { packets_per_minute: 0 }),
     }
 }

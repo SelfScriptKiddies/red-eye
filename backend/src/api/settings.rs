@@ -27,7 +27,7 @@ async fn get_all_settings(
                 .or_insert_with(|| config.max_selected_streams.to_string());
             HttpResponse::Ok().json(map)
         }
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -50,7 +50,7 @@ async fn update_setting(
     .await
     {
         Ok(_) => HttpResponse::Ok().json(serde_json::json!({"status": "ok"})),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 

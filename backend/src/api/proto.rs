@@ -26,7 +26,7 @@ async fn get_protos_by_service(
     let repo = ProtoRepository::new(pool.get_ref().clone());
     match repo.get_by_service(service_id.into_inner()).await {
         Ok(protos) => HttpResponse::Ok().json(protos),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -40,7 +40,7 @@ async fn get_all_protos(
     let repo = ProtoRepository::new(pool.get_ref().clone());
     match repo.get_all().await {
         Ok(protos) => HttpResponse::Ok().json(protos),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -55,6 +55,7 @@ async fn upload_proto(
     let repo = ProtoRepository::new(pool.get_ref().clone());
     match repo.create(body.service_id, &body.filename, &body.content).await {
         Ok(proto) => HttpResponse::Created().json(proto),
+        Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": format!("{}", e)})),
     }
 }
@@ -70,6 +71,7 @@ async fn delete_proto(
     let repo = ProtoRepository::new(pool.get_ref().clone());
     match repo.delete(id.into_inner()).await {
         Ok(_) => HttpResponse::Ok().json(serde_json::json!({"status": "deleted"})),
+        Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
         Err(_) => HttpResponse::NotFound().finish(),
     }
 }

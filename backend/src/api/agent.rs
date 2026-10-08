@@ -135,7 +135,7 @@ async fn get_agent_services(
 
     match services {
         Ok(ids) => HttpResponse::Ok().json(ids),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -167,7 +167,7 @@ async fn bind_agent_service(
             sync_agent_ports(&agent_id, pool.get_ref(), &agent_service).await;
             HttpResponse::Ok().json(serde_json::json!({"status": "bound"}))
         }
-        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": e.to_string()})),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -193,7 +193,7 @@ async fn unbind_agent_service(
             sync_agent_ports(&agent_id, pool.get_ref(), &agent_service).await;
             HttpResponse::Ok().json(serde_json::json!({"status": "unbound"}))
         }
-        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({"error": e.to_string()})),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 

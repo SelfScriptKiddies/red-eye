@@ -14,9 +14,40 @@ pub mod special_triggers;
 pub mod stats;
 pub mod tag;
 pub mod updater;
+use actix_web::http::header::RETRY_AFTER;
 use actix_web::web;
+use actix_web::HttpResponse;
+use serde_json::json;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
+/// True when the sqlx error is DB pool exhaustion (timed out acquiring a
+/// connection) — an overload condition, not a bug.
+pub(crate) fn is_pool_timeout(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::PoolTimedOut)
+}
+
+/// 503 Service Unavailable + `Retry-After: 1` for DB pool exhaustion, so
+/// clients (and nginx) can distinguish pool overload from real bugs and
+/// back off briefly instead of hammering the pool.
+pub(crate) fn pool_timeout_response() -> HttpResponse {
+    HttpResponse::ServiceUnavailable()
+        .insert_header((RETRY_AFTER, "1"))
+        .json(json!({"error": "database connection pool exhausted, retry later"}))
+}
+
+/// Map a sqlx error to an HTTP response at the handler boundary:
+/// pool exhaustion → 503 with `Retry-After: 1`; anything else → 500 with the
+/// `{"error": ...}` JSON body shape the 404 arms already use.
+pub(crate) fn sqlx_error_response(error: &sqlx::Error) -> HttpResponse {
+    if is_pool_timeout(error) {
+        pool_timeout_response()
+    } else {
+        HttpResponse::InternalServerError().json(json!({
+            "error": format!("Error occurred: {:?}", error)
+        }))
+    }
+}
 
 pub fn api_config(cfg: &mut web::ServiceConfig) {
     // Prometheus metrics — outside /api scope, no auth
@@ -107,3 +138,43 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
 
 )]
 pub struct ApiDoc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::http::StatusCode;
+
+    #[test]
+    fn pool_timeout_maps_to_503_with_retry_after() {
+        let resp = sqlx_error_response(&sqlx::Error::PoolTimedOut);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers().get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn pool_timeout_response_directly_sets_header() {
+        let resp = pool_timeout_response();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers().get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn other_sqlx_errors_keep_500_without_retry_after() {
+        let resp = sqlx_error_response(&sqlx::Error::RowNotFound);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(resp.headers().get(RETRY_AFTER).is_none());
+    }
+
+    #[test]
+    fn is_pool_timeout_detects_only_pool_exhaustion() {
+        assert!(is_pool_timeout(&sqlx::Error::PoolTimedOut));
+        assert!(!is_pool_timeout(&sqlx::Error::RowNotFound));
+        assert!(!is_pool_timeout(&sqlx::Error::PoolClosed));
+    }
+}
