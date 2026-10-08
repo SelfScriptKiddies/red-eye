@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use crate::config::AgentConfig;
 use crate::harpoon::HarpoonEngine;
 use crate::nats::NatsClient;
+use crate::sniffer::SharedSnifferHealth;
 use crate::updates::PortsCache;
 
 #[derive(Serialize)]
@@ -22,6 +23,8 @@ pub struct AgentStatus {
     pub banned_ips: Vec<String>,
     pub tls_available: bool,
     pub broadcast_drops: u64,
+    /// Packets dropped because the sniffer's capture -> NATS queue was full.
+    pub sniffer_queue_drops: u64,
     pub timestamp_ms: u64,
 }
 
@@ -38,6 +41,7 @@ pub fn spawn_heartbeat(
     ports_cache: PortsCache,
     harpoon: Arc<Mutex<HarpoonEngine>>,
     tls_available: bool,
+    sniffer_health: SharedSnifferHealth,
 ) {
     let interval_secs = config.heartbeat_interval_secs;
     let agent_id = nats.agent_id.clone();
@@ -79,6 +83,7 @@ pub fn spawn_heartbeat(
                 banned_ips,
                 tls_available,
                 broadcast_drops,
+                sniffer_queue_drops: sniffer_health.queue_drops(),
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()

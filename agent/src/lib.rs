@@ -70,9 +70,10 @@ pub async fn run() {
     };
     info!("Connected to NATS at {}", config.nats_host);
 
-    // Shared port state
+    // Shared port state and sniffer health (reported via heartbeat)
     let ports_cache = create_ports_cache(config.ports.clone());
     let (restart_tx, restart_rx) = create_restart_notifier();
+    let sniffer_health = Arc::new(sniffer::SnifferHealth::default());
 
     // Harpoon engine with TLS certs and nftables manager
     let tls_available = tls_certs.is_some();
@@ -98,7 +99,14 @@ pub async fn run() {
         ports_cache.clone(),
         restart_tx.clone(),
     );
-    heartbeat::spawn_heartbeat(nats.clone(), &config, ports_cache.clone(), harpoon.clone(), tls_available);
+    heartbeat::spawn_heartbeat(
+        nats.clone(),
+        &config,
+        ports_cache.clone(),
+        harpoon.clone(),
+        tls_available,
+        sniffer_health.clone(),
+    );
     commands::spawn_command_listener(
         nats.clone(),
         ports_cache.clone(),
@@ -112,7 +120,7 @@ pub async fn run() {
     spawn_signal_handler(harpoon.clone(), nats.clone());
 
     // Run sniffer (blocks until shutdown)
-    sniffer::run_sniffer_loop(nats, &config, ports_cache, restart_rx).await;
+    sniffer::run_sniffer_loop(nats, &config, ports_cache, restart_rx, sniffer_health).await;
 
     // Cleanup: stop harpoon + nftables
     harpoon.lock().await.shutdown().await;

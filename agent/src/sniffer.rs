@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,22 +20,49 @@ use crate::config::AgentConfig;
 use crate::nats::NatsClient;
 use crate::updates::PortsCache;
 
+/// Shared sniffer health counters, reported via heartbeat.
+#[derive(Debug, Default)]
+pub struct SnifferHealth {
+    /// Packets dropped because the capture -> NATS queue was full.
+    queue_drops: AtomicU64,
+}
+
+/// Capacity of the capture -> NATS queue. When it is full, packets are
+/// dropped (and counted) instead of ever blocking the capture thread:
+/// losing packets is acceptable, stalling capture is not.
+const PACKET_QUEUE_CAPACITY: usize = 4096;
+
+pub type SharedSnifferHealth = Arc<SnifferHealth>;
+
+impl SnifferHealth {
+    pub fn queue_drops(&self) -> u64 {
+        self.queue_drops.load(Ordering::Relaxed)
+    }
+}
+
 pub struct SnifferEngine {
     active: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     nats: NatsClient,
     interface: String,
     ports: PortsCache,
+    health: SharedSnifferHealth,
 }
 
 impl SnifferEngine {
-    pub fn new(config: &AgentConfig, nats: NatsClient, ports_cache: PortsCache) -> Self {
+    pub fn new(
+        config: &AgentConfig,
+        nats: NatsClient,
+        ports_cache: PortsCache,
+        health: SharedSnifferHealth,
+    ) -> Self {
         Self {
             active: Arc::new(AtomicBool::new(false)),
             handle: None,
             nats,
             interface: config.interface.clone(),
             ports: ports_cache,
+            health,
         }
     }
 
@@ -77,7 +104,11 @@ impl SnifferEngine {
 
         let nats = self.nats.clone();
         let ports = self.ports.clone();
-        let (tx, mpsc_rx) = mpsc::sync_channel::<Vec<u8>>(4096);
+        let health = Arc::clone(&self.health);
+        // Bounded async channel: the capture thread only ever try_sends
+        // (drop-with-counter on full), and the consumer awaits recv() so it
+        // never blocks a tokio worker thread.
+        let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(PACKET_QUEUE_CAPACITY);
         self.active.store(true, Ordering::SeqCst);
         let active = Arc::clone(&self.active);
 
@@ -91,7 +122,7 @@ impl SnifferEngine {
             while active.load(Ordering::SeqCst) {
                 // Refresh ports cache periodically
                 pkt_count += 1;
-                if pkt_count % 1000 == 0 {
+                if pkt_count.is_multiple_of(1000) {
                     if let Ok(guard) = ports.try_read() {
                         ports_snapshot = guard.iter().cloned().collect();
                     }
@@ -131,12 +162,20 @@ impl SnifferEngine {
                 };
 
                 let payload_len = payload.len();
+                // Never block the capture thread: a full queue means we are
+                // producing faster than NATS can absorb - drop and count.
                 match tx.try_send(payload) {
                     Ok(_) => trace!("Packet captured, {} bytes", payload_len),
-                    Err(mpsc::TrySendError::Full(_)) => {
-                        warn!("Packet queue full, dropping packet ({} bytes)", payload_len);
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        let dropped = health.queue_drops.fetch_add(1, Ordering::Relaxed) + 1;
+                        if dropped.is_multiple_of(1000) {
+                            warn!(
+                                "Packet queue full, packets dropped so far: {} (last: {} bytes)",
+                                dropped, payload_len
+                            );
+                        }
                     }
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         warn!("Receiver dropped, stopping capture");
                         break;
                     }
@@ -147,7 +186,9 @@ impl SnifferEngine {
         }));
 
         tokio::spawn(async move {
-            while let Ok(packet_data) = mpsc_rx.recv() {
+            // Same send path as before; recv() is now async and no longer
+            // starves the tokio runtime on single-vCPU hosts.
+            while let Some(packet_data) = packet_rx.recv().await {
                 nats.send_packet(packet_data).await;
             }
             trace!("NATS sender task finished");
@@ -226,8 +267,9 @@ pub async fn run_sniffer_loop(
     config: &AgentConfig,
     ports_cache: PortsCache,
     mut restart_rx: tokio::sync::watch::Receiver<()>,
+    health: SharedSnifferHealth,
 ) {
-    let mut sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
+    let mut sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone(), health.clone());
 
     match sniffer.start().await {
         Ok(_) => info!("Sniffer engine started"),
@@ -247,7 +289,7 @@ pub async fn run_sniffer_loop(
         sniffer.stop();
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-        sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
+        sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone(), health.clone());
         match sniffer.start().await {
             Ok(_) => info!("Sniffer restarted with updated ports"),
             Err(e) => log::error!("Failed to restart sniffer: {}", e),
