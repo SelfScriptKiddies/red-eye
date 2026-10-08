@@ -30,7 +30,7 @@ pub struct ApplicationConfig {
         clap(long="web-password", help="Backend web password for login", help_heading = "Web-application config"),
         env = "WEB_PASSWORD",
         config = "web.password",
-        default = "fbfd83ebcabfd05ace9c03cd8a2ea2f4".to_string()
+        default = "".to_string()
     )]
     pub web_password: String,
     #[source(

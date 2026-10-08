@@ -74,6 +74,17 @@ fn init() -> ApplicationConfig {
         std::process::exit(1);
     }
 
+    // Web login password is mandatory: the old hardcoded default was a real
+    // credential committed to the repo.
+    if config.web_password.is_empty() {
+        eprintln!(
+            "WEB_PASSWORD is not set.\n\
+             Set the web login password in .env (or pass --web-password):\n\
+             WEB_PASSWORD=<your web login password>"
+        );
+        std::process::exit(1);
+    }
+
     // Possible values: trace|debug|info|warn|error
     let logging_level = match config.logging_level.to_lowercase().as_str() {
         "trace" => log::LevelFilter::Trace,
