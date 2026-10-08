@@ -1,10 +1,10 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use pnet::datalink::{self, Channel, Config as DatalinkConfig};
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet::packet::ip::IpNextHeaderProtocol;
@@ -20,26 +20,89 @@ use crate::config::AgentConfig;
 use crate::nats::NatsClient;
 use crate::updates::PortsCache;
 
+/// Shared sniffer health, reported via heartbeat.
+#[derive(Debug, Default)]
+pub struct SnifferHealth {
+    /// Whether the sniffer capture thread is currently running.
+    active: AtomicBool,
+    /// Packets dropped because the capture -> NATS queue was full.
+    queue_drops: AtomicU64,
+}
+
+/// Capacity of the capture -> NATS queue. When it is full, packets are
+/// dropped (and counted) instead of ever blocking the capture thread:
+/// losing packets is acceptable, stalling capture is not.
+const PACKET_QUEUE_CAPACITY: usize = 4096;
+
+pub type SharedSnifferHealth = Arc<SnifferHealth>;
+
+impl SnifferHealth {
+    pub fn active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
+
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Relaxed);
+    }
+
+    pub fn queue_drops(&self) -> u64 {
+        self.queue_drops.load(Ordering::Relaxed)
+    }
+}
+
+/// Reject an empty sniffer port list. Empty must never fall back to
+/// "capture everything": the agent's own NATS connection would be mirrored
+/// back into the analyzer, creating a feedback loop.
+fn validate_ports(ports: &[u16]) -> Result<(), &'static str> {
+    if ports.is_empty() {
+        Err("port list is empty; refusing to capture all traffic because \
+             that would feed the agent's own NATS connection back into the analyzer")
+    } else {
+        Ok(())
+    }
+}
+
 pub struct SnifferEngine {
     active: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
     nats: NatsClient,
     interface: String,
     ports: PortsCache,
+    health: SharedSnifferHealth,
 }
 
 impl SnifferEngine {
-    pub fn new(config: &AgentConfig, nats: NatsClient, ports_cache: PortsCache) -> Self {
+    pub fn new(
+        config: &AgentConfig,
+        nats: NatsClient,
+        ports_cache: PortsCache,
+        health: SharedSnifferHealth,
+    ) -> Self {
         Self {
             active: Arc::new(AtomicBool::new(false)),
             handle: None,
             nats,
             interface: config.interface.clone(),
             ports: ports_cache,
+            health,
         }
     }
 
     pub async fn start(&mut self) -> Result<()> {
+        // An empty port list must never mean "capture everything" (it would
+        // loop the agent's own NATS traffic back into the analyzer). Disable
+        // the sniffer module instead and keep the rest of the agent alive;
+        // a later port update restarts it.
+        let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
+        if let Err(reason) = validate_ports(&initial_ports) {
+            self.health.set_active(false);
+            error!(
+                "Sniffer disabled: {} (waiting for a port update to re-enable)",
+                reason
+            );
+            return Err(anyhow!(reason));
+        }
+
         let device_name = self.interface.clone();
 
         let interface = datalink::interfaces()
@@ -60,16 +123,11 @@ impl SnifferEngine {
             Err(e) => return Err(anyhow!("Failed to open channel on {}: {}", device_name, e)),
         };
 
-        let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
-        let ports_desc = if initial_ports.is_empty() {
-            "tcp or udp (all)".to_string()
-        } else {
-            initial_ports
-                .iter()
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+        let ports_desc = initial_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         info!(
             "Sniffer started on {} with filter: {} (AF_PACKET, promiscuous)",
             self.interface, ports_desc
@@ -77,8 +135,13 @@ impl SnifferEngine {
 
         let nats = self.nats.clone();
         let ports = self.ports.clone();
-        let (tx, mpsc_rx) = mpsc::sync_channel::<Vec<u8>>(4096);
+        let health = Arc::clone(&self.health);
+        // Bounded async channel: the capture thread only ever try_sends
+        // (drop-with-counter on full), and the consumer awaits recv() so it
+        // never blocks a tokio worker thread.
+        let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(PACKET_QUEUE_CAPACITY);
         self.active.store(true, Ordering::SeqCst);
+        self.health.set_active(true);
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
@@ -91,7 +154,7 @@ impl SnifferEngine {
             while active.load(Ordering::SeqCst) {
                 // Refresh ports cache periodically
                 pkt_count += 1;
-                if pkt_count % 1000 == 0 {
+                if pkt_count.is_multiple_of(1000) {
                     if let Ok(guard) = ports.try_read() {
                         ports_snapshot = guard.iter().cloned().collect();
                     }
@@ -131,12 +194,20 @@ impl SnifferEngine {
                 };
 
                 let payload_len = payload.len();
+                // Never block the capture thread: a full queue means we are
+                // producing faster than NATS can absorb - drop and count.
                 match tx.try_send(payload) {
                     Ok(_) => trace!("Packet captured, {} bytes", payload_len),
-                    Err(mpsc::TrySendError::Full(_)) => {
-                        warn!("Packet queue full, dropping packet ({} bytes)", payload_len);
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        let dropped = health.queue_drops.fetch_add(1, Ordering::Relaxed) + 1;
+                        if dropped.is_multiple_of(1000) {
+                            warn!(
+                                "Packet queue full, packets dropped so far: {} (last: {} bytes)",
+                                dropped, payload_len
+                            );
+                        }
                     }
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
                         warn!("Receiver dropped, stopping capture");
                         break;
                     }
@@ -147,7 +218,9 @@ impl SnifferEngine {
         }));
 
         tokio::spawn(async move {
-            while let Ok(packet_data) = mpsc_rx.recv() {
+            // Same send path as before; recv() is now async and no longer
+            // starves the tokio runtime on single-vCPU hosts.
+            while let Some(packet_data) = packet_rx.recv().await {
                 nats.send_packet(packet_data).await;
             }
             trace!("NATS sender task finished");
@@ -159,12 +232,16 @@ impl SnifferEngine {
     pub fn stop(&mut self) -> Option<()> {
         debug!("Stopping sniffer...");
         self.active.store(false, Ordering::SeqCst);
+        self.health.set_active(false);
         self.handle.take()?.join().ok()
     }
 }
 
 /// Match TCP/UDP packets against a port filter.
-/// Empty filter = all TCP/UDP traffic passes.
+/// An empty filter matches nothing: callers must validate the port list
+/// before starting capture (see [`validate_ports`]) — empty must never mean
+/// "capture everything", or the agent's own NATS traffic would be fed back
+/// into the analyzer.
 fn packet_matches_filter(frame: &[u8], ports: &[u16]) -> bool {
     let eth = match EthernetPacket::new(frame) {
         Some(e) => e,
@@ -216,7 +293,10 @@ fn match_l4(proto: IpNextHeaderProtocol, payload: &[u8], ports: &[u16]) -> bool 
     };
 
     if ports.is_empty() {
-        return true;
+        // Defense in depth: the port snapshot can briefly become empty
+        // between a config sync and the sniffer restart — during that
+        // window capture nothing rather than everything.
+        return false;
     }
     ports.contains(&src) || ports.contains(&dst)
 }
@@ -226,8 +306,9 @@ pub async fn run_sniffer_loop(
     config: &AgentConfig,
     ports_cache: PortsCache,
     mut restart_rx: tokio::sync::watch::Receiver<()>,
+    health: SharedSnifferHealth,
 ) {
-    let mut sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
+    let mut sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone(), health.clone());
 
     match sniffer.start().await {
         Ok(_) => info!("Sniffer engine started"),
@@ -235,29 +316,82 @@ pub async fn run_sniffer_loop(
     }
 
     loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                info!("Shutdown signal received");
-                sniffer.stop();
-                break;
-            }
-            result = restart_rx.changed() => {
-                if result.is_err() {
-                    info!("Restart notifier dropped, shutting down");
-                    sniffer.stop();
-                    break;
-                }
-
-                info!("Ports changed, restarting sniffer...");
-                sniffer.stop();
-                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-                sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone());
-                match sniffer.start().await {
-                    Ok(_) => info!("Sniffer restarted with updated ports"),
-                    Err(e) => log::error!("Failed to restart sniffer: {}", e),
-                }
-            }
+        // SIGTERM/SIGINT are handled centrally (see lib.rs spawn_signal_handler);
+        // this loop only reacts to sniffer restarts.
+        if restart_rx.changed().await.is_err() {
+            info!("Restart notifier dropped, shutting down sniffer");
+            sniffer.stop();
+            break;
         }
+
+        info!("Ports changed, restarting sniffer...");
+        sniffer.stop();
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        sniffer = SnifferEngine::new(config, nats.clone(), ports_cache.clone(), health.clone());
+        match sniffer.start().await {
+            Ok(_) => info!("Sniffer restarted with updated ports"),
+            Err(e) => log::error!("Failed to restart sniffer: {}", e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_port_list_is_rejected() {
+        assert!(validate_ports(&[]).is_err());
+        assert!(validate_ports(&[80]).is_ok());
+        assert!(validate_ports(&[80, 443]).is_ok());
+    }
+
+    #[test]
+    fn empty_port_list_rejection_explains_why() {
+        let err = validate_ports(&[]).unwrap_err();
+        assert!(
+            err.contains("NATS"),
+            "error should explain the feedback-loop danger: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn sniffer_health_tracks_active_state() {
+        let health = SnifferHealth::default();
+        assert!(!health.active());
+        health.set_active(true);
+        assert!(health.active());
+        assert_eq!(health.queue_drops(), 0);
+    }
+
+    /// Minimal Ethernet + IPv4 + TCP frame (enough header context for the
+    /// pnet parsers used by the filter).
+    fn tcp_frame(src_port: u16, dst_port: u16) -> Vec<u8> {
+        let mut frame = vec![0u8; 14 + 20 + 20];
+        frame[12..14].copy_from_slice(&0x0800u16.to_be_bytes()); // ethertype: IPv4
+        frame[14] = 0x45; // version 4, IHL 5
+        frame[16..18].copy_from_slice(&40u16.to_be_bytes()); // total length
+        frame[23] = 6; // IPv4 protocol: TCP
+        frame[34..36].copy_from_slice(&src_port.to_be_bytes());
+        frame[36..38].copy_from_slice(&dst_port.to_be_bytes());
+        frame
+    }
+
+    #[test]
+    fn empty_filter_matches_nothing() {
+        // Even if an empty snapshot reaches the matcher (e.g. right after a
+        // config sync that emptied the port set), it must not capture all.
+        let frame = tcp_frame(1234, 80);
+        assert!(!packet_matches_filter(&frame, &[]));
+    }
+
+    #[test]
+    fn filter_matches_src_or_dst_port() {
+        let frame = tcp_frame(1234, 80);
+        assert!(packet_matches_filter(&frame, &[80]));
+        assert!(packet_matches_filter(&frame, &[1234]));
+        assert!(!packet_matches_filter(&frame, &[443]));
     }
 }
