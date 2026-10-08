@@ -35,7 +35,7 @@ usage() {
     echo "  --nats-login USER      NATS login (default: red-eye-client)"
     echo "  --nats-password PASS   NATS password (required if not in .env)"
     echo "  --interface IFACE      Network interface (default: eth0)"
-    echo "  --ports PORTS          Comma-separated ports to sniff"
+    echo "  --ports PORTS          Comma-separated ports to sniff (required)"
     echo "  --binary PATH          Path to agent binary (default: ./agent/target/release/red-eye-agent)"
     echo "  --env-file FILE        Read settings from .env file"
     echo "  --install-nftables     Install and enable nftables on target host"
@@ -103,11 +103,22 @@ if [ -z "$NATS_PASSWORD" ]; then
     exit 1
 fi
 
+# An empty port list no longer means "capture everything" - the agent
+# disables its sniffer when PORTS is empty (capturing all traffic would
+# mirror the agent's own NATS connection into the analyzer). Refuse to
+# deploy a configuration that would ship a dead sniffer.
+PORTS_TRIMMED="${PORTS//[[:space:]]/}"
+if [ -z "$PORTS_TRIMMED" ]; then
+    echo -e "${RED}[!] Ports not specified. DEPLOY.md requires --ports: without it the agent's sniffer stays disabled.${NC}"
+    echo -e "${YELLOW}[*] Pass --ports 8080,4242 (comma-separated service ports) or set PORTS=... in the env file${NC}"
+    exit 1
+fi
+
 echo -e "${GREEN}[*] Deploying Red Eye Agent${NC}"
 echo -e "    Target:    ${TARGET_HOST}"
 echo -e "    NATS:      ${NATS_HOST}"
 echo -e "    Interface: ${INTERFACE}"
-echo -e "    Ports:     ${PORTS:-auto}"
+echo -e "    Ports:     ${PORTS}"
 echo ""
 
 # 1. Upload binary
@@ -145,18 +156,15 @@ fi
 
 # 3. Create environment file
 echo -e "${YELLOW}[3/${STEPS}] Creating configuration...${NC}"
+# PORTS is guaranteed non-empty by the validation above.
 ENV_CONTENT="NATS_HOST=${NATS_HOST}
 NATS_LOGIN=${NATS_LOGIN}
 NATS_PASSWORD=${NATS_PASSWORD}
 INTERFACE=${INTERFACE}
 LOGGING_LEVEL=${LOGGING_LEVEL}
 DATA_DIR=${DATA_DIR}
-MACHINE_IP=0.0.0.0"
-
-if [ -n "$PORTS" ]; then
-    ENV_CONTENT="${ENV_CONTENT}
+MACHINE_IP=0.0.0.0
 PORTS=${PORTS}"
-fi
 
 ssh "$TARGET_HOST" "cat > ${REMOTE_DIR}/agent.env << 'ENVEOF'
 ${ENV_CONTENT}

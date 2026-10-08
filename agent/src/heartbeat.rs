@@ -75,7 +75,7 @@ pub fn spawn_heartbeat(
             let status = AgentStatus {
                 agent_id: agent_id.clone(),
                 uptime_secs: started_at.elapsed().as_secs(),
-                sniffer_active: true,
+                sniffer_active: sniffer_health.active(),
                 sniffer_ports: ports,
                 harpoon_rules,
                 active_filters,

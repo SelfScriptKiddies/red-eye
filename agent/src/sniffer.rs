@@ -4,7 +4,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use pnet::datalink::{self, Channel, Config as DatalinkConfig};
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
 use pnet::packet::ip::IpNextHeaderProtocol;
@@ -20,9 +20,11 @@ use crate::config::AgentConfig;
 use crate::nats::NatsClient;
 use crate::updates::PortsCache;
 
-/// Shared sniffer health counters, reported via heartbeat.
+/// Shared sniffer health, reported via heartbeat.
 #[derive(Debug, Default)]
 pub struct SnifferHealth {
+    /// Whether the sniffer capture thread is currently running.
+    active: AtomicBool,
     /// Packets dropped because the capture -> NATS queue was full.
     queue_drops: AtomicU64,
 }
@@ -35,8 +37,28 @@ const PACKET_QUEUE_CAPACITY: usize = 4096;
 pub type SharedSnifferHealth = Arc<SnifferHealth>;
 
 impl SnifferHealth {
+    pub fn active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
+
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Relaxed);
+    }
+
     pub fn queue_drops(&self) -> u64 {
         self.queue_drops.load(Ordering::Relaxed)
+    }
+}
+
+/// Reject an empty sniffer port list. Empty must never fall back to
+/// "capture everything": the agent's own NATS connection would be mirrored
+/// back into the analyzer, creating a feedback loop.
+fn validate_ports(ports: &[u16]) -> Result<(), &'static str> {
+    if ports.is_empty() {
+        Err("port list is empty; refusing to capture all traffic because \
+             that would feed the agent's own NATS connection back into the analyzer")
+    } else {
+        Ok(())
     }
 }
 
@@ -67,6 +89,20 @@ impl SnifferEngine {
     }
 
     pub async fn start(&mut self) -> Result<()> {
+        // An empty port list must never mean "capture everything" (it would
+        // loop the agent's own NATS traffic back into the analyzer). Disable
+        // the sniffer module instead and keep the rest of the agent alive;
+        // a later port update restarts it.
+        let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
+        if let Err(reason) = validate_ports(&initial_ports) {
+            self.health.set_active(false);
+            error!(
+                "Sniffer disabled: {} (waiting for a port update to re-enable)",
+                reason
+            );
+            return Err(anyhow!(reason));
+        }
+
         let device_name = self.interface.clone();
 
         let interface = datalink::interfaces()
@@ -87,16 +123,11 @@ impl SnifferEngine {
             Err(e) => return Err(anyhow!("Failed to open channel on {}: {}", device_name, e)),
         };
 
-        let initial_ports: Vec<u16> = self.ports.read().unwrap().iter().cloned().collect();
-        let ports_desc = if initial_ports.is_empty() {
-            "tcp or udp (all)".to_string()
-        } else {
-            initial_ports
-                .iter()
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+        let ports_desc = initial_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         info!(
             "Sniffer started on {} with filter: {} (AF_PACKET, promiscuous)",
             self.interface, ports_desc
@@ -110,6 +141,7 @@ impl SnifferEngine {
         // never blocks a tokio worker thread.
         let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(PACKET_QUEUE_CAPACITY);
         self.active.store(true, Ordering::SeqCst);
+        self.health.set_active(true);
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
@@ -200,12 +232,16 @@ impl SnifferEngine {
     pub fn stop(&mut self) -> Option<()> {
         debug!("Stopping sniffer...");
         self.active.store(false, Ordering::SeqCst);
+        self.health.set_active(false);
         self.handle.take()?.join().ok()
     }
 }
 
 /// Match TCP/UDP packets against a port filter.
-/// Empty filter = all TCP/UDP traffic passes.
+/// An empty filter matches nothing: callers must validate the port list
+/// before starting capture (see [`validate_ports`]) — empty must never mean
+/// "capture everything", or the agent's own NATS traffic would be fed back
+/// into the analyzer.
 fn packet_matches_filter(frame: &[u8], ports: &[u16]) -> bool {
     let eth = match EthernetPacket::new(frame) {
         Some(e) => e,
@@ -257,7 +293,10 @@ fn match_l4(proto: IpNextHeaderProtocol, payload: &[u8], ports: &[u16]) -> bool 
     };
 
     if ports.is_empty() {
-        return true;
+        // Defense in depth: the port snapshot can briefly become empty
+        // between a config sync and the sniffer restart — during that
+        // window capture nothing rather than everything.
+        return false;
     }
     ports.contains(&src) || ports.contains(&dst)
 }
@@ -294,5 +333,65 @@ pub async fn run_sniffer_loop(
             Ok(_) => info!("Sniffer restarted with updated ports"),
             Err(e) => log::error!("Failed to restart sniffer: {}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_port_list_is_rejected() {
+        assert!(validate_ports(&[]).is_err());
+        assert!(validate_ports(&[80]).is_ok());
+        assert!(validate_ports(&[80, 443]).is_ok());
+    }
+
+    #[test]
+    fn empty_port_list_rejection_explains_why() {
+        let err = validate_ports(&[]).unwrap_err();
+        assert!(
+            err.contains("NATS"),
+            "error should explain the feedback-loop danger: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn sniffer_health_tracks_active_state() {
+        let health = SnifferHealth::default();
+        assert!(!health.active());
+        health.set_active(true);
+        assert!(health.active());
+        assert_eq!(health.queue_drops(), 0);
+    }
+
+    /// Minimal Ethernet + IPv4 + TCP frame (enough header context for the
+    /// pnet parsers used by the filter).
+    fn tcp_frame(src_port: u16, dst_port: u16) -> Vec<u8> {
+        let mut frame = vec![0u8; 14 + 20 + 20];
+        frame[12..14].copy_from_slice(&0x0800u16.to_be_bytes()); // ethertype: IPv4
+        frame[14] = 0x45; // version 4, IHL 5
+        frame[16..18].copy_from_slice(&40u16.to_be_bytes()); // total length
+        frame[23] = 6; // IPv4 protocol: TCP
+        frame[34..36].copy_from_slice(&src_port.to_be_bytes());
+        frame[36..38].copy_from_slice(&dst_port.to_be_bytes());
+        frame
+    }
+
+    #[test]
+    fn empty_filter_matches_nothing() {
+        // Even if an empty snapshot reaches the matcher (e.g. right after a
+        // config sync that emptied the port set), it must not capture all.
+        let frame = tcp_frame(1234, 80);
+        assert!(!packet_matches_filter(&frame, &[]));
+    }
+
+    #[test]
+    fn filter_matches_src_or_dst_port() {
+        let frame = tcp_frame(1234, 80);
+        assert!(packet_matches_filter(&frame, &[80]));
+        assert!(packet_matches_filter(&frame, &[1234]));
+        assert!(!packet_matches_filter(&frame, &[443]));
     }
 }
