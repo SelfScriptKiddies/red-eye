@@ -28,11 +28,11 @@ const LoginBtn = () => {
         .then((resp_json) => {
             if(!resp_json)
                 return;
-            if(resp_json.hasOwnProperty('status') && resp_json['status'] == "Logged in")
+            if(Object.prototype.hasOwnProperty.call(resp_json, 'status') && resp_json['status'] == "Logged in")
             {
                 window.location.pathname = "/";
             }
-            else if(resp_json.hasOwnProperty('error'))
+            else if(Object.prototype.hasOwnProperty.call(resp_json, 'error'))
             {
                 document.querySelector(".errorMessage").innerText = resp_json['error'];
             }

@@ -22,7 +22,7 @@ interface HistogramBucket {
 }
 
 interface TimelineBarProps {
-    onSelect: (startTime: number, endTime: number) => void;
+    onSelect: (_startTime: number, _endTime: number) => void;
     onClear: () => void;
     clearRef?: React.MutableRefObject<(() => void) | null>;
 }
@@ -356,7 +356,7 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
                                     left: `${selectionRect.left}%`,
                                     width: `${selectionRect.right - selectionRect.left}%`,
                                 }}
-                                onMouseDown={selectionRect.interactive ? (e) => {
+                                onMouseDown={selectionRect.interactive ? () => {
                                     // Let the parent handleMouseDown take over
                                     // (it checks if we're inside selection)
                                 } : undefined}

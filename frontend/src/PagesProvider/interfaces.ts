@@ -5,7 +5,7 @@ export interface IPage {
 }
 
 export interface IPageProvider extends IPage {
-	navigate: (name: string) => void;
+	navigate: (_name: string) => void;
 }
 
 export interface IPageProviderProps {

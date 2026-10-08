@@ -2,7 +2,18 @@ import "./StreamCard.css"
 import { memo } from 'react';
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
-export const StreamCard = memo(function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }) {
+
+interface StreamCardProps {
+    streamObj: any;
+    selected?: boolean;
+    onStreamClick: (_id: any, _event?: any) => void;
+    onFavoriteToggle: (_id: any, _isFavorite: boolean) => void;
+    onIpFilter?: (_ip: string) => void;
+    onIpBan?: (_ip: string) => void;
+    tagColors?: Record<string, number>;
+}
+
+export const StreamCard = memo(function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }: StreamCardProps) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
     const clickHandler = (event) => {

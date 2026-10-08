@@ -10,31 +10,27 @@ import { DiffView } from '../../components/DiffView';
 
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
 import { apiFetch, copyText } from '../../lib/api';
+import { shq, pyStr } from '../../lib/exportEscaping';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
 import { useRedEye } from '../../context/RedEyeContext';
 
 
-interface PacketEvent {
-    packet_id: number;
-    stream_id: number;
-    timestamp_seconds: number;
-    timestamp_microseconds: number;
-    direction: string;
-}
-
 // Row component for virtual stream list
 interface StreamRowProps {
     streams: any[];
     selectedStreamIds: number[];
-    handleStreamClick: (id: number) => void;
-    handleFavoriteToggle: (id: number, fav: boolean) => void;
-    addHeaderFilter: (name: string, value: string) => void;
+    handleStreamClick: (_id: number) => void;
+    handleFavoriteToggle: (_id: number, _fav: boolean) => void;
+    addHeaderFilter: (_name: string, _value: string) => void;
     tagColors: Record<string, number>;
 }
 
-function StreamRow({ index, style, streams, selectedStreamIds, handleStreamClick, handleFavoriteToggle, addHeaderFilter, tagColors }: StreamRowProps & { index: number; style: CSSProperties; ariaAttributes?: object }) {
+// index/style/ariaAttributes are injected by react-window at render time;
+// they must NOT be part of the rowProps object the library type-checks, so
+// they are declared optional here.
+function StreamRow({ index = 0, style, streams, selectedStreamIds, handleStreamClick, handleFavoriteToggle, addHeaderFilter, tagColors }: StreamRowProps & { index?: number; style?: CSSProperties; ariaAttributes?: object }) {
     const stream = streams[index];
     if (!stream) return null;
     return (
@@ -65,13 +61,13 @@ interface PacketRowProps {
     isMultiSelect: boolean;
     selectedStreamL7: string | null;
     diffLeft: any | null;
-    addHeaderFilter: (name: string, value: string, exclude?: boolean) => void;
-    setDiffLeft: (p: any | null) => void;
-    setDiffRight: (p: any | null) => void;
-    setDiffOpen: (v: boolean) => void;
+    addHeaderFilter: (_name: string, _value: string, _exclude?: boolean) => void;
+    setDiffLeft: (_p: any | null) => void;
+    setDiffRight: (_p: any | null) => void;
+    setDiffOpen: (_v: boolean) => void;
 }
 
-function PacketRow({ index, style, packets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter, setDiffLeft, setDiffRight, setDiffOpen }: PacketRowProps & { index: number; style: CSSProperties; ariaAttributes?: object }) {
+function PacketRow({ index = 0, style, packets, isMultiSelect, selectedStreamL7, diffLeft, addHeaderFilter, setDiffLeft, setDiffRight, setDiffOpen }: PacketRowProps & { index?: number; style?: CSSProperties; ariaAttributes?: object }) {
     const packet = packets[index];
     if (!packet) return null;
     return (
@@ -132,7 +128,7 @@ export function PacketsPage() {
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string, exclude?: boolean}[]>([]);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
-    const [headerSearching, setHeaderSearching] = useState(false);
+    const [, setHeaderSearching] = useState(false);
     const [diffLeft, setDiffLeft] = useState<any | null>(null);
     const [diffRight, setDiffRight] = useState<any | null>(null);
     const [diffOpen, setDiffOpen] = useState(false);
@@ -157,8 +153,6 @@ export function PacketsPage() {
         streams: streamsArray,
         isLoadingMore,
         hasMoreStreams,
-        scrollRef: streamsContainerRef,
-        refresh,
         updateStream,
         clearStreams,
         loadMore,
@@ -173,7 +167,6 @@ export function PacketsPage() {
 
     const {
         packetData,
-        selectedStreamId,
         selectedStreamIds,
         isMultiSelect,
         selectedStreamL7,
@@ -342,12 +335,6 @@ export function PacketsPage() {
         }
     };
 
-    const handleStreamNavigate = (streamId: number) => {
-        handleStreamClick(streamId);
-        const streamEl = document.querySelector(`[data-stream-id="${streamId}"]`);
-        if (streamEl) streamEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    };
-
     const handleFavoriteToggle = useCallback(async (streamId, currentFavorite) => {
         try {
             const response = await fetch(`/api/stream/${streamId}/favorite`, {
@@ -490,10 +477,10 @@ export function PacketsPage() {
                     const cookies = value.split(';').map(c => c.trim()).filter(c => c.includes('='));
                     for (const cookie of cookies) {
                         const [k, ...v] = cookie.split('=');
-                        cookieEntries.push(`    '${k.trim()}': '${v.join('=')}'`);
+                        cookieEntries.push(`    ${pyStr(k.trim())}: ${pyStr(v.join('='))}`);
                     }
                 } else {
-                    headerEntries.push(`    '${name}': '${value}'`);
+                    headerEntries.push(`    ${pyStr(name)}: ${pyStr(value)}`);
                 }
             }
 
@@ -505,10 +492,13 @@ export function PacketsPage() {
                 lines.push(`cookies${suffix} = {\n${cookieEntries.join(',\n')}\n}`);
             }
 
-            let call = `resp = s.${method.toLowerCase()}(f'{BASE}${path}'`;
+            // path is attacker-controlled (request line of a captured packet):
+            // it must land in the snippet as an escaped Python literal, never
+            // interpolated raw into the f-string.
+            let call = `resp = s.${method.toLowerCase()}(BASE + ${pyStr(path)}`;
             if (headerEntries.length > 0) call += `, headers=headers${suffix}`;
             if (cookieEntries.length > 0) call += `, cookies=cookies${suffix}`;
-            if (body && method !== 'GET') call += `, data=${JSON.stringify(body)}`;
+            if (body && method !== 'GET') call += `, data=${pyStr(body)}`;
             call += ')';
             lines.push(call);
             lines.push(`print(resp.status_code, resp.text[:200])\n`);
@@ -530,18 +520,21 @@ export function PacketsPage() {
             const headerLines = headerSection.split('\r\n').slice(1);
             const body = text.split('\r\n\r\n').slice(1).join('\r\n\r\n');
 
-            const parts = [`curl -s -X ${method} 'http://TARGET_IP:PORT${path}'`];
+            // URL, headers and body all contain attacker-controlled packet
+            // data — every interpolation goes through shq() so a payload like
+            // `'; rm -rf /; '` or `$(reboot)` stays literal shell text.
+            const parts = [`curl -s -X ${method} ${shq(`http://TARGET_IP:PORT${path}`)}`];
             for (const line of headerLines) {
                 const idx = line.indexOf(':');
                 if (idx > 0) {
                     const name = line.slice(0, idx).trim();
                     if (!['Host', 'Content-Length', 'Connection'].includes(name)) {
-                        parts.push(`  -H '${line.trim()}'`);
+                        parts.push(`  -H ${shq(line.trim())}`);
                     }
                 }
             }
             if (body && method !== 'GET') {
-                parts.push(`  -d '${body.replace(/'/g, "'\\''")}'`);
+                parts.push(`  -d ${shq(body)}`);
             }
             lines.push(parts.join(' \\\n'));
             lines.push('echo\n');
@@ -600,13 +593,13 @@ export function PacketsPage() {
                     </div>
                 )}
                 <div className={`tag-filter d-inline-block${filterMode === 'or' ? ' filter-or-mode' : ''}`}>
-                    {tagsArray.map((service, index) => {
-                        return < ServiceCard service={service} onTagClick={handleTagClick}/>
+                    {tagsArray.map((service) => {
+                        return < ServiceCard key={service.id} service={service} onTagClick={handleTagClick}/>
                     })}
                     </div>
                 <div className={`service-filter d-inline-block${filterMode === 'or' ? ' filter-or-mode' : ''}`}>
-                    {servicesArray.map((service, index) => {
-                        return < ServiceCard service={service} onTagClick={handleServiceClick}/>
+                    {servicesArray.map((service) => {
+                        return < ServiceCard key={service.id} service={service} onTagClick={handleServiceClick}/>
                     })}
                 </div>
             </div>

@@ -36,7 +36,7 @@ interface HeaderFilter {
 
 interface Props {
   streamId: number;
-  onStreamNavigate?: (streamId: number) => void;
+  onStreamNavigate?: (_streamId: number) => void;
 }
 
 function statusClass(code: number | null): string {

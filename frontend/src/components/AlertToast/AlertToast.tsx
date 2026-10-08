@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { subscribeWs } from '../../lib/wsBus';
 import './AlertToast.css';
 
 interface AlertEvent {
@@ -18,48 +19,32 @@ interface Toast {
 
 export default function AlertToast() {
     const [toasts, setToasts] = useState<Toast[]>([]);
-    const wsRef = useRef<WebSocket | null>(null);
     const nextId = useRef(0);
 
     useEffect(() => {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-
-        const connect = () => {
-            const ws = new WebSocket(wsUrl);
-            wsRef.current = ws;
-
-            ws.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'alert') {
-                        const alert = data as AlertEvent;
-                        const toast: Toast = {
-                            id: nextId.current++,
-                            tag_name: alert.tag_name,
-                            packet_id: alert.packet_id,
-                            stream_id: alert.stream_id,
-                            timestamp: Date.now(),
-                        };
-                        setToasts(prev => [...prev.slice(-9), toast]); // Keep max 10
-                        // Auto-remove after 6 seconds
-                        setTimeout(() => {
-                            setToasts(prev => prev.filter(t => t.id !== toast.id));
-                        }, 6000);
-                    }
-                } catch {}
-            };
-
-            ws.onclose = () => {
-                setTimeout(connect, 3000);
-            };
-        };
-
-        connect();
-
-        return () => {
-            if (wsRef.current) wsRef.current.close();
-        };
+        // Reuse the shared per-tab /api/ws socket (wsBus) instead of opening a
+        // second connection. Unsubscribing on unmount drops the refcount; the
+        // old code's onclose → setTimeout(connect) kept reconnecting forever
+        // after unmount (zombie socket).
+        const unsubscribe = subscribeWs({
+            onMessage: (data) => {
+                const alert = data as AlertEvent;
+                if (!alert || alert.type !== 'alert') return;
+                const toast: Toast = {
+                    id: nextId.current++,
+                    tag_name: alert.tag_name,
+                    packet_id: alert.packet_id,
+                    stream_id: alert.stream_id,
+                    timestamp: Date.now(),
+                };
+                setToasts(prev => [...prev.slice(-9), toast]); // Keep max 10
+                // Auto-remove after 6 seconds
+                setTimeout(() => {
+                    setToasts(prev => prev.filter(t => t.id !== toast.id));
+                }, 6000);
+            },
+        });
+        return unsubscribe;
     }, []);
 
     const removeToast = (id: number) => {

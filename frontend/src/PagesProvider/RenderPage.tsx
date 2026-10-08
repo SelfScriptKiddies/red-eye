@@ -23,7 +23,7 @@ export const RenderPage = (): ReactNode => {
     };
     if(!getCookie('id') && name !== "/login")
         window.location.href = '/login';
-    if (pages.hasOwnProperty(name))
+    if (Object.prototype.hasOwnProperty.call(pages, name))
         return pages[name];
     return;
 }

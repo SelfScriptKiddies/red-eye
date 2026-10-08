@@ -13,7 +13,7 @@ interface Stream {
 interface TimelineProps {
     streams: Stream[];
     selectedStreamId?: number;
-    onStreamClick: (streamId: string) => void;
+    onStreamClick: (_streamId: string) => void;
 }
 
 export function Timeline({ streams, selectedStreamId, onStreamClick }: TimelineProps) {

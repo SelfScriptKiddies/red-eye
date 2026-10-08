@@ -1,4 +1,3 @@
-import { ReactElement } from "react";
 import { RedEye } from "../../components/RedEye";
 import { LoginForm } from "../../components/LoginForm";
 import './LoginPage.css';

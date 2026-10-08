@@ -14,10 +14,10 @@ interface PacketProps {
     timestamp: number;
     isHttp?: boolean;
     isGrpc?: boolean;
-    onHeaderSearch?: (name: string, value: string) => void;
-    onHeaderExclude?: (name: string, value: string) => void;
-    onQuickBlock?: (pattern: string) => void;
-    onDiffSelect?: (packet: { id: number; packet_data: string; direction: string }) => void;
+    onHeaderSearch?: (_name: string, _value: string) => void;
+    onHeaderExclude?: (_name: string, _value: string) => void;
+    onQuickBlock?: (_pattern: string) => void;
+    onDiffSelect?: (_packet: { id: number; packet_data: string; direction: string }) => void;
     diffSelected?: boolean;
     _merged_count?: number;
     _stream_id?: number;
@@ -89,7 +89,7 @@ const toHexDump = (bytes: Uint8Array): string => {
     return lines.join('\n');
 };
 
-function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuickBlock?: (pattern: string) => void }) {
+function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuickBlock?: (_pattern: string) => void }) {
     const [hoverIdx, setHoverIdx] = useState<number | null>(null);
     const [selStart, setSelStart] = useState<number | null>(null);
     const [selEnd, setSelEnd] = useState<number | null>(null);
@@ -426,7 +426,7 @@ export const PacketCard = memo(function PacketCard({ direction, id, packet_data,
         let decoded: Record<string, any> = {};
         try {
             decoded = JSON.parse(msg.decoded_json || '{}');
-        } catch {}
+        } catch { /* malformed decoded_json — render raw */ }
 
         return (
             <div className="http-parsed">

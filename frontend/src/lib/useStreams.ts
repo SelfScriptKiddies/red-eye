@@ -60,7 +60,7 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
         queryClient.invalidateQueries({ queryKey: ['streams'] });
     }, [queryClient]);
 
-    const updateStream = useCallback((streamId: number, updater: (s: any) => any) => {
+    const updateStream = useCallback((streamId: number, updater: (_s: any) => any) => {
         setAllStreams(prev => prev.map(s => s.id === streamId ? updater(s) : s));
     }, []);
 
