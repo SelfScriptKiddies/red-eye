@@ -158,13 +158,10 @@ async fn flush_batch(
     };
 
     // 2. Batch INSERT triggers
-    let mut trigger_rows: Vec<(i32, usize, usize, usize)> = Vec::new();
-    for (idx, pkt) in buffer.iter().enumerate() {
-        let packet_id = packet_ids[idx];
-        for &(filter_id, start, end) in &pkt.triggers {
-            trigger_rows.push((packet_id, filter_id, start, end));
-        }
-    }
+    //    Each tag row must carry its packet's CAPTURE timestamp (not flush
+    //    time): the backend JOINs packets p ON p.timestamp = t.timestamp, so
+    //    DB-clock timestamps detach tags from packets (lost flags).
+    let trigger_rows = build_trigger_rows(&packet_ids, buffer);
     if !trigger_rows.is_empty() {
         if let Err(e) = db.insert_triggers_batch(&trigger_rows).await {
             error!("Batch trigger insert failed: {:?}", e);
@@ -250,6 +247,75 @@ async fn flush_batch(
     debug!("Flushed {} packets ({} triggers, {} streams updated)",
         count, trigger_rows.len(), stats_rows.len());
     buffer.clear();
+}
+
+/// Build tag insert tuples (packet_id, filter_id, start, end, packet_timestamp)
+/// for a flushed batch. `packet_ids[i]` is the DB id of `buffer[i]`, so each
+/// trigger row pairs with ITS OWN packet's capture timestamp — this is what
+/// keeps `JOIN packets p ON p.timestamp = t.timestamp` correct in the backend.
+fn build_trigger_rows(packet_ids: &[i32], buffer: &[ProcessedPacket]) -> Vec<(i32, usize, usize, usize, i64)> {
+    let mut rows = Vec::new();
+    for (idx, pkt) in buffer.iter().enumerate() {
+        let packet_id = packet_ids[idx];
+        let timestamp = pkt.timestamp_seconds as i64;
+        for &(filter_id, start, end) in &pkt.triggers {
+            rows.push((packet_id, filter_id, start, end, timestamp));
+        }
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn packet(timestamp_seconds: u64, triggers: Vec<(usize, usize, usize)>) -> ProcessedPacket {
+        ProcessedPacket {
+            timestamp_seconds,
+            timestamp_microseconds: 0,
+            direction: "inbound".to_string(),
+            stream_id: 1,
+            payload: vec![],
+            triggers,
+            http_message: None,
+            grpc_message: None,
+            nats_event: None,
+        }
+    }
+
+    #[test]
+    fn trigger_rows_pair_each_packet_with_its_own_timestamp() {
+        // Two packets with different capture seconds and multiple matches
+        // each; ids are distinct from buffer positions to catch index mixups.
+        let buffer = vec![
+            packet(1_000, vec![(10, 0, 5), (11, 7, 9)]),
+            packet(2_000, vec![(10, 1, 4), (12, 2, 8), (12, 20, 25)]),
+        ];
+        let packet_ids = [101, 202];
+
+        let rows = build_trigger_rows(&packet_ids, &buffer);
+
+        assert_eq!(rows.len(), 5);
+        // Packet 1 (id=101, ts=1000): both triggers carry ts 1000
+        assert_eq!(rows[0], (101, 10, 0, 5, 1_000));
+        assert_eq!(rows[1], (101, 11, 7, 9, 1_000));
+        // Packet 2 (id=202, ts=2000): all three triggers carry ts 2000
+        assert_eq!(rows[2], (202, 10, 1, 4, 2_000));
+        assert_eq!(rows[3], (202, 12, 2, 8, 2_000));
+        assert_eq!(rows[4], (202, 12, 20, 25, 2_000));
+        // Invariant: every row's timestamp equals the capture time of the
+        // packet its id belongs to.
+        for (pid, _, _, _, ts) in &rows {
+            let expected = if *pid == 101 { 1_000 } else { 2_000 };
+            assert_eq!(*ts, expected, "packet {} got wrong timestamp", pid);
+        }
+    }
+
+    #[test]
+    fn trigger_rows_empty_when_no_matches() {
+        let buffer = vec![packet(1_000, vec![]), packet(1_001, vec![])];
+        assert!(build_trigger_rows(&[1, 2], &buffer).is_empty());
+    }
 }
 
 /// Insert the packet batch, retrying once after a short backoff on error or

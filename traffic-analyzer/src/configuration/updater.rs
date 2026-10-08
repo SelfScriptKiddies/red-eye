@@ -34,13 +34,9 @@ pub enum SettingsUpdate {
 
 pub mod dto {
     use bincode::{Encode, Decode};
-
-    #[derive(Debug, Encode, Decode, Clone)]
-    pub enum FilterDirection {
-        Inbound,
-        Outbound,
-        Both
-    }
+    // FilterDirection lives with the filter types (filters::filterDTO) so the
+    // filters storage can use it without depending on the configuration module.
+    pub use crate::filters::filterDTO::FilterDirection;
 
     #[derive(Debug, Encode, Decode, Clone)]
     pub struct Filter {
@@ -134,11 +130,11 @@ impl UpdateListener {
                         }
                         SettingsUpdate::FilterAdd(filter) => {
                             debug!("Received filter add: (id={}, filter={:?})", update.1, filter);
-                            add_filter(update.1, filter.pattern_name, filter.filter_type, &filter.filter_payload);
+                            add_filter(update.1, filter.pattern_name, filter.filter_type, &filter.filter_payload, filter.direction);
                         }
                         SettingsUpdate::FilterUpdate(index, filter) => {
                             debug!("Received filter update: (id={}, filter={:?})", index, filter);
-                            edit_filter(index, filter.pattern_name, filter.filter_type, &filter.filter_payload);
+                            edit_filter(index, filter.pattern_name, filter.filter_type, &filter.filter_payload, filter.direction);
                         }
                         SettingsUpdate::FilterRemove(index) => {    
                             debug!("Received filter remove: {}", index);
@@ -188,7 +184,7 @@ impl UpdateListener {
                             // Sync filters
                             let filters_data: Vec<_> = filters
                                 .into_iter()
-                                .map(|(id, f)| (id, f.pattern_name, f.filter_type, f.filter_payload))
+                                .map(|(id, f)| (id, f.pattern_name, f.filter_type, f.filter_payload, f.direction))
                                 .collect();
                             sync_filters(filters_data);
                         }

@@ -117,40 +117,49 @@ impl DB {
         .map(|row| row.get::<i32, _>("id"))
     }
 
-    pub async fn insert_trigger(&self, packet_id: i32, filter_id: usize, start_index: usize, end_index: usize) -> Result<(), Error> {
+    /// Insert a single tag (filter trigger) row.
+    /// `timestamp` MUST be the packet's capture time (same value as the
+    /// packets row): the backend JOINs `p.timestamp = t.timestamp`, so a
+    /// DB-clock default silently detaches the tag from its packet.
+    pub async fn insert_trigger(&self, packet_id: i32, filter_id: usize, start_index: usize, end_index: usize, timestamp: i64) -> Result<(), Error> {
         sqlx::query(
-            "INSERT INTO tag (packet_id, tag_id, start_index, end_index) VALUES ($1, $2, $3, $4)"
+            "INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ($1, $2, $3, $4, $5)"
         )
         .bind(packet_id)
         .bind(filter_id as i32)
         .bind(start_index as i32)
         .bind(end_index as i32)
+        .bind(timestamp)
         .execute(&self.pgpool)
         .await
         .map(|_| ())
     }
 
-    /// Batch insert triggers (single multi-row INSERT)
-    pub async fn insert_triggers_batch(&self, rows: &[(i32, usize, usize, usize)]) -> Result<(), Error> {
+    /// Batch insert triggers (single multi-row INSERT).
+    /// Rows are (packet_id, filter_id, start_index, end_index, packet_timestamp):
+    /// the timestamp is each source packet's capture time, NOT NOW() — the
+    /// backend joins tag rows to packets on `p.timestamp = t.timestamp`.
+    pub async fn insert_triggers_batch(&self, rows: &[(i32, usize, usize, usize, i64)]) -> Result<(), Error> {
         if rows.is_empty() { return Ok(()); }
 
-        // Build multi-row INSERT: INSERT INTO tag (packet_id, tag_id, start_index, end_index) VALUES ($1,$2,$3,$4), ($5,$6,$7,$8), ...
-        let mut query = String::from("INSERT INTO tag (packet_id, tag_id, start_index, end_index) VALUES ");
-        let mut params: Vec<i32> = Vec::with_capacity(rows.len() * 4);
+        // Build multi-row INSERT: INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ($1..$5), ($6..$10), ...
+        let mut query = String::from("INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ");
+        const COLS: usize = 5;
 
-        for (i, (packet_id, filter_id, start, end)) in rows.iter().enumerate() {
+        for (i, _) in rows.iter().enumerate() {
             if i > 0 { query.push_str(", "); }
-            let base = i * 4;
-            query.push_str(&format!("(${}, ${}, ${}, ${})", base + 1, base + 2, base + 3, base + 4));
-            params.push(*packet_id);
-            params.push(*filter_id as i32);
-            params.push(*start as i32);
-            params.push(*end as i32);
+            let base = i * COLS;
+            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})",
+                base + 1, base + 2, base + 3, base + 4, base + 5));
         }
 
         let mut q = sqlx::query(&query);
-        for p in &params {
-            q = q.bind(p);
+        for (packet_id, filter_id, start, end, timestamp) in rows {
+            q = q.bind(*packet_id)
+                 .bind(*filter_id as i32)
+                 .bind(*start as i32)
+                 .bind(*end as i32)
+                 .bind(*timestamp);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }

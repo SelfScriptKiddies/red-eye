@@ -116,6 +116,15 @@ pub fn spawn_special_trigger_handler(
             ticker.tick().await;
 
             // Find triggers with special_type since last check (deduplicated per packet+tag)
+            //
+            // Direction guard (flags only): a flag tag configured 'in'/'out'
+            // must only be submitted when the packet actually flowed that way
+            // (packets.direction: 'dest' = inbound to the machine, 'orig' =
+            // outbound). Defense-in-depth against analyzers that predate
+            // direction-aware filtering. Alerts stay direction-agnostic —
+            // they are informational (WebSocket) and useful in both
+            // directions. Unknown/NULL/'both' direction values are treated
+            // as Both (mirrors the analyzer DTO mapping).
             let triggers = match sqlx::query_as::<_, (i32, i32, i32, i32, String, String, i32)>(
                 "SELECT DISTINCT ON (t.packet_id, tn.id)
                         t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
@@ -125,6 +134,13 @@ pub fn spawn_special_trigger_handler(
                  JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
                  WHERE tn.special_type IS NOT NULL
                    AND t.packet_id > $1
+                   AND (
+                        tn.special_type <> 'flag'
+                        OR tn.direction IS NULL
+                        OR tn.direction NOT IN ('in', 'out')
+                        OR (tn.direction = 'in'  AND p.direction = 'dest')
+                        OR (tn.direction = 'out' AND p.direction = 'orig')
+                   )
                  ORDER BY t.packet_id, tn.id, t.timestamp ASC"
             )
             .bind(last_check_id)
