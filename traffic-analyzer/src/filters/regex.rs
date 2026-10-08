@@ -1,6 +1,6 @@
-use regex::Regex;
+use regex::bytes::Regex;
 use crate::filters::filterDTO::Filter;
-use log::{trace, debug, error};
+use log::{trace, error};
 
 pub struct RegexFilter {
     id: usize,
@@ -34,26 +34,24 @@ impl Filter for RegexFilter {
     }
 
     fn processed(&self, packet: &[u8]) -> Vec<crate::filters::filterDTO::FilterTrigger> {
+        // Match directly on raw bytes (regex::bytes): a single non-UTF-8
+        // byte anywhere in the packet must NOT hide matches in other
+        // regions (length-prefixed framing, compressed bodies, etc.).
+        // Byte offsets == payload offsets, same semantics as substr/bsubstr.
+        // Patterns are user-supplied UTF-8 strings; with the default Unicode
+        // mode `.` matches UTF-8 sequences and will not span invalid bytes —
+        // ASCII patterns (flags, markers) match fine amid binary garbage.
         let mut triggers = Vec::new();
-        
-        match std::str::from_utf8(packet) {
-            Ok(text) => {
-                // Находим все совпадения и сохраняем их позиции
-                for mat in self.regex.find_iter(text) {
-                    triggers.push(crate::filters::filterDTO::FilterTrigger {
-                        start_index: mat.start(),
-                        end_index: mat.end(),
-                    });
-                }
-                
-                trace!("Checking packet with regex '{}': {} matches found", 
-                       self.pattern_name, triggers.len());
-            },
-            Err(_) => {
-                debug!("Packet is not valid UTF-8, does not match regex '{}'", self.pattern_name);
-            }
+        for mat in self.regex.find_iter(packet) {
+            triggers.push(crate::filters::filterDTO::FilterTrigger {
+                start_index: mat.start(),
+                end_index: mat.end(),
+            });
         }
-        
+
+        trace!("Checking packet with regex '{}': {} matches found",
+               self.pattern_name, triggers.len());
+
         triggers
     }
 }
@@ -77,9 +75,23 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_utf8() {
+    fn test_binary_garbage_with_embedded_ascii_match() {
+        // Binary framing bytes + an embedded ASCII flag string: the match
+        // MUST still be found. One invalid byte used to hide ALL matches.
+        let filter = RegexFilter::new(1, "flag_pattern", r"flag\{[a-z0-9_]+\}").unwrap();
+        let packet = b"\x00\x02\x00\x01\xFF\xFEflag{stolen_secret}\x00\xFF\x10";
+        let triggers = filter.processed(packet);
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(&packet[triggers[0].start_index..triggers[0].end_index], b"flag{stolen_secret}");
+        // Offsets must address the raw payload (binary prefix counts).
+        assert_eq!(triggers[0].start_index, 6);
+        assert_eq!(triggers[0].end_index, 25);
+    }
+
+    #[test]
+    fn test_binary_packet_without_match_stays_empty() {
         let filter = RegexFilter::new(1, "test_pattern", r"hello").unwrap();
-        let packet = &[0xFF, 0xFE, 0xFD]; // Недопустимый UTF-8
+        let packet = &[0xFF, 0xFE, 0xFD]; // binary garbage, no match
         assert!(filter.processed(packet).is_empty());
     }
 }

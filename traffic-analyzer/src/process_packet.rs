@@ -117,8 +117,9 @@ impl PacketProcessor {
         let stream_id = self.find_stream_id(&packet, &direction, service_id).await?;
         debug!("Stream ID: {:?}", stream_id);
 
-        // Checking all of the filters
-        let triggers = apply_filters(&packet.payload);
+        // Checking all of the filters (direction-aware: a filter tagged
+        // 'in'/'out' only fires on packets flowing that way)
+        let triggers = apply_filters(&packet.payload, &direction);
         debug!("Triggers: {:?}", triggers);
 
         // Flatten triggers into (filter_id, start_index, end_index)
