@@ -8,6 +8,8 @@ use tokio::sync::Mutex;
 
 mod commands;
 mod config;
+/// Public for the `list_containers` live-verification example.
+pub mod docker;
 mod harpoon;
 mod heartbeat;
 mod nats;

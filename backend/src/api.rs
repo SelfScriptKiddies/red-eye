@@ -116,6 +116,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         agent::get_agent_by_id,
         agent::send_agent_command,
         agent::broadcast_agent_command,
+        agent::get_agent_containers,
 
         l7::get_http_messages,
         l7::get_http_message_full,

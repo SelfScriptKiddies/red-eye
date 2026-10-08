@@ -18,7 +18,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(broadcast_agent_command)
         .service(get_agent_services)
         .service(bind_agent_service)
-        .service(unbind_agent_service);
+        .service(unbind_agent_service)
+        .service(get_agent_containers);
 }
 
 #[utoipa::path(
@@ -115,6 +116,46 @@ async fn broadcast_agent_command(
         .collect();
 
     HttpResponse::Ok().json(response)
+}
+
+/// Docker containers running on the agent's host — feeds the UI's
+/// "add service by container" flow.
+///
+/// Contract (polled, never blocking):
+/// - Each call dispatches a `DockerListContainers` command to the agent
+///   when the cached reply is missing or older than 60s; dispatch is
+///   rate-limited to one per 2s per agent, so polling cannot spam agents.
+/// - Always answers 200 with a `state` field:
+///   * "ok"      — fresh (<60s) listing, `containers` is usable
+///   * "error"   — fresh reply in which the agent reported a Docker error
+///                 (socket missing / daemon down); `error` holds the message
+///   * "pending" — no reply yet, command dispatched; the UI should show a
+///                 spinner and re-poll once or twice (~1s apart), not loop
+///   * "stale"   — cached reply older than 60s, command re-dispatched; the
+///                 stale `containers`/`error` are still returned for display
+/// - 404 when the agent has never been seen (no heartbeat).
+#[utoipa::path(
+    get,
+    path = "/api/agent/{id}/containers",
+    responses(
+        (status = 200, description = "Container listing with state (ok|error|pending|stale)"),
+        (status = 404, description = "Agent not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "agent"
+)]
+#[get("/agent/{id}/containers")]
+async fn get_agent_containers(
+    _identity: Identity,
+    agent_service: web::Data<Arc<AgentService>>,
+    id: web::Path<String>,
+) -> impl Responder {
+    let agent_id = id.into_inner();
+    if agent_service.get_agent(&agent_id).await.is_none() {
+        return HttpResponse::NotFound()
+            .json(serde_json::json!({"error": "Agent not found"}));
+    }
+    HttpResponse::Ok().json(agent_service.get_containers(&agent_id).await)
 }
 
 // ── Agent-Service bindings ──

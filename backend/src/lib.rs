@@ -17,7 +17,7 @@ use crate::api::{
     tag::tag_service::TagService,
     service::service_service::ServiceService,
     updater::{UpdateAgent, start_config_sync_scheduler},
-    agent::agent_service::{AgentService, spawn_heartbeat_listener},
+    agent::agent_service::{AgentService, spawn_docker_containers_listener, spawn_heartbeat_listener},
     l7::l7_service::L7Service,
 };
 use std::sync::Arc;
@@ -401,6 +401,9 @@ pub async fn run() -> std::io::Result<()> {
 
     // Subscribe to agent heartbeats (syncs block filters on new agent connect)
     spawn_heartbeat_listener(agent_nats_client.clone(), agent_service.clone(), pool.clone());
+
+    // Subscribe to agent Docker container listings (UI "add by container")
+    spawn_docker_containers_listener(agent_nats_client.clone(), agent_service.clone());
 
     // Create broadcaster for WebSocket connections
     let (tx, _) = broadcast::channel::<String>(1000);

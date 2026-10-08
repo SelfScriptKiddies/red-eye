@@ -43,6 +43,15 @@ impl NatsClient {
         }
     }
 
+    /// Publish a Docker containers listing reply (DockerListContainers
+    /// command handler) — same pattern as the heartbeat topic.
+    pub async fn send_docker_containers(&self, status_json: Vec<u8>) {
+        let topic = format!("agent_docker.{}", self.agent_id);
+        if let Err(e) = self.client.publish(topic, status_json.into()).await {
+            error!("Failed to send docker containers: {}", e);
+        }
+    }
+
     pub async fn subscribe_commands(&self) -> anyhow::Result<async_nats::Subscriber> {
         let topic = format!("agent_commands.{}", self.agent_id);
         let sub = self.client.subscribe(topic).await?;
