@@ -52,6 +52,7 @@ async fn toggle_protection(
 ) -> impl Responder {
     let service = match service_service.get_service_by_id(body.service_id).await {
         Ok(s) => s,
+        Err(e) if crate::api::is_pool_timeout(&e) => return crate::api::sqlx_error_response(&e),
         Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"error": "Service not found"})),
     };
 

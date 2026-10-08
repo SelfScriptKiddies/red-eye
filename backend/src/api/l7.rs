@@ -35,7 +35,7 @@ async fn get_http_messages(
 ) -> impl Responder {
     match l7_service.get_messages_by_stream(stream_id.into_inner()).await {
         Ok(messages) => HttpResponse::Ok().json(messages),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -58,7 +58,7 @@ async fn get_http_message_full(
     match l7_service.get_message_full(id.into_inner()).await {
         Ok(msg) => HttpResponse::Ok().json(msg),
         Err(sqlx::Error::RowNotFound) => HttpResponse::NotFound().finish(),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -79,7 +79,7 @@ async fn get_http_headers(
 ) -> impl Responder {
     match l7_service.get_headers(message_id.into_inner()).await {
         Ok(headers) => HttpResponse::Ok().json(headers),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -107,7 +107,7 @@ async fn search_by_header(
         Ok((stream_ids, total)) => {
             HttpResponse::Ok().json(HeaderSearchResult { stream_ids, total })
         }
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -145,7 +145,7 @@ async fn search_by_headers(
             let total = stream_ids.len() as i64;
             HttpResponse::Ok().json(HeaderSearchResult { stream_ids, total })
         }
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -159,6 +159,6 @@ async fn get_grpc_messages(
 ) -> impl Responder {
     match l7_service.get_grpc_messages(stream_id.into_inner()).await {
         Ok(messages) => HttpResponse::Ok().json(messages),
-        Err(_) => HttpResponse::InternalServerError().finish(),
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }

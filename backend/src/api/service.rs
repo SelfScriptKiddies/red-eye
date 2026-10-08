@@ -57,7 +57,7 @@ async fn get_all_services(
 ) -> impl Responder {
     match service.get_all_services().await {
         Ok(services) => HttpResponse::Ok().json(services),
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(e) => crate::api::sqlx_error_response(&e)
     }
 }
 
@@ -88,6 +88,7 @@ async fn get_service_by_id(
 ) -> impl Responder {
     match service.get_service_by_id(id.into_inner()).await {
         Ok(service) => HttpResponse::Ok().json(service),
+        Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
         Err(_) => HttpResponse::NotFound().finish()
     }
 }
@@ -145,7 +146,7 @@ async fn create_service(
 
             HttpResponse::Created().json(created)
         }
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(e) => crate::api::sqlx_error_response(&e)
     }
 }
 
@@ -186,6 +187,7 @@ async fn update_service(
             }
             HttpResponse::Ok().json(updated)
         }
+        Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
         Err(_) => HttpResponse::NotFound().finish()
     }
 }
@@ -215,6 +217,7 @@ async fn delete_service(
             }
             HttpResponse::Ok().finish()
         }
+        Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
         Err(_) => HttpResponse::NotFound().finish()
     }
 }

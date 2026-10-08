@@ -59,7 +59,7 @@ async fn get_tags_by_stream_id(
     match tag_service.get_tags_by_stream_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream)),
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tags for stream not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -93,7 +93,7 @@ async fn get_all_tag_names(
 ) -> Result<impl Responder, actix_web::error::Error> {
     match tag_service.get_all_tag_names().await {
         Ok(tag_names) => Ok(HttpResponse::Ok().json(tag_names)),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -123,7 +123,7 @@ async fn get_tag_name_by_id(
     match tag_service.get_tag_name_by_id(id).await {
         Ok(tag_name) => Ok(HttpResponse::Ok().json(tag_name)),
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -159,7 +159,7 @@ async fn create_tag_name(
             }
             Ok(HttpResponse::Ok().json(created_tag))
         }
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -201,7 +201,7 @@ async fn update_tag_name(
             Ok(HttpResponse::Ok().json(updated_tag))
         }
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -239,7 +239,7 @@ async fn delete_tag_name(
             Ok(HttpResponse::NoContent().finish())
         }
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -275,7 +275,7 @@ async fn get_tag_metrics(
             }).collect();
             HttpResponse::Ok().json(metrics)
         }
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(e) => crate::api::sqlx_error_response(&e)
     }
 }
 
@@ -311,7 +311,7 @@ async fn get_flag_balance(
             }).collect();
             HttpResponse::Ok().json(result)
         }
-        Err(_) => HttpResponse::InternalServerError().finish()
+        Err(e) => crate::api::sqlx_error_response(&e)
     }
 }
 

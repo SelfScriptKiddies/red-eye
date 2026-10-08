@@ -61,7 +61,7 @@ async fn get_stream_by_id(
     match stream_service.get_stream_by_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream.to_response(&packet_service).await)),
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -135,7 +135,7 @@ async fn get_all_streams(
     health.record(started.elapsed());
     match result {
         Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -162,7 +162,7 @@ async fn update_stream_favorite(
     match stream_service.set_favorite(stream_id, payload.favorite).await {
         Ok(favorite) => Ok(HttpResponse::Ok().json(json!({"id": stream_id, "favorite": favorite}))),
         Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"}))),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error occurred: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
@@ -191,7 +191,7 @@ async fn get_stream_histogram(
     let bucket_secs = query.bucket_secs.unwrap_or(60);
     match stream_service.get_stream_histogram(bucket_secs).await {
         Ok(buckets) => Ok(HttpResponse::Ok().json(buckets)),
-        Err(e) => Err(actix_web::error::ErrorInternalServerError(format!("Error: {:?}", e)))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e))
     }
 }
 
