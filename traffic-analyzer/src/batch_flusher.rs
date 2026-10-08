@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 use log::{info, warn, error, debug};
 use async_nats::Client;
+use std::sync::Arc;
 
+use crate::cache::Cache;
 use crate::db::DB;
 
 /// A fully-processed packet ready for batch insertion.
@@ -61,6 +63,10 @@ pub fn create_batch_channel(buffer_size: usize) -> (mpsc::Sender<ProcessedPacket
 /// Flush triggers:
 /// - Buffer reaches `batch_size` items, OR
 /// - `flush_interval_ms` milliseconds elapsed since the first buffered item.
+///
+/// Also drains the TCP lifecycle dirty set (`cache.drain_closed_streams`)
+/// each flush, so FIN/RST closes and SYN retirements become one batched
+/// `UPDATE stream SET active = false` instead of per-packet UPDATEs.
 pub async fn run_batch_flusher(
     mut rx: mpsc::Receiver<ProcessedPacket>,
     db: DB,
@@ -68,6 +74,7 @@ pub async fn run_batch_flusher(
     flush_interval_ms: u64,
     nats_client: Option<Client>,
     nats_ws_topic: String,
+    cache: Arc<Cache>,
 ) {
     info!("Batch flusher started: batch_size={}, flush_interval={}ms", batch_size, flush_interval_ms);
 
@@ -77,16 +84,30 @@ pub async fn run_batch_flusher(
 
     loop {
         let recv_result = if buffer.is_empty() {
-            // No buffered items — just wait for the next packet (no timeout).
-            match rx.recv().await {
-                Some(pkt) => Some(pkt),
-                None => {
-                    // Channel closed — flush remaining and exit.
-                    if !buffer.is_empty() {
-                        flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+            // No buffered items — wait for the next packet, but wake up once
+            // per flush interval anyway: FIN/RST-only packets never enter the
+            // buffer (control-only packets carry no data row), so without
+            // this wakeup deferred stream closes would sit in the dirty set
+            // until unrelated data traffic arrives.
+            tokio::select! {
+                biased;
+                result = rx.recv() => {
+                    match result {
+                        Some(pkt) => Some(pkt),
+                        None => {
+                            // Channel closed — flush remaining and exit.
+                            if !buffer.is_empty() {
+                                flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+                            }
+                            flush_lifecycle(&db, &cache).await;
+                            info!("Batch flusher: channel closed, shutting down");
+                            return;
+                        }
                     }
-                    info!("Batch flusher: channel closed, shutting down");
-                    return;
+                }
+                _ = tokio::time::sleep(flush_duration) => {
+                    flush_lifecycle(&db, &cache).await;
+                    None
                 }
             }
         } else {
@@ -102,6 +123,7 @@ pub async fn run_batch_flusher(
                         Some(pkt) => Some(pkt),
                         None => {
                             flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+                            flush_lifecycle(&db, &cache).await;
                             info!("Batch flusher: channel closed, shutting down");
                             return;
                         }
@@ -127,8 +149,27 @@ pub async fn run_batch_flusher(
 
         if should_flush {
             flush_batch(&db, &mut buffer, &nats_client, &nats_ws_topic).await;
+            flush_lifecycle(&db, &cache).await;
             deadline = None;
         }
+    }
+}
+
+/// Flush deferred TCP lifecycle state (FIN/RST closes, SYN retirements):
+/// one idempotent set-based UPDATE for everything in the dirty set.
+/// Called on every data-batch flush AND on the empty-buffer timeout, so
+/// streams close within ~flush_interval even with no data traffic.
+/// On failure the ids are re-queued for the next flush — a stream staying
+/// active a bit longer is the pre-lifecycle behavior, not a failure.
+async fn flush_lifecycle(db: &DB, cache: &Cache) {
+    let closed = cache.drain_closed_streams();
+    if closed.is_empty() {
+        return;
+    }
+    if let Err(e) = db.set_streams_inactive_batch(&closed).await {
+        error!("Deferred stream close update failed ({} streams, retried next flush): {:?}",
+            closed.len(), e);
+        cache.requeue_closed_streams(&closed);
     }
 }
 
@@ -219,9 +260,16 @@ async fn flush_batch(
         error!("Failed to update stream stats: {:?}", e);
     }
 
-    // 5. pg_notify('refresh_streams')
-    if let Err(e) = db.notify_refresh_streams().await {
-        error!("pg_notify failed: {:?}", e);
+    // 5. Maintain stream_tag INCREMENTALLY: upsert the distinct
+    //    (stream_id -> tag_name) pairs seen in this batch, so the streams
+    //    list never recomputes the tag x packets join (replaces the old
+    //    materialized view + its pg_notify refresh machinery).
+    let filter_names = crate::filters::filter_names_snapshot();
+    let stream_tag_pairs = build_stream_tag_pairs(buffer, &filter_names);
+    if !stream_tag_pairs.is_empty() {
+        if let Err(e) = db.insert_stream_tags_batch(&stream_tag_pairs).await {
+            error!("Batch stream_tag upsert failed: {:?}", e);
+        }
     }
 
     // 6. Send NATS events for WebSocket
@@ -263,6 +311,26 @@ fn build_trigger_rows(packet_ids: &[i64], buffer: &[ProcessedPacket]) -> Vec<(i6
         }
     }
     rows
+}
+
+/// Build distinct (stream_id, tag_name) pairs for the stream_tag upsert.
+/// `names` maps filter_id -> tag_name (the same tag_name.name strings the
+/// old materialized view produced, so UI semantics don't change). Triggers
+/// whose filter is no longer registered (removed mid-game) are skipped —
+/// losing one tag pair is acceptable degradation.
+fn build_stream_tag_pairs(buffer: &[ProcessedPacket], names: &HashMap<usize, String>) -> Vec<(usize, String)> {
+    let mut seen: HashSet<(usize, &str)> = HashSet::new();
+    let mut pairs: Vec<(usize, String)> = Vec::new();
+    for pkt in buffer {
+        for &(filter_id, _, _) in &pkt.triggers {
+            if let Some(name) = names.get(&filter_id) {
+                if seen.insert((pkt.stream_id, name.as_str())) {
+                    pairs.push((pkt.stream_id, name.clone()));
+                }
+            }
+        }
+    }
+    pairs
 }
 
 #[cfg(test)]
@@ -315,6 +383,57 @@ mod tests {
     fn trigger_rows_empty_when_no_matches() {
         let buffer = vec![packet(1_000, vec![]), packet(1_001, vec![])];
         assert!(build_trigger_rows(&[1, 2], &buffer).is_empty());
+    }
+
+    #[test]
+    fn stream_tag_pairs_dedup_across_packets_and_triggers() {
+        // Same (stream, filter) firing on many packets and twice on one
+        // packet must yield ONE pair; different streams and filters each
+        // get their own pair.
+        let buffer = vec![
+            packet(1_000, vec![(10, 0, 5)]),
+            packet(1_001, vec![(10, 1, 4), (10, 2, 8)]), // same filter again
+            packet(1_002, vec![(11, 0, 3)]),              // different filter, same stream
+        ];
+        // packet() helper pins stream_id=1; patch the third packet to
+        // another stream to cover the cross-stream case.
+        let mut other_stream = packet(1_003, vec![(10, 0, 2)]);
+        other_stream.stream_id = 2;
+
+        let mut buffer = buffer;
+        buffer.push(other_stream);
+
+        let mut names = HashMap::new();
+        names.insert(10usize, "flag_leak".to_string());
+        names.insert(11usize, "exploit".to_string());
+
+        let mut pairs = build_stream_tag_pairs(&buffer, &names);
+        pairs.sort();
+
+        assert_eq!(pairs, vec![
+            (1, "exploit".to_string()),
+            (1, "flag_leak".to_string()),
+            (2, "flag_leak".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn stream_tag_pairs_skip_unknown_filter_ids() {
+        // Filter removed mid-game: no name mapping -> skip, no panic, no
+        // placeholder garbage in stream_tag.
+        let buffer = vec![packet(1_000, vec![(999, 0, 5), (10, 1, 2)])];
+        let mut names = HashMap::new();
+        names.insert(10usize, "flag_leak".to_string());
+
+        let pairs = build_stream_tag_pairs(&buffer, &names);
+        assert_eq!(pairs, vec![(1, "flag_leak".to_string())]);
+    }
+
+    #[test]
+    fn stream_tag_pairs_empty_when_no_triggers() {
+        let buffer = vec![packet(1_000, vec![])];
+        let names = HashMap::new();
+        assert!(build_stream_tag_pairs(&buffer, &names).is_empty());
     }
 }
 

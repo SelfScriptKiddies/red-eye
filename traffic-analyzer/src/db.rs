@@ -51,11 +51,15 @@ impl DB {
         let src_ip_addr: IpAddr = src_ip.parse().unwrap();
         let dst_ip_addr: IpAddr = dst_ip.parse().unwrap();
 
-        // Try to find stream where source and destination match exactly
+        // Try to find stream where source and destination match exactly.
+        // ORDER BY id DESC: with the SYN lifecycle a tuple can briefly have
+        // several active rows (the deferred active=false flush lags the new
+        // connection's SYN) — the newest row is the live connection.
         let row = sqlx::query(
             "SELECT id FROM stream
              WHERE (src_ip = $1 AND src_port = $2 AND dst_ip = $3 AND dst_port = $4)
              AND active = true
+             ORDER BY id DESC
              LIMIT 1"
         )
         .bind(src_ip_addr)
@@ -498,12 +502,41 @@ impl DB {
         q.execute(&self.pgpool).await.map(|_| ())
     }
 
-    /// Send pg_notify for materialized view / stream refresh.
-    pub async fn notify_refresh_streams(&self) -> Result<(), Error> {
-        sqlx::query("SELECT pg_notify('refresh_streams', '')")
+    /// Batch close streams (TCP FIN/RST lifecycle): single set-based UPDATE,
+    /// idempotent. Called by the batch flusher from the dirty set drained in
+    /// `Cache::drain_closed_streams`, so the per-packet hot path never waits
+    /// on a close UPDATE.
+    pub async fn set_streams_inactive_batch(&self, stream_ids: &[usize]) -> Result<u64, Error> {
+        if stream_ids.is_empty() { return Ok(0); }
+
+        let ids: Vec<i64> = stream_ids.iter().map(|&id| id as i64).collect();
+        sqlx::query("UPDATE stream SET active = false WHERE id = ANY($1)")
+            .bind(&ids)
             .execute(&self.pgpool)
             .await
-            .map(|_| ())
+            .map(|r| r.rows_affected())
+    }
+
+    /// Batch upsert distinct (stream_id, tag_name) pairs into stream_tag.
+    /// Maintains the per-stream tag list INCREMENTALLY so the streams list
+    /// never recomputes the tag x packets join (the old materialized view).
+    /// Dedup by PK + ON CONFLICT DO NOTHING keeps this cheap and idempotent.
+    pub async fn insert_stream_tags_batch(&self, pairs: &[(usize, String)]) -> Result<(), Error> {
+        if pairs.is_empty() { return Ok(()); }
+
+        let mut query = String::from("INSERT INTO stream_tag (stream_id, tag_name) VALUES ");
+        for (i, _) in pairs.iter().enumerate() {
+            if i > 0 { query.push_str(", "); }
+            let base = i * 2;
+            query.push_str(&format!("(${}::bigint, ${}::text)", base + 1, base + 2));
+        }
+        query.push_str(" ON CONFLICT (stream_id, tag_name) DO NOTHING");
+
+        let mut q = sqlx::query(&query);
+        for (stream_id, tag_name) in pairs {
+            q = q.bind(*stream_id as i64).bind(tag_name);
+        }
+        q.execute(&self.pgpool).await.map(|_| ())
     }
 
     /// Load all proto files grouped by service_id.

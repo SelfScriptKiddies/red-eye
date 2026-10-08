@@ -34,6 +34,12 @@ impl StreamRepository {
             .await
     }
 
+    /// Streams list with tags. Reads `stream` LEFT JOIN aggregated
+    /// `stream_tag` (maintained incrementally by the traffic-analyzer flush)
+    /// instead of the old streams_list_view materialized view — no history
+    /// recomputation, so the list can't freeze on statement_timeout at game
+    /// volumes. Output shape is IDENTICAL to the old matview-based query
+    /// (same columns, same types, same INNER service join).
     pub async fn get_streams_with_tags(&self, limit: i64, offset: i64, tags: Option<Vec<i64>>, services: Option<Vec<i64>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
         let mut sql = String::from(r#"
             SELECT
@@ -48,12 +54,32 @@ impl StreamRepository {
                 l7_protocol,
                 src_ip::text,
                 dst_ip::text
-            FROM streams_list_view"#);
+            FROM (
+                SELECT
+                    str.id AS stream_id,
+                    COALESCE(str.first_packet_time, 0) AS first_time,
+                    COALESCE(str.last_packet_time, 0) AS last_time,
+                    str.packet_count,
+                    st.tags AS tags,
+                    s.name AS service_name,
+                    s.id AS service_id,
+                    str.favorite,
+                    str.l7_protocol,
+                    str.src_ip::text AS src_ip,
+                    str.dst_ip::text AS dst_ip
+                FROM stream str
+                JOIN service s ON s.id = str.service_id
+                LEFT JOIN LATERAL (
+                    SELECT array_agg(DISTINCT stg.tag_name) AS tags
+                    FROM stream_tag stg
+                    WHERE stg.stream_id = str.id
+                ) st ON true
+            ) streams_list"#);
 
         let mut where_clauses = Vec::new();
         let mut param_idx: usize = 0;
 
-        // Tag filtering via subquery against tag_name (view stores names as text[])
+        // Tag filtering via subquery against tag_name (tags are stored as text[])
         if let Some(ref tag_ids) = tags {
             if !tag_ids.is_empty() {
                 param_idx += 1;
@@ -132,16 +158,20 @@ impl StreamRepository {
         query.fetch_all(&self.pgpool).await
     }
 
+    /// Stream histogram over time buckets. Reads `stream` JOIN `service`
+    /// directly (only last_packet_time/service columns are needed — no tags,
+    /// so no stream_tag join either). Replaces the old streams_list_view read.
     pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i64, String, i64)>, sqlx::Error> {
         sqlx::query_as::<_, (i64, i64, String, i64)>(
             r#"
-            SELECT (last_time / $1) * $1 AS bucket_ts,
-                   service_id,
-                   service_name,
+            SELECT (COALESCE(str.last_packet_time, 0) / $1) * $1 AS bucket_ts,
+                   str.service_id,
+                   s.name AS service_name,
                    COUNT(*) AS count
-            FROM streams_list_view
-            WHERE last_time > 0
-            GROUP BY bucket_ts, service_id, service_name
+            FROM stream str
+            JOIN service s ON s.id = str.service_id
+            WHERE COALESCE(str.last_packet_time, 0) > 0
+            GROUP BY bucket_ts, str.service_id, s.name
             ORDER BY bucket_ts ASC
             "#)
             .bind(bucket_secs as i64)
