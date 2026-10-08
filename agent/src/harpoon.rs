@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use log::{debug, info, warn};
 
 use harpoon_core::capture::CaptureManager;
+use harpoon_core::engine::filter::{CompiledFilter, SharedFilterSet};
 use harpoon_core::engine::run_with_capture;
 use harpoon_core::types::endpoint::{Endpoint, Protocol};
 use harpoon_core::types::filter::{Direction, Filter, FilterAction, FilterKind};
@@ -42,8 +43,13 @@ pub struct ProxyRuleSpec {
 }
 
 impl ProxyRuleSpec {
-    /// Convert to a harpoon-core Rule with global filters applied.
-    fn to_harpoon_rule(&self, tls_certs: &Option<TlsCerts>, filters: &[Filter]) -> Rule {
+    /// Convert to a harpoon-core Rule.
+    ///
+    /// The rule carries NO filters of its own: the engine is started with a
+    /// [`SharedFilterSet`] (see [`HarpoonEngine`]) that all rules evaluate
+    /// traffic against, so filters can be hot-swapped without restarting
+    /// the engine.
+    fn to_harpoon_rule(&self, tls_certs: &Option<TlsCerts>) -> Rule {
         let endpoint = match self.protocol {
             Protocol::Tcp => Endpoint::tcp,
             Protocol::Udp => Endpoint::udp,
@@ -72,7 +78,7 @@ impl ProxyRuleSpec {
             name: self.name.clone(),
             listen: endpoint(self.listen),
             target: endpoint(self.target),
-            filters: filters.to_vec(),
+            filters: Vec::new(),
             duplicate,
             exporter: None,
             tls,
@@ -94,7 +100,16 @@ pub struct HarpoonEngine {
     handle: Option<EngineHandle>,
     capture_mgr: Arc<CaptureManager>,
     rules: HashMap<String, ProxyRuleSpec>,
+    /// Last synced filters (parsed form; kept for `filter_count`/status).
     filters: Vec<Filter>,
+    /// Live filter set shared with all running proxy pipelines.
+    ///
+    /// `sync_filters` atomically swaps it (`store`); running proxies pick up
+    /// the new set for traffic evaluated after the swap — no engine restart,
+    /// no listener churn, no connection drops. Survives `restart_engine`
+    /// (rule add/remove) because the engine is (re)started with a handle to
+    /// the same set.
+    shared_filters: SharedFilterSet,
     tls_certs: Option<TlsCerts>,
     nft: NftablesManager,
 }
@@ -112,6 +127,7 @@ impl HarpoonEngine {
             capture_mgr: CaptureManager::new(),
             rules: HashMap::new(),
             filters: Vec::new(),
+            shared_filters: SharedFilterSet::empty(),
             tls_certs,
             nft: NftablesManager::new(),
         }
@@ -216,13 +232,38 @@ impl HarpoonEngine {
         Ok(())
     }
 
-    /// Sync global filters (applied to all proxy rules). Restarts engine.
+    /// Sync global filters (applied to all proxy rules) by hot-swapping the
+    /// shared filter set.
+    ///
+    /// Does NOT restart the engine: running proxies keep serving, listeners
+    /// stay bound, established connections keep flowing. Traffic evaluated
+    /// after the swap is checked against the new filter set — per chunk, so
+    /// even pre-existing connections are filtered going forward (a
+    /// connection sending newly-blocked content is dropped/reset). There is
+    /// never a window where no filters apply: the swap is atomic, and a
+    /// chunk mid-evaluation during the swap completes under the old set.
+    ///
+    /// Filters that fail to compile (e.g. invalid regex) are skipped with a
+    /// warning — same behavior as the engine's own static filter path.
     pub async fn sync_filters(&mut self, filters: Vec<Filter>) -> Result<()> {
-        info!("Syncing {} firewall filters", filters.len());
-        self.filters = filters;
-        if !self.rules.is_empty() {
-            self.restart_engine().await?;
+        info!(
+            "Syncing {} firewall filters (hot-swap, no engine restart)",
+            filters.len()
+        );
+
+        let mut compiled = Vec::with_capacity(filters.len());
+        for f in &filters {
+            match CompiledFilter::new(f.clone()) {
+                Ok(cf) => compiled.push(cf),
+                Err(e) => warn!("Skipping filter that failed to compile: {}", e),
+            }
         }
+
+        // Swap first, then update the bookkeeping copy: the live set is the
+        // effective one and must never lag behind the accepted filter list.
+        self.shared_filters.store(compiled);
+        self.filters = filters;
+
         Ok(())
     }
 
@@ -230,7 +271,6 @@ impl HarpoonEngine {
     pub fn filter_count(&self) -> usize {
         self.filters.len()
     }
-
     /// Apply a set of manual nftables redirect rules (replaces all current manual rules).
     pub fn apply_nft_rules(&mut self, rules: Vec<RedirectRule>) -> Result<()> {
         self.nft.apply_rules(rules)
@@ -281,6 +321,10 @@ impl HarpoonEngine {
         let _ = self.nft.clear();
     }
 
+    /// (Re)start the engine for rule add/remove/update paths. Rules are
+    /// rebuilt WITHOUT owned filters: all filtering flows through the shared
+    /// filter set, which carries the currently synced filters across the
+    /// restart.
     async fn restart_engine(&mut self) -> Result<()> {
         if let Some(handle) = self.handle.take() {
             handle.stop();
@@ -296,11 +340,12 @@ impl HarpoonEngine {
         let rules: Vec<Rule> = self
             .rules
             .values()
-            .map(|s| s.to_harpoon_rule(&self.tls_certs, &self.filters))
+            .map(|s| s.to_harpoon_rule(&self.tls_certs))
             .collect();
         let config = CoreConfig {
             rules,
             pipelines: vec![],
+            shared_filter_set: Some(self.shared_filters.clone()),
             ..Default::default()
         };
 
@@ -416,4 +461,197 @@ pub fn spawn_capture_forwarder(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    fn test_engine() -> (HarpoonEngine, tokio::sync::watch::Receiver<()>) {
+        let (restart_tx, restart_rx) = tokio::sync::watch::channel(());
+        let ports_cache: PortsCache =
+            Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
+        (HarpoonEngine::new(ports_cache, restart_tx, None), restart_rx)
+    }
+
+    async fn spawn_echo_server() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        let n = match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
+                        if stream.write_all(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    async fn free_port_addr() -> SocketAddr {
+        let tmp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = tmp.local_addr().unwrap();
+        drop(tmp);
+        addr
+    }
+
+    /// Live proof that `sync_filters` hot-swaps the filter set WITHOUT
+    /// restarting the engine: the pre-existing proxied connection must
+    /// survive the sync (a restart kills every proxied connection), traffic
+    /// evaluated after the swap uses the new filters, and pre-existing
+    /// connections are filtered going forward (per-chunk granularity).
+    #[tokio::test]
+    async fn sync_filters_hot_swaps_without_engine_restart() {
+        let echo_addr = spawn_echo_server().await;
+        let proxy_addr = free_port_addr().await;
+
+        let (mut engine, _rx) = test_engine();
+        engine
+            .add_rule(ProxyRuleSpec {
+                name: "test-rule".into(),
+                listen: proxy_addr,
+                target: echo_addr,
+                protocol: Protocol::Tcp,
+                tls_mode: None,
+                nft_redirect_port: None,
+                duplicate_to: None,
+                http2: false,
+            })
+            .await
+            .unwrap();
+        assert!(engine.handle.is_some(), "engine should be running");
+
+        // Connection A: established and echoing under the (empty) set.
+        // add_rule returns before the spawned listener task binds, so retry
+        // the connect until the proxy comes up.
+        let mut a = None;
+        for _ in 0..100 {
+            match TcpStream::connect(proxy_addr).await {
+                Ok(s) => {
+                    a = Some(s);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+        let mut a = a.expect("proxy listener never came up");
+        a.write_all(b"hello").await.unwrap();
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(2), a.read(&mut buf))
+            .await
+            .expect("echo timeout")
+            .unwrap();
+        assert_eq!(&buf[..n], b"hello");
+
+        // Sync a drop-connection filter for "BLOCK".
+        engine
+            .sync_filters(vec![Filter {
+                kind: FilterKind::Substr("BLOCK".into()),
+                direction: Direction::Both,
+                action_on_match: FilterAction::DropConnection,
+            }])
+            .await
+            .unwrap();
+        assert_eq!(engine.filter_count(), 1);
+
+        // THE regression assertion: the engine was not restarted —
+        // connection A still echoes through the same engine handle.
+        a.write_all(b"still-here").await.unwrap();
+        let n = tokio::time::timeout(Duration::from_secs(2), a.read(&mut buf))
+            .await
+            .expect("conn A died: engine was restarted by sync_filters")
+            .unwrap();
+        assert_eq!(&buf[..n], b"still-here");
+
+        // New connection B sending blocked content is cut by the new set.
+        let mut b = TcpStream::connect(proxy_addr).await.unwrap();
+        b.write_all(b"BLOCK").await.unwrap();
+        let res = tokio::time::timeout(Duration::from_secs(2), b.read(&mut buf)).await;
+        assert!(
+            matches!(res, Ok(Ok(0)) | Ok(Err(_))),
+            "blocked connection not closed"
+        );
+
+        // Per-chunk granularity: pre-existing connection A is filtered too.
+        a.write_all(b"BLOCK").await.unwrap();
+        let res = tokio::time::timeout(Duration::from_secs(2), a.read(&mut buf)).await;
+        assert!(
+            matches!(res, Ok(Ok(0)) | Ok(Err(_))),
+            "pre-existing connection not filtered after swap"
+        );
+
+        engine.shutdown().await;
+    }
+
+    /// Pure swap-path logic: bookkeeping + live set updated, no engine
+    /// spawned when there are no rules, filters survive across restarts.
+    #[tokio::test]
+    async fn sync_filters_updates_bookkeeping_and_live_set() {
+        let (mut engine, _rx) = test_engine();
+        assert!(engine.handle.is_none());
+
+        engine
+            .sync_filters(vec![
+                Filter {
+                    kind: FilterKind::Substr("a".into()),
+                    direction: Direction::Both,
+                    action_on_match: FilterAction::Drop,
+                },
+                Filter {
+                    kind: FilterKind::Substr("b".into()),
+                    direction: Direction::ClientToServer,
+                    action_on_match: FilterAction::TapOnly,
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(engine.filter_count(), 2);
+        assert_eq!(engine.shared_filters.len(), 2);
+
+        // Still no engine: syncing with no rules must not start one.
+        assert!(engine.handle.is_none());
+
+        // Swap to empty: live set follows atomically.
+        engine.sync_filters(vec![]).await.unwrap();
+        assert_eq!(engine.filter_count(), 0);
+        assert!(engine.shared_filters.is_empty());
+    }
+
+    /// Filters that fail to compile (invalid regex) are skipped with a
+    /// warning, like the engine's own static filter path.
+    #[tokio::test]
+    async fn sync_filters_skips_invalid_regex() {
+        let (mut engine, _rx) = test_engine();
+        engine
+            .sync_filters(vec![
+                Filter {
+                    kind: FilterKind::Regex("(unclosed".into()),
+                    direction: Direction::Both,
+                    action_on_match: FilterAction::Drop,
+                },
+                Filter {
+                    kind: FilterKind::Substr("ok".into()),
+                    direction: Direction::Both,
+                    action_on_match: FilterAction::Drop,
+                },
+            ])
+            .await
+            .unwrap();
+        // Bookkeeping keeps what the server sent; the live set only holds
+        // compiled filters.
+        assert_eq!(engine.filter_count(), 2);
+        assert_eq!(engine.shared_filters.len(), 1);
+    }
 }
