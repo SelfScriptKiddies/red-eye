@@ -1,22 +1,42 @@
+use ipnetwork::IpNetwork;
 use log::{debug, error, info, warn};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::api::settings::get_setting;
 
+/// Team entries fetched from the farm's /api/get_config TEAMS dict.
+/// TEAMS values may be bare host IPs ("10.10.4.5") or networks
+/// ("10.10.4.0/24") — exact strings hit the HashMap fast path, networks
+/// are probed by containment after a miss.
+struct TeamMap {
+    exact: HashMap<String, String>,
+    nets: Vec<(IpNetwork, String)>,
+}
+
+impl TeamMap {
+    fn empty() -> Self {
+        Self {
+            exact: HashMap::new(),
+            nets: Vec::new(),
+        }
+    }
+}
+
 /// IP → team name mapping fetched from the farm.
 /// Refreshed on cache miss or every 5 minutes.
 struct TeamCache {
-    map: HashMap<String, String>,
+    map: TeamMap,
     last_refresh: std::time::Instant,
 }
 
 impl TeamCache {
     fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: TeamMap::empty(),
             last_refresh: std::time::Instant::now() - std::time::Duration::from_secs(600),
         }
     }
@@ -70,8 +90,10 @@ const MAX_RETRY_ATTEMPTS: u8 = 3;
 const MAX_SUBMITTED_CACHE: usize = 10000;
 
 /// Fetch team mapping from S4DFarm's /api/get_config endpoint.
-/// Returns IP→team_name map built from the TEAMS config dict (name→ip inverted).
-async fn fetch_team_map(farm_url: &str, farm_password: &str) -> Option<HashMap<String, String>> {
+/// Returns the IP→team_name map built from the TEAMS config dict
+/// (name→ip inverted). Values containing '/' are parsed as networks
+/// and matched by containment; anything else is an exact host string.
+async fn fetch_team_map(farm_url: &str, farm_password: &str) -> Option<TeamMap> {
     let base = farm_url.trim_end_matches("/api/post_flags").trim_end_matches('/');
     let config_url = format!("{}/api/get_config", base);
 
@@ -87,15 +109,44 @@ async fn fetch_team_map(farm_url: &str, farm_password: &str) -> Option<HashMap<S
     let body: serde_json::Value = resp.json().await.ok()?;
 
     let teams = body.get("TEAMS")?.as_object()?;
-    let mut map = HashMap::new();
+    let mut map = TeamMap::empty();
     for (name, ip_val) in teams {
         if let Some(ip) = ip_val.as_str() {
-            map.insert(ip.to_string(), name.clone());
+            if ip.contains('/') {
+                match ip.parse::<IpNetwork>() {
+                    Ok(net) => map.nets.push((net, name.clone())),
+                    Err(_) => warn!("Farm TEAMS entry '{}' is not a valid network, skipping", ip),
+                }
+            } else {
+                map.exact.insert(ip.to_string(), name.clone());
+            }
         }
     }
 
-    info!("Fetched {} teams from farm", map.len());
+    info!(
+        "Fetched {} teams from farm ({} exact, {} networks)",
+        map.exact.len() + map.nets.len(),
+        map.exact.len(),
+        map.nets.len()
+    );
     Some(map)
+}
+
+/// Resolve a bare host IP string against a team map: exact string match
+/// first, then containment in network entries. Returns None when no entry
+/// matches (caller falls back to the raw IP string).
+fn match_team(exact: &HashMap<String, String>, nets: &[(IpNetwork, String)], ip: &str) -> Option<String> {
+    if let Some(name) = exact.get(ip) {
+        return Some(name.clone());
+    }
+    let addr: IpAddr = ip.parse().ok()?;
+    // Most specific containing network wins: farm TEAMS networks are
+    // normally disjoint, but if they overlap (a summary /16 plus per-team
+    // /24s) the tightest match must decide, independent of dict order.
+    nets.iter()
+        .filter(|(net, _)| net.contains(addr))
+        .max_by_key(|(net, _)| net.prefix())
+        .map(|(_, name)| name.clone())
 }
 
 /// Background task: polls for new triggers with special_type (flag, alert).
@@ -115,7 +166,15 @@ pub fn spawn_special_trigger_handler(
         loop {
             ticker.tick().await;
 
-            // Find triggers with special_type since last check (deduplicated per packet+tag)
+            // Find triggers with special_type since last check. One row per
+            // tag match (the analyzer inserts one tag row per regex match):
+            // a packet with N flag matches yields N submissions — identical
+            // flag STRINGS are still deduplicated by FlagQueue::is_known.
+            // Alerts are deduplicated per (packet, tag) in the loop below.
+            //
+            // Deterministic order: tag PK is (id, timestamp) with SERIAL id
+            // (database/init/03_tag_table.sql), so t.id fully orders rows;
+            // within one packet rows come out in match (insertion) order.
             //
             // Direction guard (flags only): a flag tag configured 'in'/'out'
             // must only be submitted when the packet actually flowed that way
@@ -126,8 +185,7 @@ pub fn spawn_special_trigger_handler(
             // directions. Unknown/NULL/'both' direction values are treated
             // as Both (mirrors the analyzer DTO mapping).
             let triggers = match sqlx::query_as::<_, (i32, i32, i32, i32, String, String, i32)>(
-                "SELECT DISTINCT ON (t.packet_id, tn.id)
-                        t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
+                "SELECT t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
                         tn.name as tag_name, tn.special_type, p.stream_id
                  FROM tag t
                  JOIN tag_name tn ON tn.id = t.tag_id
@@ -141,7 +199,7 @@ pub fn spawn_special_trigger_handler(
                         OR (tn.direction = 'in'  AND p.direction = 'dest')
                         OR (tn.direction = 'out' AND p.direction = 'orig')
                    )
-                 ORDER BY t.packet_id, tn.id, t.timestamp ASC"
+                 ORDER BY t.packet_id, tn.id, t.timestamp, t.id ASC"
             )
             .bind(last_check_id)
             .fetch_all(&pool)
@@ -154,15 +212,25 @@ pub fn spawn_special_trigger_handler(
             };
 
             if !triggers.is_empty() {
+                // Cursor is by packet_id, so multiple rows per packet do not
+                // affect it: all rows of a packet share t.packet_id and the
+                // cursor simply advances to the highest packet seen.
                 last_check_id = triggers.iter().map(|t| t.0).max().unwrap_or(last_check_id);
 
-                for (packet_id, start_idx, end_idx, _tag_id, tag_name, special_type, stream_id) in &triggers {
+                // Preserve one alert per (packet, tag) — the removed
+                // DISTINCT ON used to collapse these; duplicate alert
+                // broadcasts for extra matches carry no extra info.
+                let mut alerted: HashSet<(i32, i32)> = HashSet::new();
+
+                for (packet_id, start_idx, end_idx, tag_id, tag_name, special_type, stream_id) in &triggers {
                     match special_type.as_str() {
                         "flag" => {
                             handle_flag(&pool, *packet_id, *start_idx, *end_idx, tag_name, *stream_id, &team_cache, &flag_queue).await;
                         }
                         "alert" => {
-                            handle_alert(&broadcaster, *packet_id, *stream_id, tag_name);
+                            if alerted.insert((*packet_id, *tag_id)) {
+                                handle_alert(&broadcaster, *packet_id, *stream_id, tag_name);
+                            }
                         }
                         _ => {}
                     }
@@ -227,8 +295,8 @@ async fn resolve_team(
     // Try cache first
     {
         let c = cache.read().await;
-        if let Some(name) = c.map.get(ip) {
-            return name.clone();
+        if let Some(name) = match_team(&c.map.exact, &c.map.nets, ip) {
+            return name;
         }
         if !c.is_stale() {
             return ip.to_string();
@@ -237,7 +305,7 @@ async fn resolve_team(
 
     // Cache miss or stale — refresh from farm
     if let Some(new_map) = fetch_team_map(farm_url, farm_password).await {
-        let resolved = new_map.get(ip).cloned();
+        let resolved = match_team(&new_map.exact, &new_map.nets, ip);
         let mut c = cache.write().await;
         c.map = new_map;
         c.last_refresh = std::time::Instant::now();
@@ -289,9 +357,28 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
         }
     }
 
-    // Resolve team: stream src_ip → team name via farm config
-    let src_ip = match sqlx::query_scalar::<_, String>(
-        "SELECT src_ip::text FROM stream WHERE id = $1"
+    // Resolve team: remote endpoint of the packet's stream → team name via
+    // farm config.
+    //
+    // Direction→column evidence (from the traffic-analyzer source):
+    // - `find_stream_id` (traffic-analyzer/src/process_packet.rs) NORMALIZES
+    //   every stream to (src = local service machine, dst = remote peer):
+    //   Outbound keeps the packet's (src→stream.src, dst→stream.dst), while
+    //   Inbound swaps them. In BOTH cases stream.src_ip is the analyzed
+    //   machine and stream.dst_ip is the other side — request and response
+    //   of one connection share a single normalized stream row.
+    // - `insert_packet` (traffic-analyzer/src/db.rs) stores direction as
+    //   Inbound → 'dest', Outbound → 'orig' (see also the mapping note in
+    //   traffic-analyzer/src/filters.rs), so packets.direction only tells
+    //   which way THIS packet flowed inside an already-normalized stream.
+    // Hence the remote team's address is ALWAYS stream.dst_ip, for both
+    // 'dest' and 'orig' packets. (The previous `src_ip::text` picked the
+    // local machine for every inbound flag — i.e. most of them — so teams
+    // never matched and the raw netmask-suffixed string was submitted.)
+    // host() renders the inet as a bare address (no "/32" suffix), keeping
+    // the fallback team string farm-parseable.
+    let remote_ip = match sqlx::query_scalar::<_, String>(
+        "SELECT host(dst_ip) FROM stream WHERE id = $1"
     )
     .bind(stream_id)
     .fetch_optional(pool)
@@ -300,7 +387,7 @@ async fn handle_flag(pool: &PgPool, packet_id: i32, start_idx: i32, end_idx: i32
         _ => "unknown".to_string(),
     };
 
-    let team = resolve_team(&src_ip, &farm_url, &farm_password, team_cache).await;
+    let team = resolve_team(&remote_ip, &farm_url, &farm_password, team_cache).await;
 
     info!("Submitting flag to farm: '{}' team={} (tag={}, packet={})", matched, team, tag_name, packet_id);
 
@@ -363,5 +450,92 @@ fn handle_alert(
     match broadcaster.send(alert_event.to_string()) {
         Ok(_) => debug!("Alert sent for tag '{}' packet {}", tag_name, packet_id),
         Err(_) => debug!("No WebSocket clients for alert"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_map() -> (HashMap<String, String>, Vec<(IpNetwork, String)>) {
+        let mut exact = HashMap::new();
+        exact.insert("10.10.1.5".to_string(), "TeamA".to_string());
+        exact.insert("10.10.1.6".to_string(), "TeamB".to_string());
+        let nets = vec![
+            ("10.10.4.0/24".parse().unwrap(), "TeamC".to_string()),
+            ("10.10.0.0/16".parse().unwrap(), "TeamD".to_string()),
+            ("10.10.5.7/32".parse().unwrap(), "TeamE".to_string()),
+            ("2001:db8::/64".parse().unwrap(), "TeamV6".to_string()),
+        ];
+        (exact, nets)
+    }
+
+    #[test]
+    fn exact_host_match_takes_precedence() {
+        let (exact, nets) = sample_map();
+        assert_eq!(
+            match_team(&exact, &nets, "10.10.1.5"),
+            Some("TeamA".to_string())
+        );
+    }
+
+    #[test]
+    fn network_containment_matches_inside_subnet() {
+        let (exact, nets) = sample_map();
+        // The /24 is more specific than the covering /16 and wins.
+        assert_eq!(
+            match_team(&exact, &nets, "10.10.4.57"),
+            Some("TeamC".to_string())
+        );
+        // Only the /16 covers this one.
+        assert_eq!(
+            match_team(&exact, &nets, "10.10.200.1"),
+            Some("TeamD".to_string())
+        );
+        // Outside every network.
+        assert_eq!(match_team(&exact, &nets, "10.11.0.1"), None);
+    }
+
+    #[test]
+    fn teams_value_with_netmask_suffix_still_matches_host() {
+        // A farm configured with "10.10.5.7/32" instead of "10.10.5.7"
+        // must still resolve the bare host IP (containment of a /32),
+        // preferring the /32 over the covering /16.
+        let (exact, nets) = sample_map();
+        assert_eq!(
+            match_team(&exact, &nets, "10.10.5.7"),
+            Some("TeamE".to_string())
+        );
+        // Neighbor address: /32 does not apply, covering /16 does.
+        assert_eq!(
+            match_team(&exact, &nets, "10.10.5.8"),
+            Some("TeamD".to_string())
+        );
+    }
+
+    #[test]
+    fn ipv6_network_matches_v6_host() {
+        let (exact, nets) = sample_map();
+        assert_eq!(
+            match_team(&exact, &nets, "2001:db8::1"),
+            Some("TeamV6".to_string())
+        );
+    }
+
+    #[test]
+    fn address_family_mismatch_is_no_match_not_panic() {
+        let (exact, nets) = sample_map();
+        // v4 host against only v6 nets (v4 exact entries absent).
+        let (empty_exact, v6_only): (HashMap<String, String>, Vec<(IpNetwork, String)>) =
+            (HashMap::new(), vec![("2001:db8::/64".parse().unwrap(), "TeamV6".to_string())]);
+        assert_eq!(match_team(&empty_exact, &v6_only, "10.10.4.57"), None);
+        assert_eq!(match_team(&exact, &nets, "2001:db8::1"), Some("TeamV6".to_string()));
+    }
+
+    #[test]
+    fn invalid_ip_string_returns_none() {
+        let (exact, nets) = sample_map();
+        assert_eq!(match_team(&exact, &nets, "not-an-ip"), None);
+        assert_eq!(match_team(&exact, &nets, ""), None);
     }
 }
