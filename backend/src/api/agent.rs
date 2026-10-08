@@ -218,12 +218,20 @@ pub async fn sync_agent_ports(agent_id: &str, pool: &sqlx::PgPool, agent_svc: &A
 
 /// Bind all services to an agent (for new agents)
 pub async fn bind_all_services_to_agent(agent_id: &str, pool: &sqlx::PgPool) {
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO agent_service (agent_id, service_id)
          SELECT $1, id FROM service
          ON CONFLICT DO NOTHING"
     )
     .bind(agent_id)
     .execute(pool)
-    .await;
+    .await
+    {
+        // A failed binding means the agent sniffs none of the services —
+        // the operator must see it, not wonder why there is no traffic.
+        log::error!(
+            "Failed to bind services to agent '{}': {} — agent will not sniff any services until rebound",
+            agent_id, e
+        );
+    }
 }
