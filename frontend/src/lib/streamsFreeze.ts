@@ -42,9 +42,10 @@ export type FreezeAction<T extends { id: number }> =
     /** loadMore result: append below the snapshot. */
     | { type: 'append'; items: T[]; maxVisible: number }
     /** Local edit of one visible stream (favorite toggle). */
-    | { type: 'update_stream'; id: number; updater: (_s: T) => T }
-    /** Plaque click: unfreeze on next refetch, scroll top. */
-    | { type: 'accept' }
+    | { type: 'update_stream'; id: number; updater: (stream: T) => T }
+    /** Unfreeze on next refetch; scroll to top unless `scroll` is false
+     * (auto-apply from Live mode must not yank the scroll position). */
+    | { type: 'accept'; scroll?: boolean }
     /** Clear all (filter reset). */
     | { type: 'reset' };
 
@@ -158,13 +159,14 @@ export function freezeReducer<T extends { id: number }>(
         }
 
         case 'accept':
-            // Always arm the wholesale apply: beyond the plaque click this
-            // is also the "catch me up" gesture used by manual refreshes.
+            // Arm the wholesale apply. Manual apply (Update) also scrolls to
+            // top; Live's auto-apply passes scroll:false — yanking the user's
+            // scroll position every batch is exactly the jerk to avoid.
             return {
                 ...state,
                 pendingNewIds: [],
                 awaitingAccept: true,
-                scrollToken: state.scrollToken + 1,
+                scrollToken: action.scroll === false ? state.scrollToken : state.scrollToken + 1,
             };
 
         case 'reset':

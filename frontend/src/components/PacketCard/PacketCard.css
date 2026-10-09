@@ -111,7 +111,6 @@
 .packet-body {
     margin: 0;
     padding: 10px;
-    padding-right: 60px;
     background-color: var(--re-bg-deep);
     color: #e0e0e0;
     border-radius: 4px;
@@ -127,11 +126,10 @@
 }
 
 .packet-btn-group {
-    position: absolute;
-    top: 8px;
-    right: 8px;
     display: flex;
+    justify-content: flex-end;
     gap: 4px;
+    margin-top: 6px;
 }
 
 .copy-btn, .block-btn, .diff-select-btn {

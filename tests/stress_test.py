@@ -26,7 +26,7 @@ import struct
 import sys
 import threading
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -48,6 +48,8 @@ class Metrics:
         self.http_errors = 0
         self.tcp_sent = 0
         self.tcp_errors = 0
+        self.http_error_types = Counter()
+        self.tcp_error_types = Counter()
         self.api_latencies = []
         self.snapshots = []  # periodic snapshots
 
@@ -113,12 +115,13 @@ USER_AGENTS = [
 
 
 def random_flag():
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=31)) + "="
+    return "FLAG-" + "".join(random.choices("0123456789abcdef", k=32))
 
 
 def gen_http_request(base_url):
     """Generate a random HTTP request."""
     path = random.choice(PATHS)
+    url_path = path
     method = random.choice(["GET", "GET", "GET", "POST", "PUT"])
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -130,30 +133,52 @@ def gen_http_request(base_url):
     if random.random() < 0.1:
         headers["X-Attack"] = random.choice(EXPLOIT_PATTERNS)
 
-    # Sometimes add flag in response (simulated via header)
-    if random.random() < 0.05:
+    # Simulated flag theft: leak a flag in a header, path or body
+    if random.random() < 0.20:
         headers["X-Flag"] = random_flag()
+    if path.startswith("/api/flag") and random.random() < 0.30:
+        url_path = f"{path}?flag={random_flag()}"
 
     body = None
     if method in ("POST", "PUT"):
-        body = json.dumps({
+        payload = {
             "action": random.choice(["login", "submit", "query", "update"]),
             "data": "".join(random.choices(string.ascii_letters, k=random.randint(10, 500))),
-        })
+        }
+        if random.random() < 0.30:
+            payload["flag"] = random_flag()
+        body = json.dumps(payload)
 
-    return method, f"{base_url}{path}", headers, body
+    return method, f"{base_url}{url_path}", headers, body
+
+
+_tls = threading.local()
+
+
+def _session() -> requests.Session:
+    """Per-thread keep-alive session: a fresh connection per request caps a
+    generator thread at a few hundred RPS and melts the target's accept
+    queue; keep-alive is the only way to actually reach multi-k RPS."""
+    s = getattr(_tls, "s", None)
+    if s is None:
+        s = requests.Session()
+        _tls.s = s
+    return s
 
 
 def send_http(base_url, metrics):
     """Send one HTTP request."""
     method, url, headers, body = gen_http_request(base_url)
     try:
+        sess = _session()
         if method == "GET":
-            requests.get(url, headers=headers, timeout=5)
+            sess.get(url, headers=headers, timeout=5)
         else:
-            requests.request(method, url, headers=headers, data=body, timeout=5)
+            sess.request(method, url, headers=headers, data=body, timeout=5)
         metrics.inc_http()
-    except:
+    except Exception as e:
+        with metrics.lock:
+            metrics.http_error_types[type(e).__name__] += 1
         metrics.inc_http(error=True)
 
 
@@ -165,7 +190,12 @@ def send_tcp(host, port, metrics):
         s.connect((host, port))
         # Random binary payload
         size = random.randint(16, 512)
-        payload = os.urandom(size)
+        payload = bytearray(os.urandom(size))
+        if random.random() < 0.20:
+            flag = random_flag().encode()
+            off = random.randint(0, max(0, size - len(flag)))
+            payload[off:off + len(flag)] = flag
+        payload = bytes(payload)
         s.send(struct.pack("<4sI", b"DATA", size) + payload)
         try:
             s.recv(4096)
@@ -173,7 +203,9 @@ def send_tcp(host, port, metrics):
             pass
         s.close()
         metrics.inc_tcp()
-    except:
+    except Exception as e:
+        with metrics.lock:
+            metrics.tcp_error_types[type(e).__name__] += 1
         metrics.inc_tcp(error=True)
 
 
@@ -256,6 +288,8 @@ def main():
     parser.add_argument("--monitor-interval", type=int, default=30,
                         help="Monitoring interval in seconds")
     parser.add_argument("--spawn-targets", action="store_true")
+    parser.add_argument("--no-monitor", action="store_true",
+                        help="Skip the API monitor (pure load generator; the backend is localhost-bound, so remote hosts use this)")
     parser.add_argument("--output", default=None,
                         help="Save results to JSON file")
     args = parser.parse_args()
@@ -295,13 +329,15 @@ def main():
 
     metrics = Metrics()
 
-    # Start monitor in background
-    monitor = threading.Thread(
-        target=monitor_loop,
-        args=(args.api_url, args.password, metrics, args.monitor_interval),
-        daemon=True,
-    )
-    monitor.start()
+    # Start monitor in background (skippable: pure-load instances on hosts
+    # that cannot reach the localhost-bound backend API)
+    if not args.no_monitor:
+        monitor = threading.Thread(
+            target=monitor_loop,
+            args=(args.api_url, args.password, metrics, args.monitor_interval),
+            daemon=True,
+        )
+        monitor.start()
 
     # Main load loop
     http_base = f"http://{args.target_host}:{args.http_port}"
@@ -388,11 +424,17 @@ def main():
                 "totals": {
                     "http_sent": metrics.http_sent,
                     "http_errors": metrics.http_errors,
+                    "http_error_types": dict(metrics.http_error_types),
                     "tcp_sent": metrics.tcp_sent,
                     "tcp_errors": metrics.tcp_errors,
+                    "tcp_error_types": dict(metrics.tcp_error_types),
                 },
                 "snapshots": metrics.snapshots,
             }, f, indent=2)
+        http_types = dict(metrics.http_error_types)
+        tcp_types = dict(metrics.tcp_error_types)
+        print(f"\n  HTTP error types: {http_types}")
+        print(f"  TCP error types:  {tcp_types}")
         print(f"\n  Results saved to {args.output}")
 
     # Cleanup

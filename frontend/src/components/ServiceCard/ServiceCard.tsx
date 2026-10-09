@@ -17,7 +17,6 @@ export const ServiceCard = ({service, onTagClick}) => {
         }
         onTagClick(e);
     };
-    console.log(service)
     return (
         <div className="service-card d-inline-block" onClick={clickHandler} data-service={service.id}>
             {service.name}

@@ -83,12 +83,14 @@ export function usePackets(streamsArray: any[], servicesArray: any[]) {
         }
     }, [selectedStreamIds, loadPacketsForStream]);
 
-    // Load multiple streams at once (for shared URLs)
+    // Load multiple streams at once (for shared URLs and periodic refreshes).
+    // Deliberately does NOT touch mergeOverride: this runs from the Live
+    // batch timer, and resetting the user's merge toggle every few seconds
+    // made it look like merge "turns itself off".
     const loadMultipleStreams = useCallback(async (ids: number[]) => {
         if (ids.length === 0) return;
         const limited = ids.slice(0, MAX_SELECTED_STREAMS);
         setSelectedStreamIds(limited);
-        setMergeOverride(null);
         const results: Record<number, any[]> = {};
         await Promise.all(limited.map(async (id) => {
             results[id] = await loadPacketsForStream(id);

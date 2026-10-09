@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { queryClient } from '../../lib/queryClient';
 import { apiFetch } from '../../lib/api';
 import { useHttpMessages } from '../../lib/useHttpMessages';
@@ -131,11 +132,21 @@ function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuic
     };
 
     const handleContextMenu = (e: React.MouseEvent) => {
-        if (selMin !== null && selMax !== null && selMax >= selMin) {
-            e.preventDefault();
-            e.stopPropagation();
-            setCtxMenu({ x: e.clientX, y: e.clientY });
+        // Always swallow the native menu — ours or nothing. Without this a
+        // click with no selection fell through to the browser menu, which
+        // looked like "right-click is broken".
+        e.preventDefault();
+        e.stopPropagation();
+        // No selection yet: select the byte under the cursor (data-idx beats
+        // hover state — it is deterministic) so the menu opens immediately.
+        if (selMin === null || selMax === null) {
+            const idxAttr = (e.target as HTMLElement).closest('[data-idx]')?.getAttribute('data-idx');
+            const idx = idxAttr !== undefined && idxAttr !== null ? parseInt(idxAttr, 10) : (hoverIdx !== null ? hoverIdx : NaN);
+            if (Number.isNaN(idx)) return;
+            setSelStart(idx);
+            setSelEnd(idx);
         }
+        setCtxMenu({ x: e.clientX, y: e.clientY });
     };
 
     const rows: JSX.Element[] = [];
@@ -153,7 +164,7 @@ function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuic
                 const ch = b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.';
 
                 hexCells.push(
-                    <span key={idx}
+                    <span key={idx} data-idx={idx}
                         className={`hx-byte ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''}`}
                         onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx, e); }}
                         onMouseEnter={() => handleMouseEnter(idx)}
@@ -161,7 +172,7 @@ function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuic
                     >{b.toString(16).padStart(2, '0')}</span>
                 );
                 asciiCells.push(
-                    <span key={idx}
+                    <span key={idx} data-idx={idx}
                         className={`hx-ascii-char ${hover ? 'hx-hover' : ''} ${sel ? 'hx-selected' : ''} ${b < 0x20 || b > 0x7e ? 'hx-nonprint' : ''}`}
                         onMouseDown={(e) => { e.preventDefault(); handleMouseDown(idx, e); }}
                         onMouseEnter={() => handleMouseEnter(idx)}
@@ -192,26 +203,41 @@ function InteractiveHexDump({ bytes, onQuickBlock }: { bytes: Uint8Array; onQuic
             onContextMenu={handleContextMenu}
         >
             {rows}
-            {ctxMenu && (
-                <>
-                    <div className="hx-ctx-overlay" onClick={() => setCtxMenu(null)} />
-                    <div className="hx-ctx-menu" style={{ top: ctxMenu.y, left: ctxMenu.x }}>
-                        <div className="hx-ctx-header">{(selMax! - selMin! + 1)} bytes selected</div>
-                        <button onClick={() => copyAs('hex')}>Copy as Hex</button>
-                        <button onClick={() => copyAs('ascii')}>Copy as ASCII</button>
-                        <button onClick={() => copyAs('python')}>Copy as Python</button>
-                        <button onClick={() => copyAs('carray')}>Copy as C array</button>
-                        {onQuickBlock && (
-                            <button className="hx-ctx-block" onClick={() => {
-                                const sel = getSelectedBytes();
-                                const hex = Array.from(sel).map(b => b.toString(16).padStart(2, '0')).join('');
-                                onQuickBlock(hex);
-                                setCtxMenu(null);
-                            }}>Block pattern</button>
-                        )}
-                    </div>
-                </>
-            )}
+            {ctxMenu && (() => {
+                // Render through a portal to document.body: this card lives
+                // inside a virtualized row with a CSS transform, and for
+                // descendants of a transformed element position:fixed is
+                // relative to THAT element, not the viewport — the menu used
+                // to open hundreds of pixels away and the full-screen overlay
+                // stretched the row, spawning phantom scrollbars.
+                // Clamp to the viewport while at it.
+                const MENU_W = 176;
+                const MENU_H = 230;
+                const x = Math.max(8, Math.min(ctxMenu.x, window.innerWidth - MENU_W - 8));
+                const y = Math.max(8, Math.min(ctxMenu.y, window.innerHeight - MENU_H - 8));
+                const n = (selMax ?? 0) - (selMin ?? 0) + 1;
+                return createPortal(
+                    <>
+                        <div className="hx-ctx-overlay" onClick={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }} />
+                        <div className="hx-ctx-menu" style={{ top: y, left: x }}>
+                            <div className="hx-ctx-header">{n} byte{n === 1 ? '' : 's'} selected</div>
+                            <button onClick={() => copyAs('hex')}>Copy as Hex</button>
+                            <button onClick={() => copyAs('ascii')}>Copy as ASCII</button>
+                            <button onClick={() => copyAs('python')}>Copy as Python</button>
+                            <button onClick={() => copyAs('carray')}>Copy as C array</button>
+                            {onQuickBlock && (
+                                <button className="hx-ctx-block" onClick={() => {
+                                    const sel = getSelectedBytes();
+                                    const hex = Array.from(sel).map(b => b.toString(16).padStart(2, '0')).join('');
+                                    onQuickBlock(hex);
+                                    setCtxMenu(null);
+                                }}>Block pattern</button>
+                            )}
+                        </div>
+                    </>,
+                    document.body
+                );
+            })()}
         </div>
     );
 }

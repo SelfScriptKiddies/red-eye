@@ -90,12 +90,12 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
         queryClient.invalidateQueries({ queryKey: ['streams'] });
     }, [queryClient]);
 
-    // «⏸ N новых» click: unfreeze — the pending count clears immediately,
-    // the view scrolls to top (scrollToken) and the next refetch (forced
-    // below, even when the query is disabled by Live OFF) replaces the
-    // snapshot wholesale.
-    const acceptNew = useCallback(() => {
-        dispatch({ type: 'accept' });
+    // Unfreeze — the pending count clears immediately, the next refetch
+    // (forced below, even when the query is disabled) replaces the snapshot
+    // wholesale. `scroll=false` is used by Live's auto-apply so the batch
+    // refresh does not yank the view to the top.
+    const acceptNew = useCallback((scroll = true) => {
+        dispatch({ type: 'accept', scroll });
         setHasMoreStreams(true);
         queryClient.refetchQueries({ queryKey: ['streams'], type: 'all' });
     }, [queryClient]);

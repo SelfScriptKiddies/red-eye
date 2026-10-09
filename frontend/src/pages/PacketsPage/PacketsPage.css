@@ -40,9 +40,22 @@
     height: 50%;
 }
 .packetData {
-    overflow-y: auto;
+    /* Column layout: toolbar pinned at the top, only the packet list
+       scrolls — the old overflow-y:auto made the whole column (toolbar
+       included) scroll away under the page header. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     background-color: #212121;
     width: 50%;
+}
+.packetData .packet-toolbar {
+    flex: none;
+}
+.packets-list {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
 }
 .packetData > pre {
     width: 100%;
@@ -485,4 +498,77 @@
 .filter-or-mode .service-card.active {
     border-color: var(--re-warning) !important;
     color: var(--re-warning) !important;
+}
+
+/* ---------- live strip (histogram <-> streams list) ---------- */
+.packets-live-strip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 5px 8px;
+    margin: 6px 0;
+    border: 1px dashed var(--re-border, #333);
+    border-radius: 6px;
+    background: var(--re-bg-deep, #14141d);
+}
+.live-strip-badge {
+    display: inline-block;
+    min-width: 18px;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 9px;
+    background: var(--re-accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.4;
+    text-align: center;
+}
+
+/* ---------- stream info popover ---------- */
+.stream-info-wrap {
+    position: relative;
+    display: inline-block;
+}
+.stream-info-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+}
+.stream-info-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 1000;
+    min-width: 260px;
+    max-width: 360px;
+    background: var(--re-bg-deep, #1a1a24);
+    border: 1px solid var(--re-accent);
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.stream-info-row + .stream-info-row {
+    border-top: 1px solid var(--re-border, #333);
+    padding-top: 8px;
+}
+.stream-info-title {
+    font-size: 12px;
+    color: var(--re-text, #eee);
+    font-weight: 600;
+}
+.stream-info-addr {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: var(--re-accent);
+    margin-top: 2px;
+}
+.stream-info-meta {
+    font-size: 11px;
+    color: var(--re-text-muted, #888);
+    margin-top: 2px;
 }

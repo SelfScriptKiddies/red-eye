@@ -116,9 +116,12 @@ export function PacketsPage() {
     const [diffOpen, setDiffOpen] = useState(false);
     const [shareCopied, setShareCopied] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [streamInfoOpen, setStreamInfoOpen] = useState(false);
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-    // Live toggle (default ON). OFF fully freezes auto-updates until the user acts.
-    const [liveEnabled, setLiveEnabled] = useState(true);
+    // Live toggle (default OFF): packets refresh in 5s batches + the streams
+    // list gently catches up while the user is at its top. OFF freezes the
+    // views; whatever piles up is counted on the Update button.
+    const [liveEnabled, setLiveEnabled] = useState(false);
 
     const queryClient = useQueryClient();
 
@@ -147,7 +150,11 @@ export function PacketsPage() {
         services: streamServices,
         startTime,
         endTime,
-        enabled: live,
+        // Always enabled: the first page must load with Live OFF too, and the
+        // freeze keeps background refetches from touching the visible list —
+        // pending ids land on the Update badge instead. Live only switches
+        // on the 5s apply-batches.
+        enabled: true,
     });
 
     const {
@@ -163,16 +170,20 @@ export function PacketsPage() {
         loadMultipleStreams,
     } = usePackets(streamsArray, servicesArray);
 
-    // Live OFF stops the WS subscription; enabled:false on useStreams already
-    // halts its refetchInterval, so no auto-updates fire until the user hits Update.
-    useRealtimeUpdates(live, onActivity, selectedStreamIds);
+    // Live OFF keeps the WS subscription alive: it only feeds the freeze
+    // counter (new-streams badge on Update) and in-place count patches —
+    // the frozen list itself is never touched. Streams list refetches are
+    // what Live toggles, so nothing auto-applies until the user hits Update.
+    useRealtimeUpdates(!isRedEyeActive, onActivity, selectedStreamIds);
 
-    // One-shot manual refresh: pull newest streams + currently visible packets.
+    // One-shot manual refresh: apply the pending «N новых», pull newest
+    // streams + currently visible packets.
     const handleManualUpdate = useCallback(() => {
+        acceptNew();
         queryClient.invalidateQueries({ queryKey: ['streams'] });
         selectedStreamIds.forEach(id => queryClient.invalidateQueries({ queryKey: ['packets', id] }));
         if (selectedStreamIds.length > 0) loadMultipleStreams(selectedStreamIds);
-    }, [queryClient, selectedStreamIds, loadMultipleStreams]);
+    }, [queryClient, acceptNew, selectedStreamIds, loadMultipleStreams]);
 
     const getServices = async () => {
         if (servicesLoaded) return;
@@ -424,6 +435,37 @@ export function PacketsPage() {
         streamsListRef.current?.scrollToRow({ index: 0, align: 'start', behavior: 'auto' });
     }, [scrollToken, streamsListRef]);
 
+    // ---- Live follow (batched) ----
+    // One batch every 5s: reload the selected streams' packets (scrolling to
+    // the newest row only when the user is already near the bottom) and
+    // gently apply accumulated new streams when the list is at its top —
+    // instead of reacting to every WS activity flush.
+    const packetsListRef = useListRef();
+    useEffect(() => {
+        if (!liveEnabled || selectedStreamIds.length === 0) return;
+        const timer = setInterval(() => {
+            loadMultipleStreams(selectedStreamIds);
+            const streamsEl = streamsListRef.current?.element;
+            if (streamsEl && streamsEl.scrollTop < 40) {
+                acceptNew(false);
+            }
+        }, 5000);
+        return () => clearInterval(timer);
+    }, [liveEnabled, selectedStreamIds, loadMultipleStreams, acceptNew, streamsListRef]);
+
+    const lastPacketCountRef = useRef(0);
+    useEffect(() => {
+        const grew = mergedPackets.length > lastPacketCountRef.current;
+        lastPacketCountRef.current = mergedPackets.length;
+        if (!liveEnabled || !grew || mergedPackets.length === 0) return;
+        // Follow the tail only when the user is already near the bottom —
+        // jumping to the newest row while someone reads an old packet is
+        // exactly the jerkiness live mode must not have.
+        const el = packetsListRef.current?.element;
+        if (el && el.scrollHeight - el.scrollTop - el.clientHeight > 80) return;
+        packetsListRef.current?.scrollToRow({ index: mergedPackets.length - 1, align: 'end', behavior: 'auto' });
+    }, [mergedPackets.length, liveEnabled, packetsListRef]);
+
     // Share: copy link + auto-favorite all selected
     const shareStream = async () => {
         if (selectedStreamIds.length === 0) return;
@@ -442,6 +484,15 @@ export function PacketsPage() {
     };
 
     // Export generators
+    // Stream src/dst ips come CIDR-styled from the API; the service port is
+    // the ORIGINAL port the service listens on (taken from its service row).
+    const stripCidr = (ip?: string): string => (ip ?? '').replace(/\/\d+$/, '');
+    const servicePortFor = (streamId: number): number | undefined => {
+        const st = streamsArray.find((s: any) => s.id === streamId);
+        const svc = servicesArray.find((s: any) => s.id === st?.service_id);
+        return svc?.port;
+    };
+
     const exportPwntools = (): string => {
         if (!packetData || packetData.length === 0) return '';
         const lines = [`from pwn import *\n`];
@@ -449,7 +500,10 @@ export function PacketsPage() {
         if (isMultiSelect) {
             // Create a remote per stream
             for (const sid of selectedStreamIds) {
-                lines.push(`r_${sid} = remote('TARGET_IP', '????')  # stream #${sid}`);
+                const st = streamsArray.find((s: any) => s.id === sid);
+                const port = servicePortFor(sid);
+                const portArg = port !== undefined ? String(port) : "'PORT'";
+                lines.push(`r_${sid} = remote('TARGET_IP', ${portArg})  # ${st?.service_name ?? `stream #${sid}`}: ${stripCidr(st?.src_ip)} -> ${stripCidr(st?.dst_ip)}`);
             }
             lines.push('');
             for (const pkt of packetData) {
@@ -468,7 +522,11 @@ export function PacketsPage() {
                 }
             }
         } else {
-            lines.push(`r = remote('TARGET_IP', '????')\n`);
+            const sid = selectedStreamIds[0];
+            const st = streamsArray.find((s: any) => s.id === sid);
+            const port = servicePortFor(sid);
+            const portArg = port !== undefined ? String(port) : "'PORT'";
+            lines.push(`r = remote('TARGET_IP', ${portArg})  # ${st?.service_name ?? ''}: ${stripCidr(st?.src_ip)} -> ${stripCidr(st?.dst_ip)}\n`);
             for (const pkt of packetData) {
                 const raw = atob(pkt.packet_data);
                 const pyBytes = Array.from(raw).map((c: string) => {
@@ -489,7 +547,9 @@ export function PacketsPage() {
 
     const exportRequests = (): string => {
         if (!packetData || packetData.length === 0) return '';
-        const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:PORT'\n`];
+        const port = servicePortFor(selectedStreamIds[0]);
+        const basePort = port !== undefined ? String(port) : 'PORT';
+        const lines = [`import requests\n`, `s = requests.Session()`, `BASE = 'http://TARGET_IP:${basePort}'\n`];
         let reqIdx = 0;
         for (const pkt of mergedPackets) {
             if (pkt.direction !== 'dest') continue;
@@ -545,6 +605,8 @@ export function PacketsPage() {
 
     const exportCurl = (): string => {
         if (!packetData || packetData.length === 0) return '';
+        const curlPort = servicePortFor(selectedStreamIds[0]);
+        const curlPortStr = curlPort !== undefined ? String(curlPort) : 'PORT';
         const lines = ['#!/bin/bash\n'];
         for (const pkt of mergedPackets) {
             if (pkt.direction !== 'dest') continue;
@@ -559,7 +621,7 @@ export function PacketsPage() {
             // URL, headers and body all contain attacker-controlled packet
             // data — every interpolation goes through shq() so a payload like
             // `'; rm -rf /; '` or `$(reboot)` stays literal shell text.
-            const parts = [`curl -s -X ${method} ${shq(`http://TARGET_IP:PORT${path}`)}`];
+            const parts = [`curl -s -X ${method} ${shq(`http://TARGET_IP:${curlPortStr}${path}`)}`];
             for (const line of headerLines) {
                 const idx = line.indexOf(':');
                 if (idx > 0) {
@@ -645,6 +707,24 @@ export function PacketsPage() {
                     onClear={clearTimeSelection}
                     clearRef={timelineClearRef}
                 />
+                {/* Live controls: between the histogram and the streams list.
+                    Live = batched auto-follow; Update applies what piled up
+                    while Live was off (badge shows how much). */}
+                <div className="packets-live-strip">
+                    <button
+                        className={`merge-toggle-btn ${liveEnabled ? 'active' : ''}`}
+                        onClick={() => setLiveEnabled(prev => !prev)}
+                        title={liveEnabled ? 'Автообновление включено: стримы и пакеты обновляются пачками' : 'Автообновление выключено — нажмите Update, чтобы применить накопленное'}
+                    >
+                        {liveEnabled ? '● Live' : '○ Live'}
+                    </button>
+                    <button className="toolbar-btn" onClick={handleManualUpdate} title="Обновить вручную (применить накопленное)">
+                        ⟳ Update
+                        {!liveEnabled && newStreamsCount > 0 && (
+                            <span className="live-strip-badge">{newStreamsCount}</span>
+                        )}
+                    </button>
+                </div>
                 {/* Filter indicator — above scroll area */}
                 {(usedTags.length > 0 || usedServices.length > 0 || headerFilters.length > 0 || startTime != null || showFavoritesOnly) && (
                     <div className="filter-indicator">
@@ -672,15 +752,9 @@ export function PacketsPage() {
                         )}
                     </div>
                 )}
-                {/* «⏸ N новых»: while Live is on, background refetches and WS
-                    activity do NOT touch the frozen list below — new streams
-                    accumulate here instead. Clicking unfreezes: refetch,
-                    replace the view, scroll to top. */}
-                {newStreamsCount > 0 && (
-                    <button className="new-streams-plaque" onClick={acceptNew}>
-                        ⏸ {newStreamsCount} новых
-                    </button>
-                )}
+                {/* No «⏸ N новых» plaque: with Live ON the 5s batch applies
+                    pending streams gently (when the list is at top); with
+                    Live OFF the same count lives on the Update badge. */}
                 <div id="streams" className="streams">
                     {filteredStreams.length > 0 ? (
                         <VirtualList
@@ -714,16 +788,35 @@ export function PacketsPage() {
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
                         <div className="toolbar-left">
-                            <button
-                                className={`merge-toggle-btn ${liveEnabled ? 'active' : ''}`}
-                                onClick={() => setLiveEnabled(prev => !prev)}
-                                title={liveEnabled ? 'Автообновление включено — нажмите, чтобы заморозить' : 'Автообновление выключено — нажмите, чтобы возобновить'}
-                            >
-                                {liveEnabled ? 'Live вкл' : 'Live выкл'}
-                            </button>
-                            <button className="toolbar-btn" onClick={handleManualUpdate} title="Обновить вручную">
-                                Update
-                            </button>
+                            <div className="stream-info-wrap">
+                                <button
+                                    className="toolbar-btn"
+                                    onClick={() => setStreamInfoOpen(v => !v)}
+                                    title="Информация о выбранных стримах (src/dst, порт сервиса)"
+                                >
+                                    ⓘ Info
+                                </button>
+                                {streamInfoOpen && (
+                                    <>
+                                        <div className="stream-info-backdrop" onClick={() => setStreamInfoOpen(false)} />
+                                        <div className="stream-info-popover">
+                                            {selectedStreamIds.map(id => {
+                                                const st = streamsArray.find((s: any) => s.id === id);
+                                                const svc = servicesArray.find((s: any) => s.id === st?.service_id);
+                                                return (
+                                                    <div key={id} className="stream-info-row">
+                                                        <div className="stream-info-title">{st?.service_name ?? 'stream'} #{id} · порт {svc?.port ?? '—'}</div>
+                                                        <div className="stream-info-addr">{stripCidr(st?.src_ip)} → {stripCidr(st?.dst_ip)}</div>
+                                                        <div className="stream-info-meta">
+                                                            {st?.l7_protocol ?? ''} · {st?.packet_count ?? 0} pkt
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
                             {isMultiSelect && (
                                 <span style={{ fontSize: '11px', color: 'var(--re-text-muted)', marginRight: '4px' }}>{selectedStreamIds.length} streams</span>
                             )}
@@ -767,15 +860,18 @@ export function PacketsPage() {
                         </div>
                     </div>
                 )}
-                {mergedPackets.length > 0 && (
-                    <VirtualList
-                        rowComponent={PacketRow}
-                        rowCount={mergedPackets.length}
-                        rowHeight={packetRowHeight}
-                        rowProps={packetRowProps}
-                        defaultHeight={400}
-                    />
-                )}
+                <div className="packets-list">
+                    {mergedPackets.length > 0 && (
+                        <VirtualList
+                            listRef={packetsListRef}
+                            rowComponent={PacketRow}
+                            rowCount={mergedPackets.length}
+                            rowHeight={packetRowHeight}
+                            rowProps={packetRowProps}
+                            defaultHeight={400}
+                        />
+                    )}
+                </div>
             </div>
 
             {diffOpen && diffLeft && diffRight && (

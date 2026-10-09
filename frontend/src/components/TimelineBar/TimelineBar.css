@@ -160,3 +160,48 @@
 .timeline-bar-expand-btn button:hover {
     color: var(--re-accent);
 }
+
+/* ---------- hover tooltip ---------- */
+.timeline-bar-tooltip {
+    position: fixed;
+    z-index: 1200;
+    min-width: 160px;
+    max-width: 220px;
+    background: var(--re-bg-deep, #1a1a24);
+    border: 1px solid var(--re-accent);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--re-text-secondary, #ccc);
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+.timeline-bar-tooltip-time {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    color: var(--re-text, #eee);
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--re-border, #333);
+    padding-bottom: 4px;
+}
+.timeline-bar-tooltip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 0;
+}
+.timeline-bar-tooltip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    flex: none;
+}
+.timeline-bar-tooltip-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.timeline-bar-tooltip-count {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    color: var(--re-text, #eee);
+}

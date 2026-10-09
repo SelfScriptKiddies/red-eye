@@ -108,10 +108,15 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
         const bucketSecs = 60;
         const barWidthPct = Math.min(MAX_BAR_WIDTH_PCT, Math.max(0.5, (bucketSecs / viewWindow) * 100 * 0.8));
         const bars: { x: number; y: number; height: number; color: string }[] = [];
+        // Per-bucket service breakdown for the hover tooltip.
+        const serviceNames = new Map<number, string>();
+        for (const d of data) serviceNames.set(d.service_id, d.service_name);
+        const tooltipBuckets = new Map<number, { name: string; count: number; color: string }[]>();
 
         for (const ts of timestamps) {
             const centerX = ((ts - viewLeft) / viewWindow) * 100;
             let bottom = 0;
+            const tooltipEntries: { name: string; count: number; color: string }[] = [];
 
             for (let si = 0; si < serviceIds.length; si++) {
                 const sid = serviceIds[si];
@@ -124,7 +129,9 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
 
                 bars.push({ x: centerX - barWidthPct / 2, y, height: barHeight, color });
                 bottom += barHeight;
+                tooltipEntries.push({ name: serviceNames.get(sid) ?? `service ${sid}`, count, color });
             }
+            if (tooltipEntries.length > 0) tooltipBuckets.set(ts, tooltipEntries);
         }
 
         // Time axis ticks
@@ -136,7 +143,7 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
             ticks.push({ time: t, pct: (i / tickCount) * 100 });
         }
 
-        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow };
+        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow, tooltipBuckets };
     }, [data, viewOffset]);
 
     // Pan buttons — shift viewport by 5 minutes
@@ -191,6 +198,26 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
         if (!chartData) return 0;
         return chartData.viewLeft + (pct / 100) * chartData.viewWindow;
     }, [chartData]);
+
+    // Hover tooltip: nearest bucket under the cursor + its per-service counts
+    const [hover, setHover] = useState<{ x: number; y: number; ts: number } | null>(null);
+
+    const handleChartMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        if (!chartData || chartData.tooltipBuckets.size === 0) { setHover(null); return; }
+        const time = pctToTime(pxToPct(e.clientX));
+        let bestTs: number | null = null;
+        let bestDist = Infinity;
+        for (const ts of chartData.tooltipBuckets.keys()) {
+            const d = Math.abs(ts + 30 - time); // bucket covers [ts, ts+60)
+            if (d < bestDist) { bestDist = d; bestTs = ts; }
+        }
+        if (bestTs === null || bestDist > 90) { setHover(null); return; }
+        setHover({ x: e.clientX, y: e.clientY, ts: bestTs });
+    }, [chartData, pxToPct, pctToTime]);
+
+    const handleChartMouseLeave = useCallback(() => setHover(null), []);
+
+    const hoverEntries = hover && chartData ? chartData.tooltipBuckets.get(hover.ts) : undefined;
 
     // Fire onSelect with current selection bounds
     const fireSelect = useCallback((leftPct: number, rightPct: number) => {
@@ -318,6 +345,8 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
                     className="timeline-bar-container"
                     ref={chartRef}
                     onMouseDown={handleMouseDown}
+                    onMouseMove={handleChartMouseMove}
+                    onMouseLeave={handleChartMouseLeave}
                 >
                     <div className="timeline-bar-controls" onMouseDown={e => e.stopPropagation()}>
                         <button className="timeline-bar-scroll" onClick={scrollLeft} title="Scroll left 5 min">◀</button>
@@ -396,6 +425,27 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
                     <button onClick={toggleCollapsed}>▼ Timeline</button>
                 </div>
             )}
+
+            {hoverEntries && hover && (() => {
+                const W = 200;
+                const x = Math.max(8, Math.min(hover.x + 14, window.innerWidth - W - 8));
+                const y = Math.max(8, hover.y + 16);
+                const total = hoverEntries.reduce((s, e) => s + e.count, 0);
+                const d = new Date(hover.ts * 1000);
+                const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                return (
+                    <div className="timeline-bar-tooltip" style={{ left: x, top: y }}>
+                        <div className="timeline-bar-tooltip-time">{hhmm} · {total} pkt</div>
+                        {hoverEntries.map((e) => (
+                            <div key={e.name} className="timeline-bar-tooltip-row">
+                                <span className="timeline-bar-tooltip-dot" style={{ background: e.color }} />
+                                <span className="timeline-bar-tooltip-name">{e.name}</span>
+                                <span className="timeline-bar-tooltip-count">{e.count}</span>
+                            </div>
+                        ))}
+                    </div>
+                );
+            })()}
         </>
     );
 }
