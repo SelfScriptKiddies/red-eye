@@ -30,3 +30,7 @@ httparse = "1"
 prost = "0.13"
 prost-reflect = { version = "0.14", features = ["serde"] }
 prost-types = "0.13"
+
+[build-dependencies]
+prost-build = "0.13"
+protox = "0.7"

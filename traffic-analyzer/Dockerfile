@@ -5,7 +5,11 @@ WORKDIR /usr/src/app
 
 RUN cargo install cargo-chef --locked
 
-COPY . .
+# proto/ is the shared wire contract (symlinked into this crate as
+# ./proto); the crate itself comes in below. Copy proto/ explicitly — a
+# symlinked path cannot cross the build context boundary.
+COPY proto/ ./proto/
+COPY traffic-analyzer/ .
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -28,7 +32,8 @@ COPY --from=planner /usr/src/app/recipe.json recipe.json
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 # Copy source code and build application
-COPY . .
+COPY proto/ ./proto/
+COPY traffic-analyzer/ .
 
 RUN cargo build --target x86_64-unknown-linux-musl --release
 

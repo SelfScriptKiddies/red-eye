@@ -10,6 +10,7 @@ pub mod grpc_parser;
 pub mod proto_schema;
 pub mod batch_flusher;
 pub mod ws_aggregator;
+pub mod wire;
 use crate::configuration::init;
 use crate::filters::add_filter;
 use crate::filters::filterDTO::FilterDirection;
