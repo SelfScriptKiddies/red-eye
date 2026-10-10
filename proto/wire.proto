@@ -1,0 +1,21 @@
+// Wire contract for the agent -> analyzer raw-packet stream on NATS
+syntax = "proto3";
+
+package red_eye.wire;
+
+/// One captured ethernet frame with its capture timestamp.
+message RawPacket {
+  /// Capture time, epoch seconds
+  uint64 tv_sec = 1;
+  /// Microseconds within the second [0, 999_999]
+  uint32 tv_usec = 2;
+  /// Full ethernet frame including the 14-byte header
+  bytes ethernet_frame = 3;
+}
+
+/// Batch of packets (RawPacket is merging to batches for optimizing network)
+message PacketBatch {
+  /// Wire protocol version (for check of unsynced components)
+  uint32 version = 1;
+  repeated RawPacket packets = 2;
+}
