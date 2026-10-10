@@ -1,0 +1,10 @@
+# Root-level ignore for builds whose context is the repo root
+**/target
+**/node_modules
+agent-dist
+volume
+
+# The per-crate proto symlinks point outside the per-crate context and
+# collide with the explicitly copied real proto/ in the Dockerfiles
+traffic-analyzer/proto
+agent/proto

@@ -73,7 +73,9 @@ services:
 
   traffic-analyzer:
     build:
-      context: ./traffic-analyzer
+      # Repo root: the build needs the shared proto/
+      context: .
+      dockerfile: traffic-analyzer/Dockerfile
     restart: always
     logging:
       driver: json-file
