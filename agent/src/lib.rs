@@ -18,6 +18,7 @@ mod packet_synthesis;
 mod sniffer;
 mod tls_certs;
 mod updates;
+mod wire;
 
 use config::AgentConfig;
 use harpoon::HarpoonEngine;

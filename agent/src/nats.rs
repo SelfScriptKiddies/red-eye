@@ -3,24 +3,23 @@ use std::sync::Arc;
 
 use async_nats::{Client, ConnectOptions};
 use log::{error, warn};
+use prost::Message as _;
 use tokio::sync::mpsc;
 
 use crate::config::AgentConfig;
+use crate::wire::{PacketBatch, WireRawPacket};
 
-// WIRE FORMAT — agent → analyzer, raw packets topic (bincode, standard config):
-//   (RAW_PACKET_WIRE_VERSION: u32, Vec<RawPacket>)
-//   RawPacket = (tv_usec: i64, tv_sec: i64, ethernet_frame: Vec<u8>)
+// WIRE FORMAT - agent → analyzer, raw packets topic (protobuf):
+//   proto/wire.proto (top level of the repo, symlinked into this crate
+//   as ./proto): PacketBatch { version, repeated RawPacket packets }.
 // One NATS message carries a BATCH of packets: up to `nats_batch_size`
-// packets or `nats_batch_interval_ms` (whichever first). The envelope is
-// ALWAYS a versioned array — single packets travel as one-element Vecs;
-// there is deliberately no bare-tuple compatibility mode: agent and
-// analyzer deploy together from this repo, so a clean break is safe.
-// The decoder lives in traffic-analyzer/src/message_broker.rs and MUST
-// mirror this constant and shape.
-pub const RAW_PACKET_WIRE_VERSION: u32 = 2;
+// packets or `nats_batch_interval_ms` (whichever first); single packets
+// travel as one-element batches. The decoder lives in
+// traffic-analyzer/src/message_broker.rs and MUST mirror this constant
+// and the schema.
+pub const RAW_PACKET_WIRE_VERSION: u32 = 3;
 
-/// One raw packet queued for the batcher. Field order is part of the wire
-/// contract: (tv_usec, tv_sec, frame).
+/// One raw packet queued format: (tv_usec, tv_sec, frame).
 pub type RawPacket = (i64, i64, Vec<u8>);
 
 /// Capacity of the batching queue inside the NATS client. Bounded so a
@@ -88,7 +87,10 @@ impl NatsClient {
             Err(mpsc::error::TrySendError::Full(_)) => {
                 let dropped = self.batch_drops.fetch_add(1, Ordering::Relaxed) + 1;
                 if dropped.is_multiple_of(1000) {
-                    warn!("NATS packet batching queue full, packets dropped so far: {}", dropped);
+                    warn!(
+                        "NATS packet batching queue full, packets dropped so far: {}",
+                        dropped
+                    );
                 }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -123,10 +125,18 @@ impl NatsClient {
 /// Encode the versioned batch envelope (see RAW_PACKET_WIRE_VERSION).
 /// Public for tests; the wire contract is mirrored in the analyzer.
 pub fn encode_packet_batch(packets: Vec<RawPacket>) -> anyhow::Result<Vec<u8>> {
-    Ok(bincode::encode_to_vec(
-        (RAW_PACKET_WIRE_VERSION, packets),
-        bincode::config::standard(),
-    )?)
+    let batch = PacketBatch {
+        version: RAW_PACKET_WIRE_VERSION,
+        packets: packets
+            .into_iter()
+            .map(|(tv_usec, tv_sec, ethernet_frame)| WireRawPacket {
+                tv_sec: tv_sec as u64,
+                tv_usec: tv_usec as u32,
+                ethernet_frame,
+            })
+            .collect(),
+    };
+    Ok(batch.encode_to_vec())
 }
 
 /// The batcher: collects packets and publishes one NATS message per batch
@@ -200,7 +210,10 @@ async fn publish_batch(
         }
     };
     if let Err(e) = client.publish(topic.to_string(), payload.into()).await {
-        error!("Failed to send packet batch ({} packets) to NATS: {}", count, e);
+        error!(
+            "Failed to send packet batch ({} packets) to NATS: {}",
+            count, e
+        );
     }
 }
 
@@ -211,32 +224,34 @@ mod tests {
 
     #[test]
     fn envelope_roundtrip_matches_analyzer_decoder_shape() {
-        // Encode here, decode with the SAME shape the analyzer uses
-        // (u32 version, Vec<RawPacket>) — a regression in either side's
-        // tuple order or version breaks this test.
+        // Encode-decode chain
         let packets: Vec<RawPacket> = vec![
             (111_111i64, 1_700_000_000i64, vec![0x00, 0x01, 0xFF, 0x0a]),
             (222_222i64, 1_700_000_001i64, vec![]),
         ];
         let bytes = encode_packet_batch(packets.clone()).unwrap();
 
-        let ((version, decoded), _): ((u32, Vec<RawPacket>), usize) =
-            bincode::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
-        assert_eq!(version, RAW_PACKET_WIRE_VERSION);
+        let batch = PacketBatch::decode(bytes.as_slice()).unwrap();
+        assert_eq!(batch.version, RAW_PACKET_WIRE_VERSION);
+        let decoded: Vec<RawPacket> = batch
+            .packets
+            .into_iter()
+            .map(|p| (p.tv_usec as i64, p.tv_sec as i64, p.ethernet_frame))
+            .collect();
         assert_eq!(decoded, packets);
-        // Version must match the analyzer's constant (kept in sync by
-        // deploy-together policy + this comment: message_broker.rs).
-        assert_eq!(RAW_PACKET_WIRE_VERSION, 2);
+        // Version must match the analyzer's constant
+        assert_eq!(RAW_PACKET_WIRE_VERSION, 3);
     }
 
     #[test]
     fn single_packet_is_a_one_element_envelope() {
         let bytes = encode_packet_batch(vec![(1i64, 2i64, vec![9u8])]).unwrap();
-        let ((version, decoded), _): ((u32, Vec<RawPacket>), usize) =
-            bincode::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
-        assert_eq!(version, RAW_PACKET_WIRE_VERSION);
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0], (1, 2, vec![9]));
+        let batch = PacketBatch::decode(bytes.as_slice()).unwrap();
+        assert_eq!(batch.version, RAW_PACKET_WIRE_VERSION);
+        assert_eq!(batch.packets.len(), 1);
+        assert_eq!(batch.packets[0].tv_usec, 1);
+        assert_eq!(batch.packets[0].tv_sec, 2);
+        assert_eq!(batch.packets[0].ethernet_frame, vec![9]);
     }
 
     /// Live measurement: 50k packets through the scratch broker, one
@@ -247,7 +262,9 @@ mod tests {
     #[ignore = "requires a scratch NATS broker (NATS_TEST_URL, default nats://127.0.0.1:4222)"]
     async fn nats_batching_50k_single_vs_batched_live() {
         let url = std::env::var("NATS_TEST_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
-        let client = async_nats::connect(&url).await.expect("scratch NATS reachable");
+        let client = async_nats::connect(&url)
+            .await
+            .expect("scratch NATS reachable");
         let topic = format!("bench-raw-{}", std::process::id());
         let mut sub = client.subscribe(topic.clone()).await.unwrap();
 
@@ -318,12 +335,19 @@ mod tests {
         let url = std::env::var("NATS_TEST_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
         let config = AgentConfig::parse_from([
             "red-eye-agent",
-            "--nats-host", &url,
-            "--nats-batch-size", "32",
-            "--nats-batch-interval-ms", "10",
+            "--nats-host",
+            &url,
+            "--nats-batch-size",
+            "32",
+            "--nats-batch-interval-ms",
+            "10",
         ]);
         let nats = NatsClient::connect(&config, "batcher-test").await.unwrap();
-        let mut sub = nats.inner().subscribe(config.nats_raw_packets_topic.clone()).await.unwrap();
+        let mut sub = nats
+            .inner()
+            .subscribe(config.nats_raw_packets_topic.clone())
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // 3 packets (< K=32): must arrive as ONE batch within a few ticks.
@@ -337,10 +361,13 @@ mod tests {
             .expect("subscriber alive");
         let elapsed = t0.elapsed();
 
-        let ((version, packets), _): ((u32, Vec<RawPacket>), usize) =
-            bincode::decode_from_slice(&msg.payload, bincode::config::standard()).unwrap();
-        assert_eq!(version, RAW_PACKET_WIRE_VERSION);
-        assert_eq!(packets.len(), 3, "all three packets in the timed batch");
+        let batch = PacketBatch::decode(msg.payload.as_ref()).unwrap();
+        assert_eq!(batch.version, RAW_PACKET_WIRE_VERSION);
+        assert_eq!(
+            batch.packets.len(),
+            3,
+            "all three packets in the timed batch"
+        );
         assert!(
             elapsed < std::time::Duration::from_millis(500),
             "flushed by timer quickly, took {:?}",

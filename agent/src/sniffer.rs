@@ -139,7 +139,7 @@ impl SnifferEngine {
         // Bounded async channel: the capture thread only ever try_sends
         // (drop-with-counter on full), and the consumer awaits recv() so it
         // never blocks a tokio worker thread. Payloads are raw tuples —
-        // bincode encoding happens once per BATCH inside the NATS client's
+        // protobuf envelope encoding happens once per BATCH inside the NATS client's
         // batcher, not per packet in the capture thread.
         let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<crate::nats::RawPacket>(PACKET_QUEUE_CAPACITY);
         self.active.store(true, Ordering::SeqCst);
@@ -211,7 +211,7 @@ impl SnifferEngine {
 
         tokio::spawn(async move {
             // Forward into the NATS client's batching queue (which does the
-            // per-batch bincode encode + publish); recv() stays async so the
+            // per-batch protobuf encode + publish); recv() stays async so the
             // runtime is never starved on single-vCPU hosts.
             while let Some(packet) = packet_rx.recv().await {
                 nats.send_packet(packet);

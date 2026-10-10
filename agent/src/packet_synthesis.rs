@@ -101,7 +101,7 @@ pub fn synthesize_raw_frame(packet: &CapturedPacket, machine_ip: IpAddr) -> Vec<
 
 /// Build the raw packet tuple for the NATS batching queue, in the same
 /// shape the sniffer produces: (tv_usec: i64, tv_sec: i64,
-/// raw_ethernet_bytes: Vec<u8>). The bincode envelope encoding happens per
+/// raw_ethernet_bytes: Vec<u8>). The protobuf envelope encoding happens per
 /// batch inside the NATS client (see nats.rs RAW_PACKET_WIRE_VERSION).
 pub fn encode_for_nats(packet: &CapturedPacket, machine_ip: IpAddr) -> Option<(i64, i64, Vec<u8>)> {
     let raw = synthesize_raw_frame(packet, machine_ip);
