@@ -102,3 +102,79 @@ pub struct BroadcastCommandPayload {
     #[serde(flatten)]
     pub command: serde_json::Value,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The NATS listeners feed raw bytes straight into from_slice,
+    // these pin that garbage on the subject is a clean Err (message dropped),
+    // never a panic or a half-applied state change.
+    const GARBAGE: [&[u8]; 6] = [
+        b"",
+        &[0xfc, 0x28, 0x5c, 0x22, 0x06, 0x00],
+        b"{\"agent_id\": \"team-1\", \"uptime_secs\"",
+        b"[1,2,3]",
+        b"\"str\"",
+        b"null",
+    ];
+
+    #[test]
+    fn garbage_heartbeat_is_rejected_not_panicking() {
+        for payload in GARBAGE {
+            assert!(
+                serde_json::from_slice::<AgentInfo>(payload).is_err(),
+                "payload {:?} parsed",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_with_unknown_fields_still_parses() {
+        let json = serde_json::json!({
+            "agent_id": "team-1",
+            "uptime_secs": 60,
+            "sniffer_active": true,
+            "sniffer_ports": [80, 8080],
+            "harpoon_rules": ["web-mitm"],
+            "timestamp_ms": 1_791_464_509_000u64,
+            "future_field": 42,
+        });
+
+        let info: AgentInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(info.agent_id, "team-1");
+        assert_eq!(info.sniffer_ports, vec![80, 8080]);
+    }
+
+    #[test]
+    fn garbage_docker_listing_is_rejected_not_panicking() {
+        for payload in GARBAGE {
+            assert!(
+                serde_json::from_slice::<AgentDockerStatus>(payload).is_err(),
+                "payload {:?} parsed",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn docker_listing_with_unknown_fields_still_parses() {
+        let json = serde_json::json!({
+            "agent_id": "team-1",
+            "timestamp_ms": 123,
+            "error": null,
+            "containers": [{
+                "name": "web",
+                "image": "nginx:alpine",
+                "state": "running",
+                "ports": [{ "port": 80, "protocol": "tcp", "published": true }],
+                "future_field": "x",
+            }],
+        });
+
+        let status: AgentDockerStatus = serde_json::from_value(json).unwrap();
+        assert_eq!(status.agent_id, "team-1");
+        assert_eq!(status.containers[0].ports[0].port, 80);
+    }
+}

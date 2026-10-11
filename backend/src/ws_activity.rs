@@ -85,12 +85,17 @@ pub fn spawn_ws_bridge(
         };
 
         loop {
-            let Some(message) = subscriber.next().await else { break };
+            let Some(message) = subscriber.next().await else {
+                break;
+            };
             let frame: ActivityFrame = match serde_json::from_slice(&message.payload) {
                 Ok(frame) => frame,
                 Err(e) => {
-                    error!("Failed to decode activity frame from NATS ({} bytes): {}",
-                        message.payload.len(), e);
+                    error!(
+                        "Failed to decode activity frame from NATS ({} bytes): {}",
+                        message.payload.len(),
+                        e
+                    );
                     continue;
                 }
             };
@@ -122,7 +127,14 @@ mod tests {
         let frame: ActivityFrame = serde_json::from_str(json).unwrap();
         assert_eq!(frame.kind, "activity");
         assert_eq!(frame.streams.len(), 2);
-        assert_eq!(frame.streams[0], StreamActivity { id: 123, count: 7, last_time: 1791464509 });
+        assert_eq!(
+            frame.streams[0],
+            StreamActivity {
+                id: 123,
+                count: 7,
+                last_time: 1791464509
+            }
+        );
         assert_eq!(frame.new_streams, vec![123, 456]);
         // Relay must not reshape the frame.
         let out = serde_json::to_string(&frame).unwrap();
@@ -133,8 +145,33 @@ mod tests {
 
     #[test]
     fn malformed_frame_is_rejected_not_panicking() {
-        assert!(serde_json::from_str::<ActivityFrame>("{\"type\":\"activity\"}").is_err());
-        assert!(serde_json::from_str::<ActivityFrame>("not json").is_err());
+        // The bridge loop drops these with a log line and keeps running.
+        for payload in [
+            &b""[..],
+            &[0xfc, 0x28, 0x5c, 0x22, 0x06, 0x00][..],
+            b"{\"type\":\"activity\",\"streams\"",
+            b"[1,2,3]",
+            b"\"str\"",
+            b"null",
+            b"{\"type\":\"activity\"}", // missing required fields
+            b"not json",
+        ] {
+            assert!(
+                serde_json::from_slice::<ActivityFrame>(payload).is_err(),
+                "payload {:?} parsed",
+                payload
+            );
+        }
+    }
+
+    /// A frame from a newer analyzer may carry extra fields,
+    /// the relay must still validate and forward it.
+    #[test]
+    fn frame_with_unknown_fields_still_parses() {
+        let json = r#"{"type":"activity","streams":[],"new_streams":[],"packets_available":[],"future_field":true}"#;
+        let frame: ActivityFrame = serde_json::from_str(json).unwrap();
+        assert_eq!(frame.kind, "activity");
+        assert!(frame.streams.is_empty());
     }
 
     /// Live end-to-end bridge test against a scratch NATS broker: publish
@@ -148,9 +185,10 @@ mod tests {
     async fn ws_bridge_live_relays_summary_frames() {
         use std::time::Duration;
 
-        let url =
-            std::env::var("NATS_TEST_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
-        let client = async_nats::connect(&url).await.expect("scratch NATS reachable");
+        let url = std::env::var("NATS_TEST_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
+        let client = async_nats::connect(&url)
+            .await
+            .expect("scratch NATS reachable");
 
         let (tx, mut rx) = broadcast::channel::<String>(64);
         let topic = format!("ws-bridge-test-{}", std::process::id());
@@ -165,7 +203,10 @@ mod tests {
             r#"{"type":"activity","streams":[{"id":42,"count":9,"last_time":1002},{"id":77,"count":1,"last_time":1002}],"new_streams":[77],"packets_available":[42,77]}"#,
         ];
         for f in frames {
-            client.publish(topic.clone(), f.as_bytes().to_vec().into()).await.unwrap();
+            client
+                .publish(topic.clone(), f.as_bytes().to_vec().into())
+                .await
+                .unwrap();
         }
 
         let mut got: Vec<serde_json::Value> = Vec::new();
