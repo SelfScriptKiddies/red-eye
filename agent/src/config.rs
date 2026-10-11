@@ -44,7 +44,7 @@ pub struct AgentConfig {
     pub nats_batch_interval_ms: u64,
 
     /// NATS updates topic
-    #[arg(long, env = "NATS_UPDATES_TOPIC", default_value = "updates")]
+    #[arg(long, env = "NATS_UPDATES_TOPIC", default_value = "updates_v3")]
     pub nats_updates_topic: String,
 
     /// Heartbeat interval in seconds
