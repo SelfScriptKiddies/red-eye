@@ -92,7 +92,7 @@ pub struct ApplicationConfig {
         clap(long="nats-updates-topic", short='U', help="NATS broker topic", help_heading = "NATS"),
         env = "NATS_UPDATES_TOPIC",
         config = "nats.updates_topic",
-        default = "updates")
+        default = "updates_v3")
     ]
     pub nats_updates_topic: String,
 

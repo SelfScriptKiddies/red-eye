@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use bincode::{Decode, Encode};
 
 /// Direction a filter is allowed to match in (wire + storage representation).
 ///
@@ -7,7 +6,7 @@ use bincode::{Decode, Encode};
 /// - `Inbound`  — traffic arriving at the analyzed machine (packets.direction = 'dest')
 /// - `Outbound` — traffic sent by the analyzed machine    (packets.direction = 'orig')
 /// - `Both`     — either direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterDirection {
     Inbound,
     Outbound,
