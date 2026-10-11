@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use crate::api::updater::FilterDirection;
 
 #[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema, Clone)]
 pub struct TagName {

@@ -30,6 +30,7 @@ mod configuration;
 mod db;
 mod db_watchdog;
 mod health;
+mod wire;
 mod ws_activity;
 
 

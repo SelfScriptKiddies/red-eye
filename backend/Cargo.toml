@@ -31,7 +31,7 @@ strum = "0.26.3"
 strum_macros = "0.26.4"
 utoipa = { version = "5", features = ["actix_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
-bincode = "2.0.1"
+prost = "0.13"
 actix-ws = "0.3.0"
 futures-util = "0.3.31"
 actix = "0.13.5"
@@ -41,3 +41,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 prometheus = "0.13"
 lazy_static = "1.4"
 ipnetwork = "0.20"
+
+[build-dependencies]
+prost-build = "0.13"
+protox = "0.7"
