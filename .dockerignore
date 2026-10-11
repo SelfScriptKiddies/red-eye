@@ -8,3 +8,4 @@ volume
 # collide with the explicitly copied real proto/ in the Dockerfiles
 traffic-analyzer/proto
 agent/proto
+backend/proto

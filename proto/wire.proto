@@ -1,4 +1,5 @@
-// Wire contract for the agent -> analyzer raw-packet stream on NATS
+// Wire contracts for the red-eye NATS streams: agent -> analyzer raw
+// packets, and backend -> agent + analyzer settings updates.
 syntax = "proto3";
 
 package red_eye.wire;
@@ -18,4 +19,66 @@ message PacketBatch {
   /// Wire protocol version (for check of unsynced components)
   uint32 version = 1;
   repeated RawPacket packets = 2;
+}
+
+// Wire contract for the backend -> agent + analyzer settings stream on NATS
+
+/// Direction a filter is allowed to match in.
+/// BOTH is the proto3 zero value so an unset/unknown direction degrades to it.
+enum FilterDirection {
+  FILTER_DIRECTION_BOTH = 0;
+  FILTER_DIRECTION_INBOUND = 1;
+  FILTER_DIRECTION_OUTBOUND = 2;
+}
+
+/// A service whose traffic the analyzer should process.
+message Service {
+  string name = 1;
+  uint32 port = 2;
+  bool chunked_transfer_encoding = 3;
+  bool decrypt_tls = 4;
+  bool inflate_websockets = 5;
+  bool merge_adjacent_packets = 6;
+  bool urldecode = 7;
+  bool http_parse = 8;
+}
+
+/// A packet filter (backend "tag") as delivered to the analyzers.
+message Filter {
+  string pattern_name = 1;
+  string filter_type = 2;
+  bytes filter_payload = 3;
+  FilterDirection direction = 4;
+}
+
+/// Id plus payload for single-entity operations.
+message ServiceOp {
+  uint32 id = 1;
+  Service service = 2;
+}
+
+message FilterOp {
+  uint32 id = 1;
+  Filter filter = 2;
+}
+
+/// Full configuration snapshot; ids ride inside the entries.
+message ConfigSync {
+  repeated ServiceOp services = 1;
+  repeated FilterOp filters = 2;
+}
+
+/// One settings change on the wire. Exactly one `update` variant is set.
+message SettingsEnvelope {
+  /// Wire protocol version (for check of unsynced components)
+  uint32 version = 1;
+  oneof update {
+    ServiceOp service_add = 2;
+    ServiceOp service_update = 3;
+    uint32 service_remove = 4;
+    FilterOp filter_add = 5;
+    FilterOp filter_update = 6;
+    uint32 filter_remove = 7;
+    ConfigSync config_sync = 8;
+  }
 }

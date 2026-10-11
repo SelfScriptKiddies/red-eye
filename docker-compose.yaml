@@ -51,7 +51,9 @@ services:
 
   backend:
     build:
-      context: ./backend
+      # Repo root: the build needs the shared proto/
+      context: .
+      dockerfile: backend/Dockerfile
     restart: always
     logging:
       driver: json-file
