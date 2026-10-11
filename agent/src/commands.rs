@@ -36,13 +36,17 @@ fn default_action() -> String {
     "drop".to_string()
 }
 
-fn default_tcp() -> String { "tcp".to_string() }
+fn default_tcp() -> String {
+    "tcp".to_string()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 #[allow(dead_code)]
 pub enum AgentCommand {
-    SnifferConfig { ports: Vec<u16> },
+    SnifferConfig {
+        ports: Vec<u16>,
+    },
     Shutdown,
 
     // Proxy management
@@ -96,8 +100,12 @@ pub enum AgentCommand {
     },
 
     // IP ban via nftables
-    IpBan { ip: String },
-    IpUnban { ip: String },
+    IpBan {
+        ip: String,
+    },
+    IpUnban {
+        ip: String,
+    },
 
     // Docker container discovery (UI "add service by container").
     // The agent replies on `agent_docker.{agent_id}` — see docker.rs.
@@ -119,10 +127,7 @@ pub fn spawn_command_listener(
             }
         };
 
-        info!(
-            "Listening for commands on agent_commands.{}",
-            nats.agent_id
-        );
+        info!("Listening for commands on agent_commands.{}", nats.agent_id);
 
         while let Some(msg) = sub.next().await {
             let cmd: AgentCommand = match serde_json::from_slice(&msg.payload) {
@@ -286,7 +291,11 @@ async fn handle_command(
                     return;
                 }
             };
-            let proto = if protocol.eq_ignore_ascii_case("udp") { Protocol::Udp } else { Protocol::Tcp };
+            let proto = if protocol.eq_ignore_ascii_case("udp") {
+                Protocol::Udp
+            } else {
+                Protocol::Tcp
+            };
             let spec = ProxyRuleSpec {
                 name: format!("replay-{}", name),
                 listen: format!("0.0.0.0:{}", listen_port).parse().unwrap(),
@@ -354,6 +363,53 @@ mod tests {
             serde_json::from_str(r#"{"type":"DockerListContainers"}"#).expect("parse dispatch");
         assert!(matches!(cmd, AgentCommand::DockerListContainers));
     }
+
+    // The command listener feeds raw bytes straight into from_slice
+    // garbage on the subject must be a clean Err (warn + drop),
+    // never a panic or a misapplied command.
+    const GARBAGE: [&[u8]; 6] = [
+        b"",
+        &[0xfc, 0x28, 0x5c, 0x22, 0x06, 0x00],
+        b"{\"type\":\"SnifferConfig\",\"ports\":[80",
+        b"[1,2,3]",
+        b"\"str\"",
+        b"null",
+    ];
+
+    #[test]
+    fn garbage_command_is_rejected_not_panicking() {
+        for payload in GARBAGE {
+            assert!(
+                serde_json::from_slice::<AgentCommand>(payload).is_err(),
+                "payload {:?} parsed",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn command_without_type_tag_is_rejected() {
+        assert!(serde_json::from_str::<AgentCommand>(r#"{"ports":[80]}"#).is_err());
+        assert!(serde_json::from_str::<AgentCommand>(r#"{}"#).is_err());
+    }
+
+    /// A backend newer than this agent may dispatch command variants this agent does not know:
+    /// they must be dropped (warn in the listener), never decoded into a wrong variant.
+    #[test]
+    fn unknown_command_type_is_rejected() {
+        assert!(
+            serde_json::from_str::<AgentCommand>(r#"{"type":"FutureCommand","foo":1}"#).is_err()
+        );
+    }
+
+    /// Known variant carrying extra fields from a newer backend still parses
+    #[test]
+    fn command_with_unknown_fields_still_parses() {
+        let cmd: AgentCommand =
+            serde_json::from_str(r#"{"type":"SnifferConfig","ports":[80],"future":true}"#)
+                .expect("parses with extra fields");
+        assert!(matches!(cmd, AgentCommand::SnifferConfig { ports } if ports == vec![80]));
+    }
 }
 
 fn parse_proxy_spec(
@@ -372,9 +428,7 @@ fn parse_proxy_spec(
         other => anyhow::bail!("Unknown protocol: {}", other),
     };
 
-    let duplicate_to = duplicate_to
-        .map(|s| s.parse::<SocketAddr>())
-        .transpose()?;
+    let duplicate_to = duplicate_to.map(|s| s.parse::<SocketAddr>()).transpose()?;
 
     Ok(ProxyRuleSpec {
         name: name.to_string(),
