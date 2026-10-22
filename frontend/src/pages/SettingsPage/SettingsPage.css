@@ -553,8 +553,10 @@
 }
 
 @media (prefers-color-scheme: light) {
-    .settings-card,
-    .placeholder-content {
+    /* .placeholder-content is deliberately NOT here: the app is dark-only
+       (index.css vars are unconditional), a light background on the dark
+       theme renders as huge white rectangles on Agents/Settings. */
+    .settings-card {
         background-color: #f0f0f0;
     }
     

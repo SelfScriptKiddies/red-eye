@@ -492,7 +492,9 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 200px;
+  /* No fixed height and no background: on the dark theme a tall empty
+     block reads as a huge rectangle. Size to the content instead. */
+  padding: 40px 16px;
   color: var(--re-text-dim);
 }
 
