@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use sqlx::{postgres::PgPoolOptions, PgPool, Error, Row};
-use log::{info, error, warn};
-use crate::ethernet::{PacketInfo, Protocol, IpVersion};
 use crate::configuration::ApplicationConfig;
-use std::net::IpAddr;
+use crate::ethernet::{IpVersion, PacketInfo, Protocol};
 use crate::process_packet::Direction;
+use log::{error, info, warn};
+use sqlx::{postgres::PgPoolOptions, Error, PgPool, Row};
+use std::collections::HashMap;
+use std::net::IpAddr;
 
 /// Build the COPY FROM STDIN body for a packet batch in PostgreSQL's
 /// BINARY copy format. Why binary and not text:
@@ -20,16 +20,26 @@ use crate::process_packet::Direction;
 /// Format (PG docs "Binary Format"): 11-byte signature, i32 flags, i32
 /// header extension length, then per tuple an i16 field count and per field
 /// an i32 byte length followed by the raw value, terminated by i16 -1.
-fn encode_packets_copy_body_binary(ids: &[i64], packets: &[crate::batch_flusher::ProcessedPacket]) -> Vec<u8> {
-    fn push_i16be(out: &mut Vec<u8>, v: i16) { out.extend_from_slice(&v.to_be_bytes()); }
-    fn push_i32be(out: &mut Vec<u8>, v: i32) { out.extend_from_slice(&v.to_be_bytes()); }
+fn encode_packets_copy_body_binary(
+    ids: &[i64],
+    packets: &[crate::batch_flusher::ProcessedPacket],
+) -> Vec<u8> {
+    fn push_i16be(out: &mut Vec<u8>, v: i16) {
+        out.extend_from_slice(&v.to_be_bytes());
+    }
+    fn push_i32be(out: &mut Vec<u8>, v: i32) {
+        out.extend_from_slice(&v.to_be_bytes());
+    }
     /// One field: i32 length + raw bytes.
     fn push_field(out: &mut Vec<u8>, bytes: &[u8]) {
         push_i32be(out, bytes.len() as i32);
         out.extend_from_slice(bytes);
     }
 
-    let mut body: Vec<u8> = Vec::with_capacity(packets.len() * (2 + 6 * 4 + 8 * 4 + 4) + packets.iter().map(|p| p.payload.len() + 4).sum::<usize>());
+    let mut body: Vec<u8> = Vec::with_capacity(
+        packets.len() * (2 + 6 * 4 + 8 * 4 + 4)
+            + packets.iter().map(|p| p.payload.len() + 4).sum::<usize>(),
+    );
     body.extend_from_slice(b"PGCOPY\n\xFF\r\n\x00"); // signature
     push_i32be(&mut body, 0); // flags
     push_i32be(&mut body, 0); // header extension length
@@ -42,7 +52,10 @@ fn encode_packets_copy_body_binary(ids: &[i64], packets: &[crate::batch_flusher:
         push_i16be(&mut body, 6); // 6 fields per tuple
         push_field(&mut body, &id.to_be_bytes());
         push_field(&mut body, &(pkt.timestamp_seconds as i64).to_be_bytes());
-        push_field(&mut body, &(pkt.timestamp_microseconds as i64).to_be_bytes());
+        push_field(
+            &mut body,
+            &(pkt.timestamp_microseconds as i64).to_be_bytes(),
+        );
         push_field(&mut body, direction_bytes);
         push_field(&mut body, &(pkt.stream_id as i64).to_be_bytes());
         push_field(&mut body, &pkt.payload);
@@ -59,7 +72,9 @@ pub struct DB {
 impl Clone for DB {
     /// Cheap: PgPool is internally Arc — clones share one connection pool.
     fn clone(&self) -> Self {
-        Self { pgpool: self.pgpool.clone() }
+        Self {
+            pgpool: self.pgpool.clone(),
+        }
     }
 }
 
@@ -94,13 +109,26 @@ impl DB {
     pub async fn init(config: &ApplicationConfig) -> Result<Self, Error> {
         let pool = PgPoolOptions::new()
             .max_connections(50)
-            .connect(&format!("postgres://{}:{}@{}:{}/{}?options=-c statement_timeout=30000", config.db_username, config.db_password, config.db_host, config.db_port, config.db_schema))
+            .connect(&format!(
+                "postgres://{}:{}@{}:{}/{}?options=-c statement_timeout=30000",
+                config.db_username,
+                config.db_password,
+                config.db_host,
+                config.db_port,
+                config.db_schema
+            ))
             .await?;
         Ok(Self { pgpool: pool })
     }
 
     /// Get stream id from database
-    pub async fn get_stream_id(&self, src_ip: &str, src_port: u16, dst_ip: &str, dst_port: u16) -> Option<usize> {
+    pub async fn get_stream_id(
+        &self,
+        src_ip: &str,
+        src_port: u16,
+        dst_ip: &str,
+        dst_port: u16,
+    ) -> Option<usize> {
         let src_ip_addr: IpAddr = src_ip.parse().unwrap();
         let dst_ip_addr: IpAddr = dst_ip.parse().unwrap();
 
@@ -113,7 +141,7 @@ impl DB {
              WHERE (src_ip = $1 AND src_port = $2 AND dst_ip = $3 AND dst_port = $4)
              AND active = true
              ORDER BY id DESC
-             LIMIT 1"
+             LIMIT 1",
         )
         .bind(src_ip_addr)
         .bind(src_port as i32)
@@ -132,7 +160,17 @@ impl DB {
         }
     }
 
-    pub async fn create_stream(&self, src_ip: &str, src_port: u16, dst_ip: &str, dst_port: u16, protocol: &Protocol, ip_version: &IpVersion, service_id: usize, first_packet_time: i64) -> Result<usize, Error> {
+    pub async fn create_stream(
+        &self,
+        src_ip: &str,
+        src_port: u16,
+        dst_ip: &str,
+        dst_port: u16,
+        protocol: &Protocol,
+        ip_version: &IpVersion,
+        service_id: usize,
+        first_packet_time: i64,
+    ) -> Result<usize, Error> {
         let protocol_str: &'static str = protocol.into();
         let _ip_version_str: &'static str = ip_version.into();
 
@@ -152,13 +190,17 @@ impl DB {
         .bind(first_packet_time)
         .fetch_one(&self.pgpool)
         .await.map(|row| row.get::<i64, _>("id") as usize)
-
     }
 
-    pub async fn insert_packet(&self, packet: &PacketInfo, stream_id: usize, direction: &Direction) -> Result<i64, Error> {
+    pub async fn insert_packet(
+        &self,
+        packet: &PacketInfo,
+        stream_id: usize,
+        direction: &Direction,
+    ) -> Result<i64, Error> {
         let direction_str: &'static str = match direction {
             Direction::Inbound => "dest",
-            Direction::Outbound => "orig"
+            Direction::Outbound => "orig",
         };
 
         sqlx::query(
@@ -178,7 +220,14 @@ impl DB {
     /// `timestamp` MUST be the packet's capture time (same value as the
     /// packets row): the backend JOINs `p.timestamp = t.timestamp`, so a
     /// DB-clock default silently detaches the tag from its packet.
-    pub async fn insert_trigger(&self, packet_id: i64, filter_id: usize, start_index: usize, end_index: usize, timestamp: i64) -> Result<(), Error> {
+    pub async fn insert_trigger(
+        &self,
+        packet_id: i64,
+        filter_id: usize,
+        start_index: usize,
+        end_index: usize,
+        timestamp: i64,
+    ) -> Result<(), Error> {
         sqlx::query(
             "INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ($1, $2, $3, $4, $5)"
         )
@@ -196,33 +245,53 @@ impl DB {
     /// Rows are (packet_id, filter_id, start_index, end_index, packet_timestamp):
     /// the timestamp is each source packet's capture time, NOT NOW() — the
     /// backend joins tag rows to packets on `p.timestamp = t.timestamp`.
-    pub async fn insert_triggers_batch(&self, rows: &[(i64, usize, usize, usize, i64)]) -> Result<(), Error> {
-        if rows.is_empty() { return Ok(()); }
+    pub async fn insert_triggers_batch(
+        &self,
+        rows: &[(i64, usize, usize, usize, i64)],
+    ) -> Result<(), Error> {
+        if rows.is_empty() {
+            return Ok(());
+        }
 
         // Build multi-row INSERT: INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ($1..$5), ($6..$10), ...
-        let mut query = String::from("INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ");
+        let mut query = String::from(
+            "INSERT INTO tag (packet_id, tag_id, start_index, end_index, timestamp) VALUES ",
+        );
         const COLS: usize = 5;
 
         for (i, _) in rows.iter().enumerate() {
-            if i > 0 { query.push_str(", "); }
+            if i > 0 {
+                query.push_str(", ");
+            }
             let base = i * COLS;
-            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})",
-                base + 1, base + 2, base + 3, base + 4, base + 5));
+            query.push_str(&format!(
+                "(${}, ${}, ${}, ${}, ${})",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5
+            ));
         }
 
         let mut q = sqlx::query(&query);
         for (packet_id, filter_id, start, end, timestamp) in rows {
-            q = q.bind(*packet_id)
-                 .bind(*filter_id as i64)
-                 .bind(*start as i32)
-                 .bind(*end as i32)
-                 .bind(*timestamp);
+            q = q
+                .bind(*packet_id)
+                .bind(*filter_id as i64)
+                .bind(*start as i32)
+                .bind(*end as i32)
+                .bind(*timestamp);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }
 
     /// Update stream's L7 protocol (upgrades: unknown→http1→grpc)
-    pub async fn update_stream_l7_protocol(&self, stream_id: usize, protocol: &str) -> Result<(), Error> {
+    pub async fn update_stream_l7_protocol(
+        &self,
+        stream_id: usize,
+        protocol: &str,
+    ) -> Result<(), Error> {
         sqlx::query(
             "UPDATE stream SET l7_protocol = $1 WHERE id = $2 AND (l7_protocol = 'unknown' OR ($1 = 'grpc' AND l7_protocol = 'http1'))"
         )
@@ -240,12 +309,15 @@ impl DB {
         headers: &[(String, String)],
         cache: &dashmap::DashMap<i64, i64>,
     ) -> Result<i64, Error> {
+        use std::collections::hash_map::DefaultHasher;
         use std::collections::BTreeMap;
         use std::hash::{Hash, Hasher};
-        use std::collections::hash_map::DefaultHasher;
 
         // Build sorted JSONB and compute hash
-        let map: BTreeMap<&str, &str> = headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let map: BTreeMap<&str, &str> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let json = serde_json::json!(map);
 
         let mut hasher = DefaultHasher::new();
@@ -258,12 +330,10 @@ impl DB {
         }
 
         // Try to find existing in DB
-        let existing = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM header_set WHERE hash = $1"
-        )
-        .bind(hash)
-        .fetch_optional(&self.pgpool)
-        .await?;
+        let existing = sqlx::query_scalar::<_, i64>("SELECT id FROM header_set WHERE hash = $1")
+            .bind(hash)
+            .fetch_optional(&self.pgpool)
+            .await?;
 
         if let Some(id) = existing {
             cache.insert(hash, id);
@@ -274,7 +344,7 @@ impl DB {
         let id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO header_set (hash, headers) VALUES ($1, $2)
              ON CONFLICT (hash) DO UPDATE SET hash = header_set.hash
-             RETURNING id"
+             RETURNING id",
         )
         .bind(hash)
         .bind(json)
@@ -337,8 +407,8 @@ impl DB {
         timestamp: i64,
     ) -> Result<i64, Error> {
         // Dedup body via hash (like header_set)
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         decoded_json.hash(&mut hasher);
         let body_hash = hasher.finish() as i64;
@@ -347,7 +417,7 @@ impl DB {
         let body_set_id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO grpc_body_set (hash, decoded_json) VALUES ($1, $2)
              ON CONFLICT (hash) DO UPDATE SET decoded_json = EXCLUDED.decoded_json
-             RETURNING id"
+             RETURNING id",
         )
         .bind(body_hash)
         .bind(decoded_json)
@@ -372,55 +442,65 @@ impl DB {
     }
 
     /// Batch insert packets. Hot path uses COPY FROM STDIN (text format)
-    /// with pre-fetched sequence ids; on COPY failure it degrades to the
-    /// old multi-row INSERT for the same batch (a lost COPY is a slow batch,
+    /// with pre-fetched sequence ids; on COPY failure it degrades to a
+    /// multi-row INSERT for the same batch (a lost COPY is a slow batch,
     /// never a lost batch). Returns the packet ids in insertion order.
-    pub async fn insert_packets_batch(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
-        if packets.is_empty() { return Ok(vec![]); }
+    pub async fn insert_packets_batch(
+        &self,
+        packets: &[crate::batch_flusher::ProcessedPacket],
+    ) -> Result<Vec<i64>, Error> {
+        if packets.is_empty() {
+            return Ok(vec![]);
+        }
 
-        match self.insert_packets_batch_copy(packets).await {
-            Ok(ids) => Ok(ids),
+        let ids = self.prefetch_packet_ids(packets.len()).await?;
+
+        match self.insert_packets_batch_copy(&ids, packets).await {
+            Ok(()) => Ok(ids),
             Err(e) => {
-                warn!("Packet batch COPY failed ({:?}) — falling back to multi-row INSERT for this batch", e);
-                self.insert_packets_batch_insert(packets).await
+                warn!("Packet batch COPY failed ({:?}) — falling back to idempotent multi-row INSERT for this batch", e);
+                self.insert_packets_batch_insert(&ids, packets).await?;
+                Ok(ids)
             }
         }
     }
 
-    /// Insert a packet batch via `COPY ... FROM STDIN` (text format).
+    async fn prefetch_packet_ids(&self, n: usize) -> Result<Vec<i64>, Error> {
+        let ids_csv: String = sqlx::query_scalar(
+            "SELECT string_agg(nextval('packets_id_seq')::text, ',') FROM generate_series(1, $1)",
+        )
+        .bind(n as i64)
+        .fetch_one(&self.pgpool)
+        .await?;
+        let ids: Vec<i64> = ids_csv
+            .split(',')
+            .map(|s| s.parse::<i64>())
+            .collect::<Result<_, _>>()
+            .map_err(|e| Error::Io(std::io::Error::other(format!("bad nextval output: {}", e))))?;
+        if ids.len() != n {
+            return Err(Error::Io(std::io::Error::other(format!(
+                "sequence prefetch returned {} ids for {} packets",
+                ids.len(),
+                n
+            ))));
+        }
+        Ok(ids)
+    }
+
+    /// Insert a packet batch via `COPY ... FROM STDIN` (binary format).
     ///
     /// COPY cannot RETURNING, so packet ids for the tag/stream_tag rows are
-    /// obtained by pre-fetching `packets.len()` values from the sequence:
-    /// `SELECT nextval('packets_id_seq') FROM generate_series(1, $n)`.
-    /// The ids are written WITH the rows (id is the first COPY column) and
-    /// handed back to the caller in row order. nextval is the same source
-    /// the DEFAULT column uses, so concurrent writers never collide (ids
-    /// merely interleave across flushers — gaps are fine, BIGINT has
-    /// headroom; per-stream insertion order is preserved because flushers
-    /// are sharded by stream).
-    async fn insert_packets_batch_copy(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
-        // 1. Pre-fetch ids from the sequence (BIGSERIAL on packets). One
-        //    row back (comma-joined) instead of n rows: 50k ids as a
-        //    50k-row result set costs ~17 ms of row-decode on the client,
-        //    the joined string a fraction of that. Order inside the string
-        //    is unspecified — irrelevant, ids are assigned to rows
-        //    arbitrarily.
-        let ids_csv: String = sqlx::query_scalar(
-            "SELECT string_agg(nextval('packets_id_seq')::text, ',') FROM generate_series(1, $1)")
-            .bind(packets.len() as i64)
-            .fetch_one(&self.pgpool)
-            .await?;
-        let ids: Vec<i64> = ids_csv.split(',').map(|s| s.parse::<i64>()).collect::<Result<_, _>>()
-            .map_err(|e| Error::Io(std::io::Error::other(format!("bad nextval output: {}", e))))?;
-        if ids.len() != packets.len() {
-            return Err(Error::Io(std::io::Error::other(format!(
-                "sequence prefetch returned {} ids for {} packets", ids.len(), packets.len()))));
-        }
+    /// pre-fetched by the caller (see `prefetch_packet_ids`) and written
+    /// WITH the rows (id is the first COPY column).
+    async fn insert_packets_batch_copy(
+        &self,
+        ids: &[i64],
+        packets: &[crate::batch_flusher::ProcessedPacket],
+    ) -> Result<(), Error> {
+        // Build the binary COPY body.
+        let body = encode_packets_copy_body_binary(ids, packets);
 
-        // 2. Build the binary COPY body.
-        let body = encode_packets_copy_body_binary(&ids, packets);
-
-        // 3. Stream it in on a dedicated connection.
+        // Stream it in on a dedicated connection.
         let mut conn = self.pgpool.acquire().await?;
         let mut copy = conn
             .copy_in_raw("COPY packets (id, timestamp, timestamp_microseconds, direction, stream_id, packet_data) FROM STDIN WITH (FORMAT binary)")
@@ -433,43 +513,61 @@ impl DB {
         }
         let inserted = copy.finish().await?;
         if inserted != packets.len() as u64 {
-            return Err(Error::Io(std::io::Error::other(format!(
-                "COPY inserted {} rows, expected {}", inserted, packets.len()))));
+            warn!(
+                "COPY inserted {} rows, expected {} — rows are committed, keeping prefetched ids",
+                inserted,
+                packets.len()
+            );
         }
-        Ok(ids)
+        Ok(())
     }
 
-    /// Batch insert packets with a single multi-row INSERT.
-    /// Returns the list of generated packet IDs in insertion order.
-    /// Now the fallback path for when COPY fails (degradation, not crash).
-    async fn insert_packets_batch_insert(&self, packets: &[crate::batch_flusher::ProcessedPacket]) -> Result<Vec<i64>, Error> {
-        let mut query = String::from(
-            "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES "
-        );
-        let mut param_idx = 1u32;
+    async fn insert_packets_batch_insert(
+        &self,
+        ids: &[i64],
+        packets: &[crate::batch_flusher::ProcessedPacket],
+    ) -> Result<(), Error> {
+        for (chunk_ids, chunk_packets) in ids.chunks(10_000).zip(packets.chunks(10_000)) {
+            let mut query = String::from(
+                "INSERT INTO packets (id, timestamp, timestamp_microseconds, direction, stream_id, packet_data) VALUES "
+            );
+            let mut param_idx = 1u32;
 
-        for (i, _) in packets.iter().enumerate() {
-            if i > 0 { query.push_str(", "); }
-            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})",
-                param_idx, param_idx + 1, param_idx + 2, param_idx + 3, param_idx + 4));
-            param_idx += 5;
+            for (i, _) in chunk_packets.iter().enumerate() {
+                if i > 0 {
+                    query.push_str(", ");
+                }
+                query.push_str(&format!(
+                    "(${}, ${}, ${}, ${}, ${}, ${})",
+                    param_idx,
+                    param_idx + 1,
+                    param_idx + 2,
+                    param_idx + 3,
+                    param_idx + 4,
+                    param_idx + 5
+                ));
+                param_idx += 6;
+            }
+            query.push_str(" ON CONFLICT (id, timestamp) DO NOTHING");
+
+            let mut q = sqlx::query(&query);
+            for (id, pkt) in chunk_ids.iter().zip(chunk_packets.iter()) {
+                let direction_str: &str = match pkt.direction.as_str() {
+                    "inbound" => "dest",
+                    _ => "orig",
+                };
+                q = q
+                    .bind(id)
+                    .bind(pkt.timestamp_seconds as i64)
+                    .bind(pkt.timestamp_microseconds as i64)
+                    .bind(direction_str)
+                    .bind(pkt.stream_id as i64)
+                    .bind(&pkt.payload);
+            }
+
+            q.execute(&self.pgpool).await?;
         }
-        query.push_str(" RETURNING id");
-
-        let mut q = sqlx::query_scalar::<_, i64>(&query);
-        for pkt in packets {
-            let direction_str: &str = match pkt.direction.as_str() {
-                "inbound" => "dest",
-                _ => "orig",
-            };
-            q = q.bind(pkt.timestamp_seconds as i64)
-                 .bind(pkt.timestamp_microseconds as i64)
-                 .bind(direction_str)
-                 .bind(pkt.stream_id as i64)
-                 .bind(&pkt.payload);
-        }
-
-        q.fetch_all(&self.pgpool).await
+        Ok(())
     }
 
     /// Batch insert HTTP messages with a single multi-row INSERT.
@@ -478,18 +576,24 @@ impl DB {
         &self,
         rows: &[(i64, &crate::batch_flusher::HttpMessageData)],
     ) -> Result<Vec<i64>, Error> {
-        if rows.is_empty() { return Ok(vec![]); }
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
 
         const COLS: usize = 13;
         let mut query = String::from(
             "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp) VALUES "
         );
         for (i, _) in rows.iter().enumerate() {
-            if i > 0 { query.push_str(", "); }
+            if i > 0 {
+                query.push_str(", ");
+            }
             let base = i * COLS;
             query.push('(');
             for c in 0..COLS {
-                if c > 0 { query.push_str(", "); }
+                if c > 0 {
+                    query.push_str(", ");
+                }
                 query.push_str(&format!("${}", base + c + 1));
             }
             query.push(')');
@@ -498,19 +602,20 @@ impl DB {
 
         let mut q = sqlx::query_scalar::<_, i64>(&query);
         for (packet_id, http) in rows {
-            q = q.bind(http.stream_id as i64)
-                 .bind(*packet_id)
-                 .bind(http.is_request)
-                 .bind(http.method.as_deref())
-                 .bind(http.path.as_deref())
-                 .bind(http.status_code.map(|c| c as i16))
-                 .bind(http.http_version.as_deref())
-                 .bind(http.content_type.as_deref())
-                 .bind(http.content_length)
-                 .bind(http.body_offset)
-                 .bind(http.body_length)
-                 .bind(http.header_set_id)
-                 .bind(http.timestamp);
+            q = q
+                .bind(http.stream_id as i64)
+                .bind(*packet_id)
+                .bind(http.is_request)
+                .bind(http.method.as_deref())
+                .bind(http.path.as_deref())
+                .bind(http.status_code.map(|c| c as i16))
+                .bind(http.http_version.as_deref())
+                .bind(http.content_type.as_deref())
+                .bind(http.content_length)
+                .bind(http.body_offset)
+                .bind(http.body_length)
+                .bind(http.header_set_id)
+                .bind(http.timestamp);
         }
         q.fetch_all(&self.pgpool).await
     }
@@ -521,9 +626,11 @@ impl DB {
         &self,
         rows: &[(i64, &crate::batch_flusher::GrpcMessageData)],
     ) -> Result<(), Error> {
-        if rows.is_empty() { return Ok(()); }
-        use std::hash::{Hash, Hasher};
+        if rows.is_empty() {
+            return Ok(());
+        }
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
         // Compute per-row body hash and dedupe distinct body sets.
         let mut hashes: Vec<i64> = Vec::with_capacity(rows.len());
@@ -540,7 +647,9 @@ impl DB {
         let distinct: Vec<(i64, &str)> = distinct.into_iter().collect();
         let mut q1 = String::from("INSERT INTO grpc_body_set (hash, decoded_json) VALUES ");
         for (i, _) in distinct.iter().enumerate() {
-            if i > 0 { q1.push_str(", "); }
+            if i > 0 {
+                q1.push_str(", ");
+            }
             let base = i * 2;
             q1.push_str(&format!("(${}, ${})", base + 1, base + 2));
         }
@@ -560,11 +669,15 @@ impl DB {
             "INSERT INTO grpc_message (stream_id, http_message_id, service_name, method_name, is_request, body_set_id, timestamp) VALUES "
         );
         for (i, _) in rows.iter().enumerate() {
-            if i > 0 { q2.push_str(", "); }
+            if i > 0 {
+                q2.push_str(", ");
+            }
             let base = i * COLS;
             q2.push('(');
             for c in 0..COLS {
-                if c > 0 { q2.push_str(", "); }
+                if c > 0 {
+                    q2.push_str(", ");
+                }
                 q2.push_str(&format!("${}", base + c + 1));
             }
             q2.push(')');
@@ -586,11 +699,18 @@ impl DB {
 
     /// Batch update stream l7_protocol from deduped (stream_id, protocol) pairs.
     /// Keeps the upgrade semantics of update_stream_l7_protocol (unknown->http1->grpc).
-    pub async fn update_stream_l7_protocol_batch(&self, rows: &[(usize, String)]) -> Result<(), Error> {
-        if rows.is_empty() { return Ok(()); }
+    pub async fn update_stream_l7_protocol_batch(
+        &self,
+        rows: &[(usize, String)],
+    ) -> Result<(), Error> {
+        if rows.is_empty() {
+            return Ok(());
+        }
         let mut query = String::from("UPDATE stream s SET l7_protocol = v.proto FROM (VALUES ");
         for (i, _) in rows.iter().enumerate() {
-            if i > 0 { query.push_str(", "); }
+            if i > 0 {
+                query.push_str(", ");
+            }
             let base = i * 2;
             query.push_str(&format!("(${}::bigint, ${}::varchar)", base + 1, base + 2));
         }
@@ -604,15 +724,27 @@ impl DB {
 
     /// Batch update stream last_packet_time (max) and increment packet_count.
     /// `rows` is (stream_id, max_timestamp, packet_count_delta). Single set-based UPDATE.
-    pub async fn update_streams_stats_batch(&self, rows: &[(usize, i64, i64)]) -> Result<(), Error> {
-        if rows.is_empty() { return Ok(()); }
+    pub async fn update_streams_stats_batch(
+        &self,
+        rows: &[(usize, i64, i64)],
+    ) -> Result<(), Error> {
+        if rows.is_empty() {
+            return Ok(());
+        }
         let mut query = String::from(
             "UPDATE stream s SET last_packet_time = GREATEST(COALESCE(s.last_packet_time, 0), v.ts), packet_count = s.packet_count + v.cnt FROM (VALUES "
         );
         for (i, _) in rows.iter().enumerate() {
-            if i > 0 { query.push_str(", "); }
+            if i > 0 {
+                query.push_str(", ");
+            }
             let base = i * 3;
-            query.push_str(&format!("(${}::bigint, ${}::bigint, ${}::bigint)", base + 1, base + 2, base + 3));
+            query.push_str(&format!(
+                "(${}::bigint, ${}::bigint, ${}::bigint)",
+                base + 1,
+                base + 2,
+                base + 3
+            ));
         }
         query.push_str(") AS v(stream_id, ts, cnt) WHERE s.id = v.stream_id");
         let mut q = sqlx::query(&query);
@@ -627,7 +759,9 @@ impl DB {
     /// `Cache::drain_closed_streams`, so the per-packet hot path never waits
     /// on a close UPDATE.
     pub async fn set_streams_inactive_batch(&self, stream_ids: &[usize]) -> Result<u64, Error> {
-        if stream_ids.is_empty() { return Ok(0); }
+        if stream_ids.is_empty() {
+            return Ok(0);
+        }
 
         let ids: Vec<i64> = stream_ids.iter().map(|&id| id as i64).collect();
         sqlx::query("UPDATE stream SET active = false WHERE id = ANY($1)")
@@ -642,11 +776,15 @@ impl DB {
     /// never recomputes the tag x packets join (the old materialized view).
     /// Dedup by PK + ON CONFLICT DO NOTHING keeps this cheap and idempotent.
     pub async fn insert_stream_tags_batch(&self, pairs: &[(usize, String)]) -> Result<(), Error> {
-        if pairs.is_empty() { return Ok(()); }
+        if pairs.is_empty() {
+            return Ok(());
+        }
 
         let mut query = String::from("INSERT INTO stream_tag (stream_id, tag_name) VALUES ");
         for (i, _) in pairs.iter().enumerate() {
-            if i > 0 { query.push_str(", "); }
+            if i > 0 {
+                query.push_str(", ");
+            }
             let base = i * 2;
             query.push_str(&format!("(${}::bigint, ${}::text)", base + 1, base + 2));
         }
@@ -663,7 +801,7 @@ impl DB {
     /// Returns: service_id → Vec<(filename, content)>
     pub async fn get_all_proto_files(&self) -> HashMap<i64, Vec<(String, String)>> {
         let rows = sqlx::query(
-            "SELECT service_id, filename, content FROM proto_file ORDER BY service_id, id"
+            "SELECT service_id, filename, content FROM proto_file ORDER BY service_id, id",
         )
         .fetch_all(&self.pgpool)
         .await
@@ -684,7 +822,11 @@ impl DB {
 mod tests {
     use super::*;
 
-    fn pkt(payload: Vec<u8>, direction: &str, stream_id: usize) -> crate::batch_flusher::ProcessedPacket {
+    fn pkt(
+        payload: Vec<u8>,
+        direction: &str,
+        stream_id: usize,
+    ) -> crate::batch_flusher::ProcessedPacket {
         crate::batch_flusher::ProcessedPacket {
             timestamp_seconds: 1_700_000_000,
             timestamp_microseconds: 123_456,
@@ -711,21 +853,25 @@ mod tests {
 
         // Row: i16 field count 6, then per field i32 len + bytes.
         let mut p = 19usize;
-        let next_i16 = |p: &mut usize| -> i16 { let v = i16::from_be_bytes([body[*p], body[*p+1]]); *p += 2; v };
+        let next_i16 = |p: &mut usize| -> i16 {
+            let v = i16::from_be_bytes([body[*p], body[*p + 1]]);
+            *p += 2;
+            v
+        };
         let next_field = |p: &mut usize| -> Vec<u8> {
-            let len = i32::from_be_bytes(body[*p..*p+4].try_into().unwrap()) as usize;
+            let len = i32::from_be_bytes(body[*p..*p + 4].try_into().unwrap()) as usize;
             *p += 4;
-            let v = body[*p..*p+len].to_vec();
+            let v = body[*p..*p + len].to_vec();
             *p += len;
             v
         };
         assert_eq!(next_i16(&mut p), 6);
-        assert_eq!(next_field(&mut p), 7i64.to_be_bytes().to_vec());          // id
+        assert_eq!(next_field(&mut p), 7i64.to_be_bytes().to_vec()); // id
         assert_eq!(next_field(&mut p), 1_700_000_000i64.to_be_bytes().to_vec()); // timestamp
-        assert_eq!(next_field(&mut p), 123_456i64.to_be_bytes().to_vec());    // timestamp_microseconds
-        assert_eq!(next_field(&mut p), b"dest".to_vec());                     // direction
-        assert_eq!(next_field(&mut p), 42i64.to_be_bytes().to_vec());         // stream_id
-        assert_eq!(next_field(&mut p), vec![0xde, 0xad]);                     // packet_data, raw
+        assert_eq!(next_field(&mut p), 123_456i64.to_be_bytes().to_vec()); // timestamp_microseconds
+        assert_eq!(next_field(&mut p), b"dest".to_vec()); // direction
+        assert_eq!(next_field(&mut p), 42i64.to_be_bytes().to_vec()); // stream_id
+        assert_eq!(next_field(&mut p), vec![0xde, 0xad]); // packet_data, raw
         assert_eq!(next_i16(&mut p), -1, "trailer");
         assert_eq!(p, body.len(), "no trailing bytes");
     }
@@ -756,22 +902,42 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires scratch PG (DATABASE_TEST_URL, Red Eye schema applied)"]
     async fn copy_roundtrip_all_bytes_live() {
-        let Some(db) = test_db().await else { eprintln!("DATABASE_TEST_URL not set, skipping"); return; };
+        let Some(db) = test_db().await else {
+            eprintln!("DATABASE_TEST_URL not set, skipping");
+            return;
+        };
 
         let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         // 257 rows: one per byte value plus a multi-KB pseudo-random payload.
         let mut packets = Vec::new();
         for b in 0u8..=255 {
-            packets.push(pkt(vec![b, b.wrapping_add(1), 0x0a, 0x09, 0x5c, 0x2e], if b % 2 == 0 { "inbound" } else { "outbound" }, 1));
+            packets.push(pkt(
+                vec![b, b.wrapping_add(1), 0x0a, 0x09, 0x5c, 0x2e],
+                if b % 2 == 0 { "inbound" } else { "outbound" },
+                1,
+            ));
         }
-        let big: Vec<u8> = (0..5000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+        let big: Vec<u8> = (0..5000u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
+            .collect();
         packets.push(pkt(big, "inbound", 1));
-        for p in &mut packets { p.timestamp_seconds = now; }
+        for p in &mut packets {
+            p.timestamp_seconds = now;
+        }
 
-        let ids = db.insert_packets_batch(&packets).await.expect("batch insert (COPY) ok");
+        let ids = db
+            .insert_packets_batch(&packets)
+            .await
+            .expect("batch insert (COPY) ok");
         assert_eq!(ids.len(), packets.len(), "one id per row");
-        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len(), "ids unique");
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            ids.len(),
+            "ids unique"
+        );
 
         let rows = sqlx::query("SELECT id, packet_data FROM packets WHERE stream_id = 1 AND timestamp = $1 ORDER BY id")
             .bind(now as i64)
@@ -790,39 +956,53 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires scratch PG (DATABASE_TEST_URL); benchmark, run with --nocapture"]
     async fn bench_insert_vs_copy_live() {
-        let Some(db) = test_db().await else { eprintln!("DATABASE_TEST_URL not set, skipping"); return; };
+        let Some(db) = test_db().await else {
+            eprintln!("DATABASE_TEST_URL not set, skipping");
+            return;
+        };
         let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        sqlx::query("TRUNCATE packets")
+            .execute(db.pool())
+            .await
+            .unwrap();
 
         let make = |n: usize| -> Vec<crate::batch_flusher::ProcessedPacket> {
-            (0..n).map(|i| {
-                let mut p = pkt(
-                    (0..700usize).map(|j| ((i * 31 + j * 17) % 256) as u8).collect(),
-                    if i % 3 == 0 { "inbound" } else { "outbound" },
-                    1 + i % 50,
-                );
-                p.timestamp_seconds = now;
-                p
-            }).collect()
+            (0..n)
+                .map(|i| {
+                    let mut p = pkt(
+                        (0..700usize)
+                            .map(|j| ((i * 31 + j * 17) % 256) as u8)
+                            .collect(),
+                        if i % 3 == 0 { "inbound" } else { "outbound" },
+                        1 + i % 50,
+                    );
+                    p.timestamp_seconds = now;
+                    p
+                })
+                .collect()
         };
 
         for &n in &[500usize, 1_000, 2_000, 5_000, 50_000] {
             let packets = make(n);
 
             // COPY is not bound by the 65535-parameter limit, but multi-row
-            // INSERT is (5 params/row -> max ~13k rows per statement): chunk
-            // the INSERT side the way a real flusher would have to.
+            // INSERT is (6 params/row -> max ~10k rows per statement): the
+            // idempotent INSERT chunks internally, same as a real flusher.
             let t0 = std::time::Instant::now();
-            let mut ids_ins = Vec::with_capacity(n);
-            for chunk in packets.chunks(10_000) {
-                let ids = db.insert_packets_batch_insert(chunk).await.expect("INSERT ok");
-                ids_ins.extend(ids);
-            }
+            let ids_ins = db.prefetch_packet_ids(n).await.expect("prefetch ok");
+            db.insert_packets_batch_insert(&ids_ins, &packets)
+                .await
+                .expect("INSERT ok");
             let insert_ms = t0.elapsed().as_secs_f64() * 1000.0;
             assert_eq!(ids_ins.len(), n);
 
-            sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+            sqlx::query("TRUNCATE packets")
+                .execute(db.pool())
+                .await
+                .unwrap();
 
             // Phase timings for COPY (what the flusher actually pays).
             let t0 = std::time::Instant::now();
@@ -850,22 +1030,31 @@ mod tests {
 
             // The phase-instrumented COPY above already landed n rows —
             // clear before measuring the full wrapper path.
-            sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+            sqlx::query("TRUNCATE packets")
+                .execute(db.pool())
+                .await
+                .unwrap();
 
             let t0 = std::time::Instant::now();
-            let ids_copy = db.insert_packets_batch_copy(&packets).await.expect("COPY ok");
+            db.insert_packets_batch_copy(&ids, &packets)
+                .await
+                .expect("COPY ok");
             let copy_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            assert_eq!(ids_copy.len(), n);
 
             let count = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM packets")
-                .fetch_one(db.pool()).await.unwrap();
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
             assert_eq!(count as usize, n, "COPY landed all rows");
 
             eprintln!("BENCH rows={:>6}  multi-row INSERT (10k chunks): {:8.1} ms ({:6.0} rows/s)   COPY: {:8.1} ms ({:6.0} rows/s)  speedup {:.2}x   [COPY phases: nextval {:5.1} ms, build {:5.1} ms, stream {:5.1} ms]",
                 n, insert_ms, n as f64 / (insert_ms / 1000.0), copy_ms, n as f64 / (copy_ms / 1000.0),
                 insert_ms / copy_ms, nextval_ms, build_ms, stream_ms);
 
-            sqlx::query("TRUNCATE packets").execute(db.pool()).await.unwrap();
+            sqlx::query("TRUNCATE packets")
+                .execute(db.pool())
+                .await
+                .unwrap();
         }
     }
 
@@ -875,7 +1064,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires scratch PG (DATABASE_TEST_URL)"]
     async fn nextval_batches_unique_under_concurrency_live() {
-        let Some(db) = test_db().await else { eprintln!("DATABASE_TEST_URL not set, skipping"); return; };
+        let Some(db) = test_db().await else {
+            eprintln!("DATABASE_TEST_URL not set, skipping");
+            return;
+        };
         let db = std::sync::Arc::new(db);
 
         let mut handles = Vec::new();
@@ -885,20 +1077,31 @@ mod tests {
                 let mut ids = Vec::with_capacity(20 * 500);
                 for i in 0..20 {
                     // Small stagger so the two tasks' nextval calls interleave.
-                    if i % 2 == t { tokio::time::sleep(std::time::Duration::from_micros(200)).await; }
+                    if i % 2 == t {
+                        tokio::time::sleep(std::time::Duration::from_micros(200)).await;
+                    }
                     let batch: Vec<i64> = sqlx::query_scalar(
-                        "SELECT nextval('packets_id_seq') FROM generate_series(1, $1)")
-                        .bind(500i64)
-                        .fetch_all(db.pool()).await.unwrap();
+                        "SELECT nextval('packets_id_seq') FROM generate_series(1, $1)",
+                    )
+                    .bind(500i64)
+                    .fetch_all(db.pool())
+                    .await
+                    .unwrap();
                     ids.extend(batch);
                 }
                 ids
             }));
         }
         let mut all = Vec::new();
-        for h in handles { all.extend(h.await.unwrap()); }
+        for h in handles {
+            all.extend(h.await.unwrap());
+        }
         let uniq: std::collections::HashSet<i64> = all.iter().copied().collect();
         assert_eq!(all.len(), 2 * 20 * 500);
-        assert_eq!(uniq.len(), all.len(), "no id collisions across interleaved prefetches");
+        assert_eq!(
+            uniq.len(),
+            all.len(),
+            "no id collisions across interleaved prefetches"
+        );
     }
 }

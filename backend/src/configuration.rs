@@ -34,7 +34,7 @@ pub struct ApplicationConfig {
     )]
     pub web_password: String,
     #[source(
-        clap(long="web-cookie-key", help="Backend web cookie key (min 32 bytes, e.g. `openssl rand -base64 32`)", help_heading = "Web-application config"),
+        clap(long="web-cookie-key", help="Backend web cookie key (min 64 bytes, e.g. `openssl rand -base64 64`)", help_heading = "Web-application config"),
         env = "COOKIE_KEY",
         config = "web.cookie_key",
         default = "".to_string()

@@ -75,11 +75,13 @@ fn init() -> ApplicationConfig {
     // Session cookie encryption key is mandatory: a known default key would
     // let anyone who reads the repo forge session cookies. Checked before
     // anything else starts (DB pool, NATS, HTTP listener).
-    if config.cookie_key.len() < 32 {
+    // Key::from (cookie crate) slices a 64-byte combined signing+encryption
+    // key; anything shorter panics inside actix at worker startup.
+    if config.cookie_key.len() < 64 {
         eprintln!(
-            "COOKIE_KEY is missing or too short ({} bytes, need at least 32).\n\
+            "COOKIE_KEY is missing or too short ({} bytes, need at least 64).\n\
              Generate a key and set it in .env (or pass --web-cookie-key):\n\
-             COOKIE_KEY=$(openssl rand -base64 32)",
+             COOKIE_KEY=$(openssl rand -base64 64)",
             config.cookie_key.len()
         );
         std::process::exit(1);
