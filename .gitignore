@@ -3,3 +3,4 @@ test/**
 volume/
 agent/target-docker/
 backend/config.toml
+tests/docker/red-eye-agent
