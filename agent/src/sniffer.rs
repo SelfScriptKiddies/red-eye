@@ -110,6 +110,22 @@ impl SnifferEngine {
             .find(|i| i.name == device_name)
             .ok_or_else(|| anyhow!("Interface '{}' not found", device_name))?;
 
+        // Loopback is a known Linux trap for AF_PACKET captures: the kernel
+        // taps every loopback transmission TWICE (egress + ingress), so the
+        // sniffer receives, publishes and the analyzer stores EVERY packet
+        // duplicated (byte-identical payloads, µs timestamps a few µs
+        // apart). This is a kernel property, not a bug we can filter at
+        // capture time (pnet discards the sockaddr_ll packet type) — warn
+        // loudly and let the operator pick a real interface.
+        if interface.is_loopback() {
+            warn!(
+                "Interface '{}' is loopback: every packet will be captured TWICE \
+                 (Linux AF_PACKET loopback double-tap) and stored duplicated in Red Eye. \
+                 Use a non-loopback interface for clean captures.",
+                device_name
+            );
+        }
+
         let config = DatalinkConfig {
             promiscuous: true,
             read_timeout: Some(Duration::from_millis(1000)),
