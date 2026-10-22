@@ -33,7 +33,11 @@ pub struct HttpMessageData {
     pub content_length: Option<i32>,
     pub body_offset: i32,
     pub body_length: i32,
-    pub header_set_id: Option<i64>,
+    /// Dedup key + JSONB payload, resolved to a header_set id per flush
+    /// batch (see db::insert_http_messages_batch). No DB call on the hot
+    /// path, no in-memory id cache to go stale against cleanup GC.
+    pub header_hash: Option<i64>,
+    pub header_json: Option<String>,
     pub timestamp: i64,
     pub l7_protocol: String,
     pub grpc: Option<GrpcMessageData>,

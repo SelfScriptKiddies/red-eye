@@ -263,17 +263,13 @@ impl PacketProcessor {
                 .and_then(|(_, v)| v.parse::<i32>().ok());
             let body_length = (packet.payload.len() as i32 - parsed.body_offset as i32).max(0);
 
-            // Deduplicate headers
-            let header_set_id = if !parsed.headers.is_empty() {
-                match self.db.get_or_create_header_set(&parsed.headers, &self.cache.header_sets).await {
-                    Ok(id) => Some(id),
-                    Err(e) => {
-                        error!("Failed to store header set: {:?}", e);
-                        None
-                    }
-                }
+            // Header dedup key + JSONB — resolved to a header_set id per
+            // flush batch (no per-packet DB call, no stale id cache).
+            let (header_hash, header_json) = if parsed.headers.is_empty() {
+                (None, None)
             } else {
-                None
+                let (h, j) = DB::hash_headers(&parsed.headers);
+                (Some(h), Some(j.to_string()))
             };
 
             // Detect gRPC
@@ -324,14 +320,15 @@ impl PacketProcessor {
                 content_length,
                 body_offset: parsed.body_offset as i32,
                 body_length,
-                header_set_id,
+                header_hash,
+                header_json,
                 timestamp: packet.timestamp_seconds as i64,
                 l7_protocol,
                 grpc: grpc_data,
             });
 
-            debug!("HTTP parsed for batch: {} headers (set_id={:?})",
-                parsed.headers.len(), header_set_id
+            debug!("HTTP parsed for batch: {} headers (hash={:?})",
+                parsed.headers.len(), header_hash
             );
         }
         } // should_parse_http

@@ -14,7 +14,6 @@ pub struct Cache {
     pub streams: Arc<StreamsCache>,
     pub stream_locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
     pub proto_schemas: Arc<RwLock<HashMap<usize, ProtoSchema>>>,
-    pub header_sets: Arc<DashMap<i64, i64>>,
     /// TCP lifecycle: tuple keys where a plain SYN opened a connection that
     /// has not carried data yet — a repeated plain SYN is a retransmission
     /// and must reuse the stream, not fork a new one. Cleared by the first
@@ -33,7 +32,6 @@ impl Cache {
             streams: Arc::new(StreamsCache::new(stream_ttl_secs)),
             stream_locks: Arc::new(DashMap::new()),
             proto_schemas: Arc::new(RwLock::new(HashMap::new())),
-            header_sets: Arc::new(DashMap::new()),
             syn_pending: Arc::new(DashMap::new()),
             closed_streams: Arc::new(DashMap::new()),
         }

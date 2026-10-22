@@ -302,18 +302,15 @@ impl DB {
         .map(|_| ())
     }
 
-    /// Get or create a deduplicated header set. Returns the header_set id.
-    /// Uses in-memory cache to avoid DB round-trips for repeated header sets.
-    pub async fn get_or_create_header_set(
-        &self,
-        headers: &[(String, String)],
-        cache: &dashmap::DashMap<i64, i64>,
-    ) -> Result<i64, Error> {
+    /// Build the dedup key + JSONB payload for a header set.
+    /// Pure: no DB round-trip on the packet hot path — the header_set id is
+    /// resolved per flush batch by [`Self::insert_http_messages_batch`]
+    /// (same pattern as gRPC body sets).
+    pub fn hash_headers(headers: &[(String, String)]) -> (i64, serde_json::Value) {
         use std::collections::hash_map::DefaultHasher;
         use std::collections::BTreeMap;
         use std::hash::{Hash, Hasher};
 
-        // Build sorted JSONB and compute hash
         let map: BTreeMap<&str, &str> = headers
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -322,77 +319,7 @@ impl DB {
 
         let mut hasher = DefaultHasher::new();
         json.to_string().hash(&mut hasher);
-        let hash = hasher.finish() as i64;
-
-        // Check in-memory cache first
-        if let Some(id) = cache.get(&hash) {
-            return Ok(*id);
-        }
-
-        // Try to find existing in DB
-        let existing = sqlx::query_scalar::<_, i64>("SELECT id FROM header_set WHERE hash = $1")
-            .bind(hash)
-            .fetch_optional(&self.pgpool)
-            .await?;
-
-        if let Some(id) = existing {
-            cache.insert(hash, id);
-            return Ok(id);
-        }
-
-        // Insert new (ON CONFLICT for race conditions)
-        let id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO header_set (hash, headers) VALUES ($1, $2)
-             ON CONFLICT (hash) DO UPDATE SET hash = header_set.hash
-             RETURNING id",
-        )
-        .bind(hash)
-        .bind(json)
-        .fetch_one(&self.pgpool)
-        .await?;
-
-        cache.insert(hash, id);
-        Ok(id)
-    }
-
-    /// Insert an HTTP message with a reference to a deduplicated header set.
-    pub async fn insert_http_message(
-        &self,
-        stream_id: usize,
-        packet_id: i64,
-        is_request: bool,
-        method: Option<&str>,
-        path: Option<&str>,
-        status_code: Option<u16>,
-        http_version: Option<&str>,
-        content_type: Option<&str>,
-        content_length: Option<i32>,
-        body_offset: i32,
-        body_length: i32,
-        header_set_id: Option<i64>,
-        timestamp: i64,
-    ) -> Result<i64, Error> {
-        sqlx::query(
-            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-             RETURNING id"
-        )
-        .bind(stream_id as i64)
-        .bind(packet_id)
-        .bind(is_request)
-        .bind(method)
-        .bind(path)
-        .bind(status_code.map(|c| c as i16))
-        .bind(http_version)
-        .bind(content_type)
-        .bind(content_length)
-        .bind(body_offset)
-        .bind(body_length)
-        .bind(header_set_id)
-        .bind(timestamp)
-        .fetch_one(&self.pgpool)
-        .await
-        .map(|row| row.get::<i64, _>("id"))
+        (hasher.finish() as i64, json)
     }
 
     /// Insert a gRPC message with deduplicated body
@@ -580,6 +507,41 @@ impl DB {
             return Ok(vec![]);
         }
 
+        // Resolve header_set ids per batch (same pattern as gRPC body
+        // sets). The hash is UNIQUE in header_set, so the upsert both
+        // dedups and REVIVES sets deleted by cleanup_old_data's orphan
+        // GC — the old per-packet in-memory cache happily reused ids of
+        // deleted rows, leaving http_messages whose headers rendered
+        // empty in the UI.
+        let mut distinct: HashMap<i64, &str> = HashMap::new();
+        for (_, http) in rows {
+            if let (Some(hash), Some(json)) = (http.header_hash, http.header_json.as_deref()) {
+                distinct.entry(hash).or_insert(json);
+            }
+        }
+
+        let mut id_by_hash: HashMap<i64, i64> = HashMap::new();
+        if !distinct.is_empty() {
+            let distinct: Vec<(i64, &str)> = distinct.into_iter().collect();
+            let mut q1 = String::from("INSERT INTO header_set (hash, headers) VALUES ");
+            for (i, _) in distinct.iter().enumerate() {
+                if i > 0 {
+                    q1.push_str(", ");
+                }
+                let base = i * 2;
+                // header_json is carried as text — cast to the column type.
+                q1.push_str(&format!("(${}, ${}::jsonb)", base + 1, base + 2));
+            }
+            q1.push_str(" ON CONFLICT (hash) DO UPDATE SET headers = EXCLUDED.headers RETURNING hash, id");
+            let mut query1 = sqlx::query(&q1);
+            for (h, j) in &distinct {
+                query1 = query1.bind(*h).bind(*j);
+            }
+            for row in query1.fetch_all(&self.pgpool).await? {
+                id_by_hash.insert(row.get::<i64, _>("hash"), row.get::<i64, _>("id"));
+            }
+        }
+
         const COLS: usize = 13;
         let mut query = String::from(
             "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp) VALUES "
@@ -602,6 +564,9 @@ impl DB {
 
         let mut q = sqlx::query_scalar::<_, i64>(&query);
         for (packet_id, http) in rows {
+            let header_set_id = http
+                .header_hash
+                .and_then(|h| id_by_hash.get(&h).copied());
             q = q
                 .bind(http.stream_id as i64)
                 .bind(*packet_id)
@@ -614,7 +579,7 @@ impl DB {
                 .bind(http.content_length)
                 .bind(http.body_offset)
                 .bind(http.body_length)
-                .bind(http.header_set_id)
+                .bind(header_set_id)
                 .bind(http.timestamp);
         }
         q.fetch_all(&self.pgpool).await
