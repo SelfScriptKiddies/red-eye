@@ -244,7 +244,15 @@ export default function AgentsPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(command)
-    }).then(() => setTimeout(fetchAgents, 1000));
+    }).then(async r => {
+      // The backend refuses offline/unknown agents — surface it instead of
+      // pretending the command landed.
+      if (!r.ok) {
+        alert(`Команда не отправлена (${r.status}): ${(await r.text()).slice(0, 200)}`);
+        return;
+      }
+      setTimeout(fetchAgents, 1000);
+    });
   };
 
   const broadcastCommand = (command: object, agentIds: string[] = []) => {
@@ -252,7 +260,18 @@ export default function AgentsPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent_ids: agentIds, ...command })
-    }).then(() => setTimeout(fetchAgents, 1000));
+    }).then(async r => {
+      if (!r.ok) {
+        alert(`Команда не отправлена (${r.status}): ${(await r.text()).slice(0, 200)}`);
+        return;
+      }
+      const results = await r.json().catch(() => []);
+      const failed = (Array.isArray(results) ? results : []).filter((x: any) => x.status === 'error');
+      if (failed.length > 0) {
+        alert(`Не доставлено агентам:\n${failed.map((f: any) => `  ${f.agent_id}: ${f.error}`).join('\n')}`);
+      }
+      setTimeout(fetchAgents, 1000);
+    });
   };
 
   // Proxy

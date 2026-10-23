@@ -90,6 +90,28 @@ impl AgentService {
 
     /// Send a command to a specific agent
     pub async fn send_command(&self, agent_id: &str, command: &serde_json::Value) -> Result<(), String> {
+        // NATS is fire-and-forget: a command for a dead agent vanishes
+        // with nobody the wiser (the UI showed "sent"). Refuse instead —
+        // no heartbeat within the timeout means nobody is listening.
+        match self.get_agent(agent_id).await {
+            None => {
+                return Err(format!(
+                    "agent '{agent_id}' is not known (never sent a heartbeat)"
+                ))
+            }
+            Some(info) if !info.online => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                let stale_secs = (now_ms.saturating_sub(info.timestamp_ms)) / 1000;
+                return Err(format!(
+                    "agent '{agent_id}' is offline (no heartbeat for {stale_secs}s)"
+                ));
+            }
+            _ => {}
+        }
+
         let topic = format!("agent_commands.{}", agent_id);
         let payload = serde_json::to_vec(command).map_err(|e| e.to_string())?;
 
@@ -109,7 +131,16 @@ impl AgentService {
         command: &serde_json::Value,
     ) -> Vec<(String, Result<(), String>)> {
         let targets: Vec<String> = if agent_ids.is_empty() {
-            self.agents.read().await.keys().cloned().collect()
+            // Broadcast reaches only agents that can actually receive:
+            // dead registry entries would swallow the command silently
+            // (send_command now refuses them anyway) and inflate the
+            // "N agents" count the UI reports.
+            self.list_agents()
+                .await
+                .into_iter()
+                .filter(|a| a.online)
+                .map(|a| a.agent_id)
+                .collect()
         } else {
             agent_ids.to_vec()
         };

@@ -851,7 +851,7 @@ export function PacketsPage() {
                                                         <div className="stream-info-title">{st?.service_name ?? 'stream'} #{id} · порт {svc?.port ?? '—'}</div>
                                                         <div className="stream-info-addr">{stripCidr(st?.src_ip)} → {stripCidr(st?.dst_ip)}</div>
                                                         <div className="stream-info-meta">
-                                                            {st?.l7_protocol ?? ''} · {st?.packet_count ?? 0} pkt
+                                                            {String(st?.l7_protocol ?? '')} · {st?.packet_count ?? 0} pkt
                                                         </div>
                                                     </div>
                                                 );
