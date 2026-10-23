@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod auth;
 pub mod block_sync;
+pub mod download;
 pub mod l7;
 pub mod metrics;
 pub mod protect;
@@ -14,6 +15,7 @@ pub mod special_triggers;
 pub mod stats;
 pub mod tag;
 pub mod updater;
+pub mod version;
 use actix_web::http::header::RETRY_AFTER;
 use actix_web::web;
 use actix_web::HttpResponse;
@@ -54,6 +56,9 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
     metrics::register_metrics();
     cfg
     .configure(metrics::config)
+    // Agent binary download — outside /api scope, PUBLIC by design
+    // (operators wget it before they have credentials; see api/download.rs)
+    .configure(download::public_config)
     .service(
         SwaggerUi::new("/api/docs/{_:.*}")
         .url("/api/docs/openapi.json", ApiDoc::openapi())
@@ -71,6 +76,8 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             .configure(protect::config)
             .configure(proto::config)
             .configure(stats::config)
+            .configure(version::config)
+            .configure(download::config)
             .configure(crate::health::config)
             .service(web::redirect("/docs", "/api/docs/"))
     );
@@ -117,6 +124,11 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         agent::send_agent_command,
         agent::broadcast_agent_command,
         agent::get_agent_containers,
+
+        download::download_agent_binary,
+        download::get_install_command,
+
+        version::get_versions,
 
         l7::get_http_messages,
         l7::get_http_message_full,

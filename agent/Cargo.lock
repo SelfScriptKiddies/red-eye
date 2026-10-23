@@ -791,6 +791,8 @@ dependencies = [
 [[package]]
 name = "harpoon-core"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c104d6b480b11d52f7d95722d6b968694c32f7eb308ccddea01d777c9b2309"
 dependencies = [
  "arc-swap",
  "bytes",

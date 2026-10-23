@@ -1,6 +1,11 @@
 # docker-compose.yaml path
 DOCKER_COMPOSE_FILE := docker-compose.yaml
 
+# Stamp every image with the building commit — /api/version uses it to
+# spot drift between backend / analyzer / frontend / agents. `export`
+# propagates it into compose build args.
+export RED_EYE_GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
 # docker-compose command
 DC := docker-compose -f $(DOCKER_COMPOSE_FILE)
 

@@ -177,4 +177,29 @@ pub struct ApplicationConfig {
         default = 10
     )]
     pub max_selected_streams: i32,
+
+    /// Version service (/api/version drift checks)
+    #[source(
+        clap(long="frontend-url", help="Base URL of the frontend (nginx) serving version.json", help_heading = "Version"),
+        env = "FRONTEND_URL",
+        config = "version.frontend_url",
+        default = "http://frontend:80".to_string())
+    ]
+    pub frontend_url: String,
+    #[source(
+        clap(long="nats-analyzer-info-subject", help="NATS subject the analyzer answers version requests on", help_heading = "Version"),
+        env = "NATS_ANALYZER_INFO_SUBJECT",
+        config = "version.analyzer_info_subject",
+        default = "service_info.analyzer".to_string())
+    ]
+    pub nats_analyzer_info_subject: String,
+
+    /// Agent distribution (/api/agent/download)
+    #[source(
+        clap(long="agent-binary-path", help="Path to the red-eye-agent binary served for download", help_heading = "Agent distribution"),
+        env = "AGENT_BINARY_PATH",
+        config = "agent.binary_path",
+        default = "/usr/local/share/red-eye/red-eye-agent".to_string())
+    ]
+    pub agent_binary_path: String,
 }

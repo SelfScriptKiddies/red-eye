@@ -15,6 +15,11 @@ RUN npm ci --silent
 # Copy source code
 COPY . .
 
+# Stamp dist/version.json with the building commit (no .git in the
+# context). Below `npm ci` on purpose so a new sha doesn't reinstall deps.
+ARG RED_EYE_GIT_SHA=""
+ENV RED_EYE_GIT_SHA=${RED_EYE_GIT_SHA}
+
 # Build the application
 RUN npm run build
 

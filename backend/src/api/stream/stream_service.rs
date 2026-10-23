@@ -69,8 +69,8 @@ impl StreamService {
 
     pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<HistogramBucket>, sqlx::Error> {
         let rows = self.stream_repository.get_stream_histogram(bucket_secs).await?;
-        Ok(rows.into_iter().map(|(timestamp, service_id, service_name, count)| {
-            HistogramBucket { timestamp, service_id, service_name, count }
+        Ok(rows.into_iter().map(|(timestamp, packet_count, flag_count)| {
+            HistogramBucket { timestamp, packet_count, flag_count }
         }).collect())
     }
 

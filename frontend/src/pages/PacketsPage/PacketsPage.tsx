@@ -28,6 +28,10 @@ interface StreamRowProps {
     tagColors: Record<string, number>;
 }
 
+// Stream src/dst ips come CIDR-styled from the API ("10.0.0.1/32"); the
+// ban endpoint (and the agent's nftables) wants a bare address.
+const stripCidr = (ip?: unknown): string => String(ip ?? '').replace(/\/\d+$/, '');
+
 // index/style/ariaAttributes are injected by react-window at render time;
 // they must NOT be part of the rowProps object the library type-checks, so
 // they are declared optional here.
@@ -42,13 +46,26 @@ function StreamRow({ index = 0, style, streams, selectedStreamIds, handleStreamC
                 onStreamClick={handleStreamClick}
                 onFavoriteToggle={handleFavoriteToggle}
                 onIpFilter={(ip: string) => addHeaderFilter('_ip', ip)}
-                onIpBan={(ip: string) => {
-                    if (!confirm(`Забанить IP ${ip} на всех агентах?`)) return;
-                    fetch('/api/protect/ip-ban', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ agent_id: '_all', ip, ban: true })
-                    });
+                onIpBan={async (ip: string) => {
+                    const bare = stripCidr(ip);
+                    if (!confirm(`Забанить IP ${bare} на всех агентах?`)) return;
+                    try {
+                        const response = await fetch('/api/protect/ip-ban', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ agent_id: '_all', ip: bare, ban: true })
+                        });
+                        if (!response.ok) {
+                            alert(`Не удалось забанить ${bare}: ${await response.text()}`);
+                            return;
+                        }
+                        const result = await response.json().catch(() => null);
+                        if (result && typeof result.agents === 'number' && result.agents === 0) {
+                            alert(`IP ${bare} отправлен, но онлайн-агентов нет — бан нигде не применился.`);
+                        }
+                    } catch (e) {
+                        alert(`Не удалось забанить ${bare}: ${e}`);
+                    }
                 }}
                 tagColors={tagColors}
             />
@@ -153,8 +170,11 @@ export function PacketsPage() {
         // Always enabled: the first page must load with Live OFF too, and the
         // freeze keeps background refetches from touching the visible list —
         // pending ids land on the Update badge instead. Live only switches
-        // on the 5s apply-batches.
+        // on the 5s apply-batches and the in-place count refresh.
         enabled: true,
+        // Live OFF freezes the visible list solid: WS deltas and background
+        // refetches only grow the Update badge, nothing ticks in place.
+        live,
     });
 
     const {
@@ -253,6 +273,12 @@ export function PacketsPage() {
         }
     }, [headerSearchResults]);
 
+    // Combined filtering: the header-search results (when active) form the
+    // base list INSTEAD of the server-filtered one, so the tag/service
+    // selection must be re-applied client-side on top of it — otherwise
+    // toggling a tag while a header search is open silently does nothing
+    // (the "reset doesn't reset" bug). In 'and' mode every selected tag
+    // name AND service must match; in 'or' mode any of them.
     const filteredStreams = useMemo(() => {
         let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
         if (headerExcludeIds.size > 0) {
@@ -261,7 +287,8 @@ export function PacketsPage() {
         if (showFavoritesOnly) {
             streams = streams.filter((s: any) => s.favorite);
         }
-        if (filterMode === 'or' && (usedTags.length > 0 || usedServices.length > 0)) {
+        const hasTagServiceFilters = usedTags.length > 0 || usedServices.length > 0;
+        if (hasTagServiceFilters && (filterMode === 'or' || headerSearchResults)) {
             // usedTags contains tag IDs (strings), s.tags contains tag names — convert IDs to names
             const selectedTagNames = usedTags.map((id: string) => {
                 const tag = tagsArray.find((t: any) => String(t.id) === id);
@@ -270,7 +297,9 @@ export function PacketsPage() {
             streams = streams.filter((s: any) => {
                 const matchesTag = selectedTagNames.length > 0 && s.tags?.some((t: string) => selectedTagNames.includes(t));
                 const matchesService = usedServices.length > 0 && usedServices.includes(String(s.service_id));
-                return matchesTag || matchesService;
+                return filterMode === 'or'
+                    ? (matchesTag || matchesService)
+                    : (matchesTag || selectedTagNames.length === 0) && (matchesService || usedServices.length === 0);
             });
         }
         return streams;
@@ -377,21 +406,28 @@ export function PacketsPage() {
         addHeaderFilter(name, value, true);
     }, [addHeaderFilter]);
 
-    const onQuickBlock = useCallback((pattern: string) => {
+    const onQuickBlock = useCallback(async (pattern: string) => {
         if (!confirm(`Заблокировать паттерн "${pattern.slice(0, 50)}"?`)) return;
         const isHex = /^[0-9a-f]+$/i.test(pattern) && pattern.length % 2 === 0 && pattern.length > 2;
-        fetch('/api/tag/names', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: `block-${pattern.slice(0, 20)}`,
-                color: 0,
-                template_type: isHex ? 'bsubstr' : 'substr',
-                template: pattern,
-                direction: 'both',
-                special_type: 'block'
-            })
-        });
+        try {
+            const response = await fetch('/api/tag/names', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: `block-${pattern.slice(0, 20)}`,
+                    color: 0,
+                    template_type: isHex ? 'bsubstr' : 'substr',
+                    template: pattern,
+                    direction: 'both',
+                    special_type: 'block'
+                })
+            });
+            if (!response.ok) {
+                alert(`Не удалось создать блокирующий фильтр: ${await response.text()}`);
+            }
+        } catch (e) {
+            alert(`Не удалось создать блокирующий фильтр: ${e}`);
+        }
     }, []);
 
     const onDiffSelect = useCallback((pkt: any) => {
@@ -484,9 +520,8 @@ export function PacketsPage() {
     };
 
     // Export generators
-    // Stream src/dst ips come CIDR-styled from the API; the service port is
-    // the ORIGINAL port the service listens on (taken from its service row).
-    const stripCidr = (ip?: string): string => (ip ?? '').replace(/\/\d+$/, '');
+    // Stream src/dst ips come CIDR-styled from the API; stripCidr lives at
+    // module level (shared with the IP-ban handler).
     const servicePortFor = (streamId: number): number | undefined => {
         const st = streamsArray.find((s: any) => s.id === streamId);
         const svc = servicesArray.find((s: any) => s.id === st?.service_id);
@@ -681,7 +716,15 @@ export function PacketsPage() {
                     >
                       ★ Избранные
                     </button>
-                    <button className="filter-action-btn" onClick={() => { clearStreams(); setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false); }}>
+                    <button className="filter-action-btn" onClick={() => {
+                        // Full reset: filters, favorites, time range AND the
+                        // header/path search — leaving the latter behind made
+                        // the button look broken ("reset doesn't reset").
+                        clearStreams();
+                        setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false);
+                        clearTimeSelection();
+                        setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set());
+                    }}>
                         Сброс
                     </button>
                 </div>

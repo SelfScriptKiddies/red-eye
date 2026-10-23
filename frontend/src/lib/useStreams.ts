@@ -14,6 +14,10 @@ interface UseStreamsOptions {
     endTime?: number | null;
     enabled?: boolean;
     refetchInterval?: number | false;
+    /** Live mode: in-place count refresh for visible streams is allowed.
+     * false (Live off) freezes the visible snapshot completely — WS deltas
+     * and background refetches only grow the «N новых» badge. */
+    live?: boolean;
 }
 
 interface StreamItem {
@@ -38,11 +42,14 @@ function buildUrl(cursor: string | null, tags: string[], services: string[], sta
 
 const cursorOf = (item: StreamItem): string => `${item.last_packet_time ?? 0}:${item.id}`;
 
-export function useStreams({ tags, services, startTime, endTime, enabled = true, refetchInterval = false }: UseStreamsOptions) {
+export function useStreams({ tags, services, startTime, endTime, enabled = true, refetchInterval = false, live = true }: UseStreamsOptions) {
     const queryClient = useQueryClient();
     const [freeze, dispatch] = useReducer(freezeReducer<StreamItem>, undefined, initialFreezeState<StreamItem>);
     const [hasMoreStreams, setHasMoreStreams] = useState(true);
     const loadingMoreRef = useRef(false);
+    // Ref so the dispatches below don't churn identity when Live toggles.
+    const liveRef = useRef(live);
+    liveRef.current = live;
 
     // Identity of the filters the query runs under. The freeze reducer
     // applies data wholesale when this changes (filters switched) and
@@ -64,7 +71,7 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
     useEffect(() => {
         if (queryData) {
             const items = (Array.isArray(queryData) ? queryData : Object.values(queryData)) as StreamItem[];
-            dispatch({ type: 'query_data', data: items, queryKey, maxVisible: MAX_STREAMS });
+            dispatch({ type: 'query_data', data: items, queryKey, maxVisible: MAX_STREAMS, live: liveRef.current });
         }
     }, [queryData, queryKey]);
 
@@ -107,7 +114,7 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
     // WS activity flush: additive count deltas for visible streams +
     // off-page deltas / first-seen ids accumulating into the plaque.
     const onActivity = useCallback((flush: ActivityFlush) => {
-        dispatch({ type: 'activity', patches: flush.patches, newStreamIds: flush.newStreamIds });
+        dispatch({ type: 'activity', patches: flush.patches, newStreamIds: flush.newStreamIds, live: liveRef.current });
     }, []);
 
     const clearStreams = useCallback(() => {

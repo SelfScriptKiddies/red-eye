@@ -205,3 +205,34 @@
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
     color: var(--re-text, #eee);
 }
+
+/* Two-series legend: packets (bars) + flags (line) */
+.timeline-bar-legend {
+    position: absolute;
+    top: 4px;
+    left: 8px;
+    display: flex;
+    gap: 10px;
+    font-size: 10px;
+    color: var(--re-text-dim);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.timeline-bar-legend .legend-swatch {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.timeline-bar-legend .legend-packets {
+    background: #0089ce;
+}
+
+.timeline-bar-legend .legend-flags {
+    background: #e74c3c;
+    border-radius: 50%;
+}

@@ -41,6 +41,13 @@ pub struct IpBanRequest {
     pub ban: bool,
 }
 
+/// The UI sends stream dst/src IPs verbatim, and those come CIDR-styled from
+/// the API ("10.0.0.1/32"). The agent's nftables validator expects a bare
+/// address, so strip the prefix (and whitespace) before dispatching.
+fn normalize_ip(ip: &str) -> String {
+    ip.trim().split('/').next().unwrap_or(ip.trim()).to_string()
+}
+
 #[utoipa::path(post, path = "/api/protect", tag = "protect",
     responses((status = 200, description = "Protection toggled")))]
 #[post("/protect")]
@@ -116,10 +123,16 @@ async fn toggle_ip_ban(
     agent_service: web::Data<Arc<AgentService>>,
     body: web::Json<IpBanRequest>,
 ) -> impl Responder {
+    let ip = normalize_ip(&body.ip);
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({"error": format!("Invalid IP address: {}", body.ip)}));
+    }
+
     let command = if body.ban {
-        serde_json::json!({"type": "IpBan", "ip": body.ip})
+        serde_json::json!({"type": "IpBan", "ip": ip})
     } else {
-        serde_json::json!({"type": "IpUnban", "ip": body.ip})
+        serde_json::json!({"type": "IpUnban", "ip": ip})
     };
 
     let action = if body.ban { "banned" } else { "unbanned" };
@@ -127,10 +140,10 @@ async fn toggle_ip_ban(
     if body.agent_id == "_all" {
         let results = agent_service.broadcast_command(&[], &command).await;
         let success = results.iter().filter(|(_, r)| r.is_ok()).count();
-        HttpResponse::Ok().json(serde_json::json!({"status": action, "ip": body.ip, "agents": success}))
+        HttpResponse::Ok().json(serde_json::json!({"status": action, "ip": ip, "agents": success}))
     } else {
         match agent_service.send_command(&body.agent_id, &command).await {
-            Ok(_) => HttpResponse::Ok().json(serde_json::json!({"status": action, "ip": body.ip})),
+            Ok(_) => HttpResponse::Ok().json(serde_json::json!({"status": action, "ip": ip})),
             Err(e) => HttpResponse::BadRequest().json(serde_json::json!({"error": e})),
         }
     }

@@ -1,6 +1,86 @@
 import './SettingsPage.css'
 import { useState, useEffect } from 'react';
-import { AgentContainerInfo, AgentListItem, fetchAgentContainers } from '../../lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { AgentContainerInfo, AgentListItem, apiFetch, fetchAgentContainers } from '../../lib/api';
+
+interface ServiceVersionInfo {
+    version?: string | null;
+    git_sha?: string | null;
+    error?: string | null;
+}
+
+interface VersionsResponse {
+    backend: { version: string; git_sha: string };
+    analyzer?: ServiceVersionInfo;
+    frontend?: ServiceVersionInfo;
+    agents?: { agent_id: string; online: boolean; version?: string | null }[];
+    cache?: { ttl_secs: number; age_secs: number };
+}
+
+function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo }) {
+    const version = info?.version && info?.git_sha
+        ? `${info.version}+${info.git_sha}`
+        : null;
+    return (
+        <div className="version-row">
+            <span className="version-name">{name}</span>
+            {version ? (
+                <span className={`version-value ${info.git_sha && info.git_sha !== 'unknown' ? '' : 'version-stale'}`}>
+                    {version}
+                </span>
+            ) : info?.error ? (
+                <span className="version-error" title={info.error}>недоступен</span>
+            ) : (
+                <span className="version-error">нет данных</span>
+            )}
+        </div>
+    );
+}
+
+/** Versions of every service from /api/version (60s server-side cache).
+ * Different git shas across rows = the stack drifted apart — redeploy. */
+function VersionsBlock() {
+    const { data, isLoading, error } = useQuery({
+        queryKey: ['versions'],
+        queryFn: () => apiFetch<VersionsResponse>('/api/version'),
+        refetchInterval: 30_000,
+    });
+
+    if (isLoading) return <p className="text-muted" style={{ fontSize: '12px' }}>Загрузка…</p>;
+    if (error || !data) return <p className="text-muted" style={{ fontSize: '12px' }}>Версии недоступны</p>;
+
+    const shas = [data.backend?.git_sha, data.analyzer?.git_sha, data.frontend?.git_sha]
+        .filter((s): s is string => Boolean(s) && s !== 'unknown');
+    const drifted = new Set(shas).size > 1;
+
+    return (
+        <div className="versions-block">
+            <VersionRow name="backend" info={data.backend} />
+            <VersionRow name="analyzer" info={data.analyzer} />
+            <VersionRow name="frontend" info={data.frontend} />
+            {(data.agents ?? []).length > 0 && (
+                <>
+                    <div className="version-sep">агенты</div>
+                    {(data.agents ?? []).map(a => {
+                        // a.version is already the full "0.1.0+sha" — split it
+                        // back for the row renderer.
+                        const [agentVer, agentSha] = (a.version ?? '').split('+');
+                        return (
+                            <VersionRow
+                                key={a.agent_id}
+                                name={a.agent_id + (a.online ? '' : ' (offline)')}
+                                info={{ version: agentVer || null, git_sha: agentSha || null }}
+                            />
+                        );
+                    })}
+                </>
+            )}
+            {drifted && (
+                <div className="version-drift">⚠ Версии разошлись — переразвёртка</div>
+            )}
+        </div>
+    );
+}
 
 interface Service {
     id?: number;
@@ -429,25 +509,33 @@ export function SettingsPage() {
             if (response.ok) {
                 await fetchFilters();
                 closeFilterModal();
+            } else {
+                const text = await response.text().catch(() => '');
+                alert(`Не удалось сохранить фильтр (${response.status}): ${text || response.statusText}`);
             }
         } catch (error) {
             console.error('Error saving filter:', error);
+            alert(`Не удалось сохранить фильтр: ${error}`);
         }
     };
 
     const deleteFilter = async (id: number) => {
         if (!confirm('Вы уверены, что хотите удалить этот фильтр?')) return;
-        
+
         try {
             const response = await fetch(`${API_URL}/tag/names/${id}`, {
                 method: 'DELETE'
             });
-            
+
             if (response.ok) {
                 await fetchFilters();
+            } else if (response.status !== 404) {
+                const text = await response.text().catch(() => '');
+                alert(`Не удалось удалить фильтр (${response.status}): ${text || response.statusText}`);
             }
         } catch (error) {
             console.error('Error deleting filter:', error);
+            alert(`Не удалось удалить фильтр: ${error}`);
         }
     };
 
@@ -535,6 +623,15 @@ export function SettingsPage() {
                         <h2>Общие</h2>
                     </div>
                     <div className="items-list">
+                        {/* Versions — drift check, served from the backend's
+                            60s-cached /api/version */}
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Версии сервисов</h4>
+                                <VersionsBlock />
+                            </div>
+                        </div>
+
                         <div className="settings-card">
                             <div className="card-content">
                                 <h4>Flag Farm</h4>

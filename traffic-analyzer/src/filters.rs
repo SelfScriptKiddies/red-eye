@@ -3,7 +3,7 @@ pub mod bsubstr;
 pub mod substr;
 pub mod filterDTO;
 
-use log::{error, debug};
+use log::{error, warn, debug};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -68,6 +68,12 @@ pub fn add_filter(id: usize, pattern_name: String, pattern_type: String, payload
 
     // Build first: on a bad filter (unsupported type / bad regex payload)
     // we return without touching an already-registered entry with this id.
+    //
+    // bsubstr templates are HEX strings (the UI's quick-block and the tag
+    // form both send hex, e.g. "deadbeef"); the filter must search for the
+    // DECODED bytes, not the literal ASCII of the hex string — same
+    // convention as the agent's harpoon::parse_filter. Payloads that are
+    // not valid hex fall back to raw bytes (backwards compatibility).
     let filter: Box<dyn Filter> = match pattern_type.to_lowercase().as_str() {
         "regex" => {
             let payload_str = match String::from_utf8(payload.to_vec()) {
@@ -86,7 +92,19 @@ pub fn add_filter(id: usize, pattern_name: String, pattern_type: String, payload
                 }
             }
         }
-        "bsubstr" => Box::new(BinarySubstrFilter::new(id, &pattern_name, payload)),
+        "bsubstr" => {
+            let pattern_bytes = match hex::decode(payload) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    warn!(
+                        "bsubstr filter '{}' payload is not valid hex, using raw bytes",
+                        pattern_name
+                    );
+                    payload.to_vec()
+                }
+            };
+            Box::new(BinarySubstrFilter::new(id, &pattern_name, &pattern_bytes))
+        }
         "substr" => Box::new(SubstrFilter::new(id, &pattern_name, payload)),
         _ => {
             error!("Unsupported filter type: {}", pattern_type);
@@ -288,6 +306,59 @@ mod tests {
             1,
             "ConfigSync right after DB warm-up must not duplicate filters"
         );
+        remove_filter(id);
+    }
+
+    /// bsubstr templates arrive as HEX strings on the wire (backend sends
+    /// `tag_name.template.as_bytes()`), and the DB warm-up loads them the
+    /// same way. The filter must decode hex and search for the BYTES —
+    /// matching the literal ASCII "deadbeef" would never find binary
+    /// content. Mirrors agent harpoon::parse_filter semantics.
+    #[test]
+    fn bsubstr_hex_template_matches_decoded_bytes() {
+        let _guard = FILTERS_TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let id = 987_660;
+
+        assert!(add_filter(
+            id,
+            "bin".to_string(),
+            "bsubstr".to_string(),
+            b"deadbeef", // hex STRING — decodes to [0xde, 0xad, 0xbe, 0xef]
+            FilterDirection::Both,
+        ));
+
+        // Real binary content matches...
+        let hit = apply_filters(&[0x00, 0xde, 0xad, 0xbe, 0xef, 0x11], &Direction::Inbound);
+        assert!(
+            hit.iter().any(|(fid, t)| *fid == id && !t.is_empty()),
+            "bsubstr must match the decoded bytes, not the hex text"
+        );
+
+        // ...the literal ASCII of the hex string must NOT match.
+        let miss = apply_filters(b"xxdeadbeefyy", &Direction::Inbound);
+        assert!(!miss.iter().any(|(fid, _)| *fid == id));
+
+        remove_filter(id);
+    }
+
+    /// Backwards compatibility: a bsubstr payload that is not valid hex
+    /// (legacy plain-text rows) still searches for its raw bytes.
+    #[test]
+    fn bsubstr_non_hex_payload_falls_back_to_raw_bytes() {
+        let _guard = FILTERS_TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let id = 987_661;
+
+        assert!(add_filter(
+            id,
+            "legacy".to_string(),
+            "bsubstr".to_string(),
+            b"zz not hex zz",
+            FilterDirection::Both,
+        ));
+
+        let hit = apply_filters(b"prefix zz not hex zz suffix", &Direction::Outbound);
+        assert!(hit.iter().any(|(fid, t)| *fid == id && !t.is_empty()));
+
         remove_filter(id);
     }
 

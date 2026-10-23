@@ -1,7 +1,12 @@
 use clap::Parser;
 
+/// `red-eye-agent --version` prints this: crate version + building commit
+/// (e.g. "0.1.0+df78fe2"). Same string rides in the heartbeat — see
+/// version.rs.
+const FULL_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("RED_EYE_GIT_SHA"));
+
 #[derive(Parser, Debug, Clone)]
-#[command(name = "red-eye-agent", version, about = "Red Eye traffic capture agent")]
+#[command(name = "red-eye-agent", version = FULL_VERSION, about = "Red Eye traffic capture agent")]
 pub struct AgentConfig {
     /// Agent identifier (defaults to hostname)
     #[arg(long, env = "AGENT_ID")]

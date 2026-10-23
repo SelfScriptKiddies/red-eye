@@ -190,20 +190,32 @@ impl StreamRepository {
         query.fetch_all(&self.pgpool).await
     }
 
-    /// Stream histogram over time buckets. Reads `stream` JOIN `service`
-    /// directly (only last_packet_time/service columns are needed — no tags,
-    /// so no stream_tag join either). Replaces the old streams_list_view read.
-    pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i64, String, i64)>, sqlx::Error> {
-        sqlx::query_as::<_, (i64, i64, String, i64)>(
+    /// Histogram over time buckets: TOTAL packet count + flag-trigger count
+    /// per bucket (no per-service split — the timeline shows two series,
+    /// packets and flags). Packets are counted from the `packets` table
+    /// (idx_packets_timestamp); flags are tag triggers whose tag_name has
+    /// special_type='flag'. FULL JOIN so buckets with only flags (or only
+    /// packets) are kept.
+    pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i64, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, i64, i64)>(
             r#"
-            SELECT (COALESCE(str.last_packet_time, 0) / $1) * $1 AS bucket_ts,
-                   str.service_id,
-                   s.name AS service_name,
-                   COUNT(*) AS count
-            FROM stream str
-            JOIN service s ON s.id = str.service_id
-            WHERE COALESCE(str.last_packet_time, 0) > 0
-            GROUP BY bucket_ts, str.service_id, s.name
+            WITH packets AS (
+                SELECT (timestamp / $1) * $1 AS bucket_ts, COUNT(*) AS cnt
+                FROM packets
+                GROUP BY bucket_ts
+            ),
+            flags AS (
+                SELECT (t.timestamp / $1) * $1 AS bucket_ts, COUNT(*) AS cnt
+                FROM tag t
+                JOIN tag_name tn ON tn.id = t.tag_id
+                WHERE tn.special_type = 'flag'
+                GROUP BY bucket_ts
+            )
+            SELECT COALESCE(p.bucket_ts, f.bucket_ts) AS bucket_ts,
+                   COALESCE(p.cnt, 0) AS packet_count,
+                   COALESCE(f.cnt, 0) AS flag_count
+            FROM packets p
+            FULL OUTER JOIN flags f ON f.bucket_ts = p.bucket_ts
             ORDER BY bucket_ts ASC
             "#)
             .bind(bucket_secs as i64)

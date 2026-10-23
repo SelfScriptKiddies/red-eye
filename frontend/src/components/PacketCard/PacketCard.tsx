@@ -492,7 +492,23 @@ export const PacketCard = memo(function PacketCard({ direction, id, packet_data,
 
     const renderHttpView = () => {
         if (httpLoading) return <div className="http-loading">Loading...</div>;
-        if (!httpData) return <pre className="packet-body">{utf8}</pre>;
+        if (!httpData) {
+            return (
+                <pre className="packet-body">
+                    {triggers.length > 0 ? renderHighlightedText(utf8, triggers) : utf8}
+                </pre>
+            );
+        }
+
+        // Tag trigger indexes point into the FULL payload; the HTTP body is
+        // everything after the header block, so shift the triggers by its
+        // length before highlighting (same renderer as text mode).
+        const headerEnd = utf8.indexOf('\r\n\r\n');
+        const bodyOffset = headerEnd === -1 ? utf8.length : headerEnd + 4;
+        const bodyTriggers = triggers
+            .filter((t) => t.end_index > bodyOffset)
+            .map((t) => ({ ...t, start_index: Math.max(t.start_index - bodyOffset, 0), end_index: t.end_index - bodyOffset }));
+        const bodyText = headerEnd === -1 ? '' : utf8.slice(bodyOffset);
 
         return (
             <div className="http-parsed">
@@ -598,8 +614,10 @@ export const PacketCard = memo(function PacketCard({ direction, id, packet_data,
                 </div>
 
                 {/* Body separator + raw body */}
-                {bytes.length > 0 && (
-                    <pre className="http-body">{utf8.split('\r\n\r\n').slice(1).join('\r\n\r\n') || ''}</pre>
+                {bodyText.length > 0 && (
+                    <pre className="http-body">
+                        {bodyTriggers.length > 0 ? renderHighlightedText(bodyText, bodyTriggers) : bodyText}
+                    </pre>
                 )}
 
                 {/* Export buttons for requests */}

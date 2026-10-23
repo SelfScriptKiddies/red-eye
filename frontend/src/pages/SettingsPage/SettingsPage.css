@@ -567,3 +567,53 @@
         color: #213547;
     }
 }
+/* Versions block (/api/version) */
+.versions-block {
+    font-size: 12px;
+}
+
+.version-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.version-name {
+    color: var(--re-text-secondary, #aaa);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.version-value {
+    font-family: var(--re-font-mono, monospace);
+    color: var(--re-success, #4caf50);
+    white-space: nowrap;
+}
+
+.version-value.version-stale {
+    color: var(--re-warning, #e6a23c);
+}
+
+.version-error {
+    color: var(--re-text-dim, #777);
+}
+
+.version-sep {
+    margin-top: 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--re-text-dim, #777);
+}
+
+.version-drift {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border: 1px dashed #e74c3c66;
+    border-radius: 6px;
+    color: #e74c3c;
+    font-size: 11px;
+}

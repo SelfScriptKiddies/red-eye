@@ -22,6 +22,11 @@ pub struct AgentStatus {
     pub nft_redirects: Vec<NftRedirectStatus>,
     pub banned_ips: Vec<String>,
     pub tls_available: bool,
+    /// nft binary present on this host (proxy redirect / IP bans need it).
+    pub nft_available: bool,
+    /// Crate version + building commit, e.g. "0.1.0+df78fe2" — lets the
+    /// backend's /api/version surface drift across deployed agents.
+    pub version: String,
     pub broadcast_drops: u64,
     /// Packets dropped because the sniffer's capture -> NATS queue was full.
     pub sniffer_queue_drops: u64,
@@ -82,6 +87,8 @@ pub fn spawn_heartbeat(
                 nft_redirects,
                 banned_ips,
                 tls_available,
+                nft_available: crate::nftables::nft_binary_available(),
+                version: crate::version::FULL.to_string(),
                 broadcast_drops,
                 sniffer_queue_drops: sniffer_health.queue_drops(),
                 timestamp_ms: std::time::SystemTime::now()

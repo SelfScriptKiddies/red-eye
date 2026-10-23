@@ -57,9 +57,10 @@ pub struct StreamListResponse {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HistogramBucket {
     pub timestamp: i64,
-    pub service_id: i64,
-    pub service_name: String,
-    pub count: i64,
+    /// Total packets in the bucket (all services).
+    pub packet_count: i64,
+    /// Flag tag triggers in the bucket (tag_name.special_type = 'flag').
+    pub flag_count: i64,
 }
 
 impl Stream {

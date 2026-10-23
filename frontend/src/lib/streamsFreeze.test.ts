@@ -113,8 +113,51 @@ describe('freezeReducer — activity (WS frames)', () => {
     });
 });
 
-describe('freezeReducer — misc', () => {
-    it('append extends the snapshot without dedup failures', () => {
+describe('freezeReducer — Live OFF (live: false)', () => {
+    it('query_data does NOT refresh visible fields in place — badge grows instead', () => {
+        let st = run(start(), { type: 'query_data', data: [s(1, 5, 100), s(2)], queryKey: 'k1', maxVisible: 200 });
+        // Fresh page: stream 1 got 7 more packets, stream 3 is new.
+        st = freezeReducer(st, { type: 'query_data', data: [s(3), s(1, 12, 200), s(2)], queryKey: 'k1', maxVisible: 200, live: false });
+        // The snapshot stays byte-for-byte the same — counts must not tick.
+        expect(st.visible).toEqual([s(1, 5, 100), s(2)]);
+        expect(st.pendingNewIds).toEqual([3]);
+    });
+
+    it('activity patches skip visible streams entirely — they land in pending', () => {
+        let st = run(start(), { type: 'query_data', data: [s(1, 10), s(2, 20)], queryKey: 'k1', maxVisible: 200 });
+        const patches = new Map<number, StreamPatch>([
+            [1, { count_delta: 5, last_time: 1234 }],
+            [42, { count_delta: 3 }],
+        ]);
+        st = freezeReducer(st, { type: 'activity', patches, newStreamIds: [7], live: false });
+        expect(st.visible[0].packet_count).toBe(10);
+        expect(st.visible[0].last_time).toBe(1000);
+        // Both the visible stream's update AND the off-page/new ids count.
+        expect(st.pendingNewIds).toEqual([1, 42, 7]);
+        // Repeated deltas for the same streams keep the badge deduplicated.
+        st = freezeReducer(st, { type: 'activity', patches: new Map([[1, { count_delta: 2 }]]), newStreamIds: [], live: false });
+        expect(st.pendingNewIds).toEqual([1, 42, 7]);
+    });
+
+    it('filter switch and accept still apply wholesale with live: false', () => {
+        let st = run(start(), { type: 'query_data', data: [s(1)], queryKey: 'k1', maxVisible: 200 });
+        st = freezeReducer(st, { type: 'query_data', data: [s(9), s(1)], queryKey: 'k2', maxVisible: 200, live: false });
+        expect(st.visible.map((x) => x.id)).toEqual([9, 1]);
+        // Update button: accept must arm the wholesale apply even when frozen.
+        st = freezeReducer(st, { type: 'accept' });
+        st = freezeReducer(st, { type: 'query_data', data: [s(9, 99), s(1)], queryKey: 'k2', maxVisible: 200, live: false });
+        expect(st.visible.find((x) => x.id === 9)?.packet_count).toBe(99);
+        expect(st.pendingNewIds).toEqual([]);
+    });
+
+    it('default (no live field) keeps the Live-ON behavior', () => {
+        let st = run(start(), { type: 'query_data', data: [s(1, 5, 100)], queryKey: 'k1', maxVisible: 200 });
+        st = freezeReducer(st, { type: 'query_data', data: [s(1, 12, 200)], queryKey: 'k1', maxVisible: 200 });
+        expect(st.visible).toEqual([s(1, 12, 200)]);
+    });
+});
+
+describe('freezeReducer — misc', () => {    it('append extends the snapshot without dedup failures', () => {
         let st = run(start(), { type: 'query_data', data: [s(1)], queryKey: 'k1', maxVisible: 200 });
         st = freezeReducer(st, { type: 'append', items: [s(2), s(3)], maxVisible: 200 });
         expect(st.visible.map((x) => x.id)).toEqual([1, 2, 3]);

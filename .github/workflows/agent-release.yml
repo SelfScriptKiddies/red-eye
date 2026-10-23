@@ -1,0 +1,48 @@
+# Builds red-eye-agent and attaches it to GitHub releases on tag push
+# (v*). The same binary is also served by the backend at
+# /api/agent/download (baked into the image at build time) — this workflow
+# exists for hosts without access to the running stack.
+#
+# Static musl build so the binary runs on any Linux amd64 host regardless
+# of the libc installed there (service hosts are arbitrary).
+
+name: agent-release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build agent (static musl)
+        working-directory: agent
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Sanity-check --version
+        run: ./agent/target/x86_64-unknown-linux-musl/release/red-eye-agent --version
+
+      - name: Package
+        run: |
+          cp agent/target/x86_64-unknown-linux-musl/release/red-eye-agent \
+             red-eye-agent-${{ github.ref_name }}-linux-amd64
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: red-eye-agent-*-linux-amd64

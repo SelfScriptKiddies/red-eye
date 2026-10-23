@@ -573,3 +573,91 @@ body:has(.eye__apple__focus) .agents-column::-webkit-scrollbar-thumb {
 .card-dimmed:hover {
   opacity: 0.7;
 }
+
+/* Missing nftables on the agent host — proxy/IP-ban actions unavailable */
+.danger-badge {
+    border: 1px solid #e74c3c;
+    color: #e74c3c;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(231, 76, 60, 0.08);
+}
+
+/* "+" button next to the agent counter — dashed border, opens the
+ * install-command modal */
+.agent-add-btn {
+    background: none;
+    border: 1px dashed var(--re-text-dim, #888);
+    border-radius: 6px;
+    color: var(--re-text-dim, #888);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    margin-left: 6px;
+    padding: 1px 8px 3px;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.agent-add-btn:hover {
+    border-color: var(--re-accent, #4a9eff);
+    color: var(--re-accent, #4a9eff);
+}
+
+/* Install modal */
+.install-step {
+    margin-bottom: 14px;
+}
+
+.install-step-title {
+    font-size: 12px;
+    color: var(--re-text-secondary, #aaa);
+    margin-bottom: 6px;
+}
+
+.install-cmd-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.install-cmd-row pre {
+    flex: 1;
+    margin: 0;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--re-border, #333);
+    border-radius: 6px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    user-select: all;
+}
+
+.install-cmd-row button {
+    align-self: center;
+    padding: 6px 12px;
+    white-space: nowrap;
+}
+
+.install-hint {
+    font-size: 11px;
+    color: var(--re-text-dim, #777);
+    margin-top: 6px;
+}
+
+.install-hint code {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0 4px;
+    border-radius: 3px;
+}
+
+.install-error {
+    font-size: 12px;
+    color: #e74c3c;
+    padding: 8px 10px;
+    border: 1px solid #e74c3c44;
+    border-radius: 6px;
+    background: rgba(231, 76, 60, 0.08);
+}

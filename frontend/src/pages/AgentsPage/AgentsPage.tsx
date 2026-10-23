@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { copyText } from '../../lib/api';
 import './AgentsPage.css';
 
 interface NftRedirect {
@@ -24,6 +25,8 @@ interface Agent {
   active_filters: number;
   nft_redirects: NftRedirect[];
   tls_available: boolean;
+  /** undefined = agent didn't report (older binary) — no verdict */
+  nft_available?: boolean | null;
   timestamp_ms: number;
   online: boolean;
 }
@@ -77,6 +80,12 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
 
+  // Install-command modal ("+" next to the agent counter)
+  const [installModal, setInstallModal] = useState(false);
+  const [installCommand, setInstallCommand] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [installCopied, setInstallCopied] = useState<'wget' | 'run' | null>(null);
+
   const [proxyModal, setProxyModal] = useState(false);
   const [proxyForm, setProxyForm] = useState<ProxyForm>(defaultProxy);
 
@@ -95,11 +104,17 @@ export default function AgentsPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [boundServices, setBoundServices] = useState<number[]>([]);
 
-  const fetchAgents = () => {
-    fetch('/api/agent')
-      .then(r => r.json())
-      .then(data => setAgents(Array.isArray(data) ? data : Object.values(data)))
-      .catch(() => {});
+  const fetchAgents = async (): Promise<Agent[]> => {
+    try {
+      const r = await fetch('/api/agent');
+      if (!r.ok) return [];
+      const data = await r.json();
+      const list = Array.isArray(data) ? data : Object.values(data);
+      setAgents(list);
+      return list;
+    } catch {
+      return [];
+    }
   };
 
   const fetchServices = () => {
@@ -170,17 +185,49 @@ export default function AgentsPage() {
 
   const toggleProtection = async (service: Service, enable: boolean, tlsMitm: boolean = false) => {
     if (!selected) return;
-    await fetch('/api/protect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        service_id: service.id,
-        agent_id: selected,
-        enable,
-        tls_mitm: tlsMitm,
-      }),
-    });
-    setTimeout(fetchAgents, 2000);
+    const agent = selectedAgent;
+    // TLS MITM silently degrades to a plain proxy when the agent has no
+    // CA certs — refuse loudly instead.
+    if (enable && tlsMitm && agent && !agent.tls_available) {
+      alert(`У агента ${selected} нет TLS-сертификатов — MITM невозможен.\n Proxy + TLS не будет применён.`);
+      return;
+    }
+    // Proxy needs the nft redirect to intercept traffic; without nft the
+    // agent will reject the command (previously: silent no-op).
+    if (enable && agent && !agent.nft_available) {
+      alert(`На хосте агента ${selected} нет nftables (nft) — прокси не сможет перехватить трафик.\nУстановите nftables / дайте агенту NET_ADMIN.`);
+      return;
+    }
+    try {
+      const response = await fetch('/api/protect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          service_id: service.id,
+          agent_id: selected,
+          enable,
+          tls_mitm: tlsMitm,
+        }),
+      });
+      if (!response.ok) {
+        alert(`Ошибка ${enable ? 'включения' : 'отключения'} защиты: ${await response.text()}`);
+        return;
+      }
+    } catch (e) {
+      alert(`Ошибка ${enable ? 'включения' : 'отключения'} защиты: ${e}`);
+      return;
+    }
+    // The command is fire-and-forget over NATS: verify the agent actually
+    // applied it (rule appears in harpoon_rules) before calling it done.
+    const expectedRule = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
+    setTimeout(async () => {
+      const list = await fetchAgents();
+      const updated = list.find(a => a.agent_id === selected);
+      const applied = updated?.harpoon_rules.includes(expectedRule) ?? false;
+      if (enable && !applied) {
+        alert(`Агент не подтвердил правило "${expectedRule}".\nПроверьте логи агента (nftables? порт занят?).`);
+      }
+    }, 2500);
   };
 
   useEffect(() => {
@@ -265,6 +312,31 @@ export default function AgentsPage() {
     setReplayForm(defaultReplay);
   };
 
+  // Agent install modal: the run command carries real NATS credentials and
+  // comes from an AUTHORIZED endpoint; the binary itself downloads without
+  // authorization from /download/agent (outside the /api auth scope — see
+  // backend/src/api/download.rs).
+  const openInstallModal = () => {
+    setInstallError(null);
+    setInstallCommand(null);
+    setInstallModal(true);
+    fetch('/api/install-command')
+      .then(async r => {
+        if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+        return r.json();
+      })
+      .then(data => setInstallCommand(data.command))
+      .catch(e => setInstallError(String(e)));
+  };
+
+  const wgetCommand = `wget ${window.location.origin}/download/agent -O red-eye-agent && chmod +x red-eye-agent`;
+
+  const copyWith = (text: string, tag: 'wget' | 'run') => {
+    copyText(text);
+    setInstallCopied(tag);
+    setTimeout(() => setInstallCopied(null), 2000);
+  };
+
   // Sniffer config is applied via the (not yet implemented) sniffer modal;
   // when it lands it should build on setSnifferPorts above.
 
@@ -276,6 +348,11 @@ export default function AgentsPage() {
           <div className="column-header">
             <h2>Агенты</h2>
             <span className="agent-count">{agents.filter(a => a.online).length}/{agents.length}</span>
+            <button
+              className="agent-add-btn"
+              onClick={openInstallModal}
+              title="Подключить новый агент: команда установки и скачивание"
+            >+</button>
           </div>
           <div className="items-list">
             {agents.map(agent => (
@@ -297,6 +374,9 @@ export default function AgentsPage() {
                     <span className="badge option-badge">{agent.active_filters} filters</span>
                   )}
                   {agent.tls_available && <span className="badge info-badge">TLS</span>}
+                  {agent.nft_available === false && (
+                    <span className="badge danger-badge" title="nftables отсутствует: Proxy / бан IP не сработают">no nft</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -559,6 +639,54 @@ export default function AgentsPage() {
             <div className="modal-footer">
               <button onClick={() => setReplayModal(false)}>Отмена</button>
               <button onClick={saveReplay}>Запустить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Agent install modal: download (public) + run command (authorized) */}
+      {installModal && (
+        <div className="modal-overlay" onClick={() => setInstallModal(false)}>
+          <div className="modal-content wide" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Подключить агента</h3>
+              <button className="close-btn" onClick={() => setInstallModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="install-step">
+                <div className="install-step-title">1. Скачать бинарник на хост с сервисом (без авторизации):</div>
+                <div className="install-cmd-row">
+                  <pre className="install-cmd">{wgetCommand}</pre>
+                  <button onClick={() => copyWith(wgetCommand, 'wget')}>
+                    {installCopied === 'wget' ? '✓' : 'Copy'}
+                  </button>
+                </div>
+                <div className="install-hint">
+                  Скачивание доступно без пароля — креды нужны только для запуска (шаг 2).
+                  Версию можно проверить: <code>./red-eye-agent --version</code>
+                </div>
+              </div>
+              <div className="install-step">
+                <div className="install-step-title">2. Запустить с актуальными кредами:</div>
+                {installError && <div className="install-error">Не удалось получить команду: {installError}</div>}
+                {!installError && (
+                  <div className="install-cmd-row">
+                    <pre className="install-cmd">{installCommand ?? 'Загрузка…'}</pre>
+                    {installCommand && (
+                      <button onClick={() => copyWith(installCommand, 'run')}>
+                        {installCopied === 'run' ? '✓' : 'Copy'}
+                      </button>
+                    )}
+                  </div>
+                )}
+                <div className="install-hint">
+                  Подставьте свой <code>--agent-id</code>, интерфейс <code>-i</code> и порты сервиса <code>-p</code>.
+                  Команда содержит пароль — не светите её в чатах.
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => setInstallModal(false)}>Закрыть</button>
             </div>
           </div>
         </div>

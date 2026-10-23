@@ -31,6 +31,11 @@ COPY --from=planner /usr/src/app/recipe.json recipe.json
 # Build dependencies - this layer will be cached
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
+# Stamp the built binary with the building commit (no .git in the context).
+# Below the cook layer so a new sha doesn't invalidate cached deps.
+ARG RED_EYE_GIT_SHA=""
+ENV RED_EYE_GIT_SHA=${RED_EYE_GIT_SHA}
+
 # Copy source code and build application
 COPY proto/ ./proto/
 COPY traffic-analyzer/ .

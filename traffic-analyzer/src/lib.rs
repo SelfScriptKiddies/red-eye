@@ -9,6 +9,7 @@ pub mod http_parser;
 pub mod grpc_parser;
 pub mod proto_schema;
 pub mod batch_flusher;
+pub mod version;
 pub mod ws_aggregator;
 pub mod wire;
 use crate::configuration::init;
@@ -205,6 +206,8 @@ pub async fn run() {
     // WS topic — replaces per-packet NATS publishes, see ws_aggregator.rs).
     let ws_aggregator = ws_aggregator::shared_aggregator();
     if let Ok(ws_nats) = message_broker::create_consumer(&config).await {
+        // Answer /api/version probes from the backend (same connection).
+        version::spawn_version_responder(ws_nats.clone(), config.nats_info_subject.clone());
         ws_aggregator::spawn_ws_aggregate_publisher(
             ws_nats,
             config.nats_websocket_packets_topic.clone(),

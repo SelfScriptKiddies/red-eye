@@ -7,10 +7,36 @@ use serde::Deserialize;
 const TABLE_NAME: &str = "red-eye-agent";
 const CHAIN_NAME: &str = "prerouting";
 
+/// Accepts both a bare address and a CIDR-styled one ("10.0.0.1/32") —
+/// stream IPs are stored CIDR-style and older frontends sent them verbatim;
+/// the /prefix is simply ignored (a ban is always /32-equivalent).
 fn validate_ip(ip: &str) -> Result<()> {
     use std::net::IpAddr;
-    ip.parse::<IpAddr>().map_err(|_| anyhow::anyhow!("Invalid IP address: {}", ip))?;
+    let bare = ip.trim().split('/').next().unwrap_or(ip.trim());
+    bare.parse::<IpAddr>()
+        .map_err(|_| anyhow::anyhow!("Invalid IP address: {}", ip))?;
     Ok(())
+}
+
+/// True when the `nft` binary exists and runs (probed once, cached). The
+/// heartbeat reports it so the UI can explain why proxy/ban buttons fail
+/// on hosts without nftables instead of failing silently.
+pub fn nft_binary_available() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static CACHE: AtomicU8 = AtomicU8::new(0);
+    match CACHE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let ok = Command::new("nft")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            CACHE.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+            ok
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

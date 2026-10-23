@@ -54,6 +54,9 @@ services:
       # Repo root: the build needs the shared proto/
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        # Stamps backend + bundled agent binary; exported by the Makefile.
+        RED_EYE_GIT_SHA: ${RED_EYE_GIT_SHA:-}
     restart: always
     logging:
       driver: json-file
@@ -78,6 +81,8 @@ services:
       # Repo root: the build needs the shared proto/
       context: .
       dockerfile: traffic-analyzer/Dockerfile
+      args:
+        RED_EYE_GIT_SHA: ${RED_EYE_GIT_SHA:-}
     restart: always
     logging:
       driver: json-file
@@ -91,7 +96,10 @@ services:
       - db
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        RED_EYE_GIT_SHA: ${RED_EYE_GIT_SHA:-}
     restart: always
     logging:
       driver: json-file

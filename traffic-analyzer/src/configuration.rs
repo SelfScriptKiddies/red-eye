@@ -15,6 +15,17 @@ use std::fmt::Debug;
     )
 )]
 pub struct ApplicationConfig {
+    /// NATS subject the version responder listens on (the backend's
+    /// /api/version probes it — keep in sync with the backend's
+    /// nats_analyzer_info_subject).
+    #[source(
+        clap(long="nats-info-subject", help="NATS subject to answer version requests on", help_heading = "NATS"),
+        env = "NATS_INFO_SUBJECT",
+        config = "nats.info_subject",
+        default = "service_info.analyzer")
+    ]
+    pub nats_info_subject: String,
+
     /// Database config
     #[source(
         clap(long="db-host", short='H', help="Database domain", help_heading = "Database"),

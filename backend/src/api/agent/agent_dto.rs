@@ -15,6 +15,16 @@ pub struct AgentInfo {
     pub nft_redirects: Vec<NftRedirectStatus>,
     #[serde(default)]
     pub tls_available: bool,
+    /// nft binary present on the agent host (proxy redirects / IP bans
+    /// depend on it; lets the UI explain a failed "Proxy" click).
+    /// None = agent heartbeat didn't report it (older binary) — no verdict.
+    #[serde(default)]
+    pub nft_available: Option<bool>,
+    /// Crate version + building commit reported by the agent heartbeat
+    /// (e.g. "0.1.0+df78fe2"). None = older agent binary that didn't
+    /// report it yet.
+    #[serde(default)]
+    pub version: Option<String>,
     pub timestamp_ms: u64,
     /// Computed by the backend: is the agent currently reachable
     #[serde(default)]

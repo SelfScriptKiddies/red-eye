@@ -30,6 +30,7 @@ mod configuration;
 mod db;
 mod db_watchdog;
 mod health;
+mod version;
 mod wire;
 mod ws_activity;
 
@@ -377,6 +378,15 @@ pub async fn run() -> std::io::Result<()> {
         config.nats_websocket_topic.clone(),
     );
 
+    // Version service: probes analyzer (NATS) + frontend (HTTP) with a
+    // 60s single-flight cache — see api/version.rs.
+    let version_service = Arc::new(api::version::VersionService::new(
+        agent_nats_client.clone(),
+        config.frontend_url.clone(),
+        config.nats_analyzer_info_subject.clone(),
+    ));
+    let version_service_data = web::Data::new(version_service.clone());
+
     HttpServer::new(move || {
         App::new()
             .app_data(pg_pool.clone())
@@ -389,6 +399,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(updater.clone())
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
+            .app_data(version_service_data.clone())
             .app_data(health_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())

@@ -3,22 +3,16 @@ import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api';
 import './TimelineBar.css';
 
-const SERVICE_COLORS = [
-    'var(--re-accent)',
-    'var(--re-success)',
-    '#0089ce',
-    'var(--re-warning)',
-    '#9b59b6',
-    '#e74c3c',
-    '#1abc9c',
-    '#f39c12',
-];
+const PACKETS_COLOR = '#0089ce';   // синий — пакеты
+const FLAGS_COLOR = '#e74c3c';     // красный — флаги
+/// Nonzero values must stay visible even against a huge counterpart:
+/// floor for the scaled bar height (viewBox units of 0..100).
+const MIN_BAR_HEIGHT = 2.5;
 
 interface HistogramBucket {
     timestamp: number;
-    service_id: number;
-    service_name: string;
-    count: number;
+    packet_count: number;
+    flag_count: number;
 }
 
 interface TimelineBarProps {
@@ -72,7 +66,6 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
         if (data.length === 0) return null;
 
         const allTimestamps = [...new Set(data.map(d => d.timestamp))].sort((a, b) => a - b);
-        const serviceIds = [...new Set(data.map(d => d.service_id))];
 
         const dataMin = allTimestamps[0];
         const dataMax = allTimestamps[allTimestamps.length - 1];
@@ -87,51 +80,52 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
         // Filter timestamps to viewport
         const timestamps = allTimestamps.filter(ts => ts >= viewLeft && ts <= viewRight);
 
-        // Count per (timestamp, service_id)
-        const countMap = new Map<string, number>();
-        for (const d of data) {
-            countMap.set(`${d.timestamp}_${d.service_id}`, d.count);
-        }
+        // Per-bucket totals (all services together — no per-service split)
+        const bucketMap = new Map<number, HistogramBucket>();
+        for (const d of data) bucketMap.set(d.timestamp, d);
 
-        // Max stacked count (for Y scale) — use all data for consistent scale
-        let maxStack = 0;
+        // ONE shared Y scale across both series (max of either), so bar
+        // heights are directly comparable — packets next to flags.
+        let maxBar = 0;
         for (const ts of allTimestamps) {
-            let total = 0;
-            for (const sid of serviceIds) {
-                total += countMap.get(`${ts}_${sid}`) ?? 0;
-            }
-            if (total > maxStack) maxStack = total;
+            const b = bucketMap.get(ts);
+            if (!b) continue;
+            maxBar = Math.max(maxBar, b.packet_count, b.flag_count);
         }
-        if (maxStack === 0) maxStack = 1;
+        if (maxBar === 0) maxBar = 1;
 
-        // Build stacked bar rects
+        // Two OVERLAID bars per bucket: the taller one behind, the shorter
+        // in front (drawn later = painted on top in SVG). Packets — blue,
+        // flags — red. Nonzero values get the MIN_BAR_HEIGHT floor so a
+        // handful of flags stays visible next to thousands of packets.
+        // `front` marks the bar painted last (dense) — for a pair it's the
+        // shorter one; a lone bar has nothing behind it, so it's front too.
         const bucketSecs = 60;
         const barWidthPct = Math.min(MAX_BAR_WIDTH_PCT, Math.max(0.5, (bucketSecs / viewWindow) * 100 * 0.8));
-        const bars: { x: number; y: number; height: number; color: string }[] = [];
-        // Per-bucket service breakdown for the hover tooltip.
-        const serviceNames = new Map<number, string>();
-        for (const d of data) serviceNames.set(d.service_id, d.service_name);
-        const tooltipBuckets = new Map<number, { name: string; count: number; color: string }[]>();
+        const bars: { x: number; y: number; height: number; color: string; front: boolean }[] = [];
+        const tooltipBuckets = new Map<number, { packets: number; flags: number }>();
+
+        const barHeight = (value: number) => {
+            if (value <= 0) return 0;
+            return Math.max((value / maxBar) * 100, MIN_BAR_HEIGHT);
+        };
 
         for (const ts of timestamps) {
-            const centerX = ((ts - viewLeft) / viewWindow) * 100;
-            let bottom = 0;
-            const tooltipEntries: { name: string; count: number; color: string }[] = [];
+            const b = bucketMap.get(ts);
+            if (!b || (b.packet_count === 0 && b.flag_count === 0)) continue;
 
-            for (let si = 0; si < serviceIds.length; si++) {
-                const sid = serviceIds[si];
-                const count = countMap.get(`${ts}_${sid}`) ?? 0;
-                if (count === 0) continue;
+            const x = ((ts - viewLeft) / viewWindow) * 100 - barWidthPct / 2;
+            const packetsHeight = barHeight(b.packet_count);
+            const flagsHeight = barHeight(b.flag_count);
 
-                const color = SERVICE_COLORS[si % SERVICE_COLORS.length];
-                const barHeight = (count / maxStack) * 100;
-                const y = 100 - bottom - barHeight;
-
-                bars.push({ x: centerX - barWidthPct / 2, y, height: barHeight, color });
-                bottom += barHeight;
-                tooltipEntries.push({ name: serviceNames.get(sid) ?? `service ${sid}`, count, color });
+            const packetsFront = b.flag_count === 0 || packetsHeight < flagsHeight;
+            if (packetsHeight > 0) {
+                bars.push({ x, y: 100 - packetsHeight, height: packetsHeight, color: PACKETS_COLOR, front: packetsFront });
             }
-            if (tooltipEntries.length > 0) tooltipBuckets.set(ts, tooltipEntries);
+            if (flagsHeight > 0) {
+                bars.push({ x, y: 100 - flagsHeight, height: flagsHeight, color: FLAGS_COLOR, front: !packetsFront || b.packet_count === 0 });
+            }
+            tooltipBuckets.set(ts, { packets: b.packet_count, flags: b.flag_count });
         }
 
         // Time axis ticks
@@ -143,7 +137,7 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
             ticks.push({ time: t, pct: (i / tickCount) * 100 });
         }
 
-        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow, tooltipBuckets };
+        return { bars, barWidthPct, ticks, viewLeft, viewRight, viewWindow, tooltipBuckets, maxBar };
     }, [data, viewOffset]);
 
     // Pan buttons — shift viewport by 5 minutes
@@ -357,25 +351,45 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
 
                     <div className="timeline-bar-chart">
                         {chartData && chartData.bars.length > 0 && (
-                            <svg
-                                width="100%"
-                                height="100%"
-                                viewBox="0 0 100 100"
-                                preserveAspectRatio="none"
-                            >
-                                {chartData.bars.map((bar, i) => (
-                                    <rect
-                                        key={i}
-                                        x={bar.x}
-                                        y={bar.y}
-                                        width={chartData.barWidthPct}
-                                        height={bar.height}
-                                        fill={bar.color}
-                                        opacity={0.7}
-                                        rx={0.3}
-                                    />
-                                ))}
-                            </svg>
+                            <>
+                                <svg
+                                    width="100%"
+                                    height="100%"
+                                    viewBox="0 0 100 100"
+                                    preserveAspectRatio="none"
+                                >
+                                    {/* Back bars of the pairs — light */}
+                                    {chartData.bars.filter(b => !b.front).map((bar, i) => (
+                                        <rect
+                                            key={`back${i}`}
+                                            x={bar.x}
+                                            y={bar.y}
+                                            width={chartData.barWidthPct}
+                                            height={bar.height}
+                                            fill={bar.color}
+                                            opacity={0.45}
+                                            rx={0.3}
+                                        />
+                                    ))}
+                                    {/* Front bars — dense, painted over the back ones */}
+                                    {chartData.bars.filter(b => b.front).map((bar, i) => (
+                                        <rect
+                                            key={`front${i}`}
+                                            x={bar.x}
+                                            y={bar.y}
+                                            width={chartData.barWidthPct}
+                                            height={bar.height}
+                                            fill={bar.color}
+                                            opacity={0.95}
+                                            rx={0.3}
+                                        />
+                                    ))}
+                                </svg>
+                                <div className="timeline-bar-legend" onMouseDown={e => e.stopPropagation()}>
+                                    <span><i className="legend-swatch legend-packets" /> пакеты</span>
+                                    <span><i className="legend-swatch legend-flags" /> флаги</span>
+                                </div>
+                            </>
                         )}
 
                         {selectionRect && (
@@ -430,19 +444,21 @@ export function TimelineBar({ onSelect, onClear, clearRef }: TimelineBarProps) {
                 const W = 200;
                 const x = Math.max(8, Math.min(hover.x + 14, window.innerWidth - W - 8));
                 const y = Math.max(8, hover.y + 16);
-                const total = hoverEntries.reduce((s, e) => s + e.count, 0);
                 const d = new Date(hover.ts * 1000);
                 const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
                 return (
                     <div className="timeline-bar-tooltip" style={{ left: x, top: y }}>
-                        <div className="timeline-bar-tooltip-time">{hhmm} · {total} pkt</div>
-                        {hoverEntries.map((e) => (
-                            <div key={e.name} className="timeline-bar-tooltip-row">
-                                <span className="timeline-bar-tooltip-dot" style={{ background: e.color }} />
-                                <span className="timeline-bar-tooltip-name">{e.name}</span>
-                                <span className="timeline-bar-tooltip-count">{e.count}</span>
-                            </div>
-                        ))}
+                        <div className="timeline-bar-tooltip-time">{hhmm}</div>
+                        <div className="timeline-bar-tooltip-row">
+                            <span className="timeline-bar-tooltip-dot" style={{ background: PACKETS_COLOR }} />
+                            <span className="timeline-bar-tooltip-name">пакеты</span>
+                            <span className="timeline-bar-tooltip-count">{hoverEntries.packets}</span>
+                        </div>
+                        <div className="timeline-bar-tooltip-row">
+                            <span className="timeline-bar-tooltip-dot" style={{ background: FLAGS_COLOR }} />
+                            <span className="timeline-bar-tooltip-name">флаги</span>
+                            <span className="timeline-bar-tooltip-count">{hoverEntries.flags}</span>
+                        </div>
                     </div>
                 );
             })()}

@@ -8,7 +8,13 @@
 //     rows under the user, so neither the list nor the scroll position
 //     jumps while Live is on.
 //   * Fresh pages still refresh fields IN PLACE for streams already visible
-//     (packet_count / last_time / tags stay current).
+//     (packet_count / last_time / tags stay current) — but ONLY while Live
+//     is on. With Live off (`live: false` on the action) the whole view is
+//     frozen solid: neither a refetch nor WS activity touches the snapshot
+//     (not even in-place count updates), everything accumulates in
+//     `pendingNewIds` for the Update badge instead. Filter switches
+//     (queryKey change), 'accept' (Update button / Live batch) and the
+//     first load still apply wholesale regardless of `live`.
 //   * Streams that appeared in the fresh page (or arrived via WS activity:
 //     new_streams ids and count deltas for streams NOT on the current page)
 //     accumulate as DISTINCT ids in `pendingNewIds` — rendered as the
@@ -35,10 +41,12 @@ export interface FreezeState<T extends { id: number }> {
 }
 
 export type FreezeAction<T extends { id: number }> =
-    /** A page-1 fetch/refresh completed under `queryKey`. */
-    | { type: 'query_data'; data: T[]; queryKey: string; maxVisible: number }
-    /** WS activity flush: per-stream deltas + first-seen stream ids. */
-    | { type: 'activity'; patches: Map<number, StreamPatch>; newStreamIds: number[] }
+    /** A page-1 fetch/refresh completed under `queryKey`. `live: false`
+     * freezes the visible snapshot completely (only the badge grows). */
+    | { type: 'query_data'; data: T[]; queryKey: string; maxVisible: number; live?: boolean }
+    /** WS activity flush: per-stream deltas + first-seen stream ids.
+     * `live: false` skips the in-place patches — the badge grows instead. */
+    | { type: 'activity'; patches: Map<number, StreamPatch>; newStreamIds: number[]; live?: boolean }
     /** loadMore result: append below the snapshot. */
     | { type: 'append'; items: T[]; maxVisible: number }
     /** Local edit of one visible stream (favorite toggle). */
@@ -97,19 +105,24 @@ export function freezeReducer<T extends { id: number }>(
             }
 
             // Background refetch on the SAME filters: freeze the view.
-            // Refresh in place what is visible; accumulate the rest.
+            // With Live off the freeze is total: the snapshot is not touched
+            // at all (in-place count refresh would make cards tick in real
+            // time — exactly what Live off must prevent); new ids only grow
+            // the Update badge.
             const freshById = new Map(data.map((s) => [s.id, s]));
             const visibleIds = new Set(state.visible.map((s) => s.id));
             let changed = false;
 
-            const visible = state.visible.map((s) => {
-                const fresh = freshById.get(s.id);
-                if (fresh !== undefined && fresh !== s) {
-                    changed = true;
-                    return fresh;
-                }
-                return s;
-            });
+            const visible = action.live === false
+                ? state.visible
+                : state.visible.map((s) => {
+                    const fresh = freshById.get(s.id);
+                    if (fresh !== undefined && fresh !== s) {
+                        changed = true;
+                        return fresh;
+                    }
+                    return s;
+                });
 
             const newIds = data.filter((s) => !visibleIds.has(s.id)).map((s) => s.id);
             const pendingNewIds = newIds.length > 0 ? unionIds(state.pendingNewIds, newIds) : state.pendingNewIds;
@@ -124,6 +137,15 @@ export function freezeReducer<T extends { id: number }>(
         case 'activity': {
             const { patches, newStreamIds } = action;
             if (patches.size === 0 && newStreamIds.length === 0) return state;
+
+            // Live off: no in-place patches — every touched/new stream id
+            // goes to the badge until the user presses Update.
+            if (action.live === false) {
+                return {
+                    ...state,
+                    pendingNewIds: unionIds(state.pendingNewIds, [...patches.keys(), ...newStreamIds]),
+                };
+            }
 
             const visible = applyStreamPatches(state.visible, patches);
             const visibleIds = new Set(visible.map((s) => s.id));
