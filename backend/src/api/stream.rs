@@ -1,15 +1,15 @@
-use actix_identity::Identity;
-use actix_web::{get, put, HttpResponse, Responder, web};
-use serde_json::json;
-use stream_service::StreamService;
 use crate::api::packet::packet_service::PacketService;
-use serde::{Deserialize, Deserializer};
-use stream_dto::StreamResponse;
-use utoipa::IntoParams;
-use log::info;
-use utoipa::ToSchema;
-use std::sync::Arc;
 use crate::health::HealthMonitor;
+use actix_identity::Identity;
+use actix_web::{HttpResponse, Responder, get, put, web};
+use log::info;
+use serde::{Deserialize, Deserializer};
+use serde_json::json;
+use std::sync::Arc;
+use stream_dto::StreamResponse;
+use stream_service::StreamService;
+use utoipa::IntoParams;
+use utoipa::ToSchema;
 
 pub mod stream_dto;
 mod stream_repository;
@@ -17,7 +17,7 @@ pub(crate) mod stream_service;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateFavoriteRequest {
-    pub favorite: bool
+    pub favorite: bool,
 }
 
 #[utoipa::path(
@@ -54,14 +54,16 @@ async fn get_stream_by_id(
     _identity: Identity,
     path: web::Path<(i64,)>,
     stream_service: web::Data<StreamService>,
-    packet_service: web::Data<PacketService>
+    packet_service: web::Data<PacketService>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let stream_id: i64 = path.into_inner().0;
 
     match stream_service.get_stream_by_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream.to_response(&packet_service).await)),
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"}))),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -89,7 +91,9 @@ struct StreamQuery {
     pub end_time: Option<i64>,
 }
 
-fn deserialize_comma_separated_numbers<'de, D>(deserializer: D) -> Result<Option<Vec<i64>>, D::Error>
+fn deserialize_comma_separated_numbers<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<i64>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -101,7 +105,7 @@ where
         Ok(Some(
             s.split(',')
                 .filter_map(|s| s.trim().parse::<i64>().ok())
-                .collect()
+                .collect(),
         ))
     } else {
         Ok(None)
@@ -126,7 +130,7 @@ async fn get_all_streams(
     _identity: Identity,
     stream_service: web::Data<StreamService>,
     health: web::Data<Arc<HealthMonitor>>,
-    query: web::Query<StreamQuery>
+    query: web::Query<StreamQuery>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     info!("Getting all streams with query: {:?}", query);
     // Malformed cursor → 400 (a silently ignored cursor would re-serve the
@@ -136,25 +140,27 @@ async fn get_all_streams(
         Some(Ok(parsed)) => parsed,
         Some(Err(())) => {
             return Ok(HttpResponse::BadRequest().json(
-                json!({"error": "invalid cursor, expected \"last_time:id\" (two integers)"})
+                json!({"error": "invalid cursor, expected \"last_time:id\" (two integers)"}),
             ));
         }
     };
     let started = std::time::Instant::now();
-    let result = stream_service.get_all_streams_with_details(
-        query.limit,
-        query.offset,
-        cursor,
-        query.tags.clone(),
-        query.services.clone(),
-        query.start_time,
-        query.end_time,
-    ).await;
+    let result = stream_service
+        .get_all_streams_with_details(
+            query.limit,
+            query.offset,
+            cursor,
+            query.tags.clone(),
+            query.services.clone(),
+            query.start_time,
+            query.end_time,
+        )
+        .await;
     // Feed real query latency into the health monitor (reporting only, never gates).
     health.record(started.elapsed());
     match result {
         Ok(streams) => Ok(HttpResponse::Ok().json(streams)),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -175,13 +181,18 @@ async fn update_stream_favorite(
     _identity: Identity,
     path: web::Path<(i64,)>,
     payload: web::Json<UpdateFavoriteRequest>,
-    stream_service: web::Data<StreamService>
+    stream_service: web::Data<StreamService>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let stream_id = path.into_inner().0;
-    match stream_service.set_favorite(stream_id, payload.favorite).await {
+    match stream_service
+        .set_favorite(stream_id, payload.favorite)
+        .await
+    {
         Ok(favorite) => Ok(HttpResponse::Ok().json(json!({"id": stream_id, "favorite": favorite}))),
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"}))),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -210,13 +221,12 @@ async fn get_stream_histogram(
     let bucket_secs = query.bucket_secs.unwrap_or(60);
     match stream_service.get_stream_histogram(bucket_secs).await {
         Ok(buckets) => Ok(HttpResponse::Ok().json(buckets)),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
 pub fn stream_config(cfg: &mut web::ServiceConfig) {
-    cfg
-        .service(get_stream_histogram)
+    cfg.service(get_stream_histogram)
         .service(get_all_streams)
         .service(get_stream_by_id)
         .service(update_stream_favorite);

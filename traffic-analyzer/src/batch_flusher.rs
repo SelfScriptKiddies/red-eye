@@ -1,9 +1,9 @@
+use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
-use log::{info, warn, error, debug};
-use std::sync::Arc;
 
 use crate::cache::Cache;
 use crate::db::DB;
@@ -105,7 +105,10 @@ impl ShardedBatchSender {
             Err(mpsc::error::TrySendError::Full(_)) => {
                 let dropped = FLUSHER_QUEUE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
                 if dropped.is_multiple_of(1000) {
-                    warn!("Flusher queue {} full — {} packets dropped so far", shard, dropped);
+                    warn!(
+                        "Flusher queue {} full — {} packets dropped so far",
+                        shard, dropped
+                    );
                 }
                 Ok(()) // counted degradation, not an error
             }
@@ -144,8 +147,10 @@ pub fn spawn_flushers(
             run_batch_flusher(i, n, rx, db, opts, cache, ws_aggregator).await;
         });
     }
-    info!("Spawned {} batch flusher(s) (batch_size={}, flush_interval={}ms, queue={} packets each)",
-        n, opts.batch_size, opts.flush_interval_ms, queue_capacity);
+    info!(
+        "Spawned {} batch flusher(s) (batch_size={}, flush_interval={}ms, queue={} packets each)",
+        n, opts.batch_size, opts.flush_interval_ms, queue_capacity
+    );
     sender
 }
 
@@ -158,7 +163,10 @@ pub struct FlusherOptions {
 
 /// Create the flusher queues without spawning the consumers (shared by
 /// spawn_flushers and the sharding tests).
-fn sharded_channels(n: usize, queue_capacity: usize) -> (ShardedBatchSender, Vec<mpsc::Receiver<ProcessedPacket>>) {
+fn sharded_channels(
+    n: usize,
+    queue_capacity: usize,
+) -> (ShardedBatchSender, Vec<mpsc::Receiver<ProcessedPacket>>) {
     let mut senders = Vec::with_capacity(n);
     let mut receivers = Vec::with_capacity(n);
     for _ in 0..n {
@@ -190,7 +198,13 @@ pub async fn run_batch_flusher(
     cache: Arc<Cache>,
     ws_aggregator: SharedWsAggregator,
 ) {
-    info!("Batch flusher {}/{} started: batch_size={}, flush_interval={}ms", index + 1, total, opts.batch_size, opts.flush_interval_ms);
+    info!(
+        "Batch flusher {}/{} started: batch_size={}, flush_interval={}ms",
+        index + 1,
+        total,
+        opts.batch_size,
+        opts.flush_interval_ms
+    );
 
     let flush_duration = Duration::from_millis(opts.flush_interval_ms);
     let mut buffer: Vec<ProcessedPacket> = Vec::with_capacity(opts.batch_size);
@@ -281,8 +295,11 @@ async fn flush_lifecycle(db: &DB, cache: &Cache) {
         return;
     }
     if let Err(e) = db.set_streams_inactive_batch(&closed).await {
-        error!("Deferred stream close update failed ({} streams, retried next flush): {:?}",
-            closed.len(), e);
+        error!(
+            "Deferred stream close update failed ({} streams, retried next flush): {:?}",
+            closed.len(),
+            e
+        );
         cache.requeue_closed_streams(&closed);
     }
 }
@@ -324,14 +341,22 @@ async fn flush_batch(
 
     // 3. Batch INSERT HTTP messages (multi-row, RETURNING id), then batch the
     //    dependent gRPC inserts and l7-protocol UPDATEs.
-    let http_rows: Vec<(i64, &HttpMessageData)> = buffer.iter().enumerate()
-        .filter_map(|(idx, pkt)| pkt.http_message.as_ref().map(|http| (packet_ids[idx], http)))
+    let http_rows: Vec<(i64, &HttpMessageData)> = buffer
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, pkt)| {
+            pkt.http_message
+                .as_ref()
+                .map(|http| (packet_ids[idx], http))
+        })
         .collect();
     if !http_rows.is_empty() {
         match db.insert_http_messages_batch(&http_rows).await {
             Ok(msg_ids) if msg_ids.len() == http_rows.len() => {
                 // gRPC inserts keyed by the returned http_message ids.
-                let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows.iter().enumerate()
+                let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows
+                    .iter()
+                    .enumerate()
                     .filter_map(|(i, (_, http))| http.grpc.as_ref().map(|grpc| (msg_ids[i], grpc)))
                     .collect();
                 if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
@@ -339,20 +364,33 @@ async fn flush_batch(
                 }
 
                 // Dedupe l7-protocol UPDATEs to the highest protocol per stream.
-                let rank = |p: &str| match p { "grpc" => 2, "http1" => 1, _ => 0 };
+                let rank = |p: &str| match p {
+                    "grpc" => 2,
+                    "http1" => 1,
+                    _ => 0,
+                };
                 let mut l7: HashMap<usize, &str> = HashMap::new();
                 for (_, http) in &http_rows {
                     l7.entry(http.stream_id)
-                        .and_modify(|cur| { if rank(&http.l7_protocol) > rank(cur) { *cur = http.l7_protocol.as_str(); } })
+                        .and_modify(|cur| {
+                            if rank(&http.l7_protocol) > rank(cur) {
+                                *cur = http.l7_protocol.as_str();
+                            }
+                        })
                         .or_insert(http.l7_protocol.as_str());
                 }
-                let l7_rows: Vec<(usize, String)> = l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
+                let l7_rows: Vec<(usize, String)> =
+                    l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
                 if let Err(e) = db.update_stream_l7_protocol_batch(&l7_rows).await {
                     error!("Batch l7_protocol update failed: {:?}", e);
                 }
             }
             Ok(msg_ids) => {
-                error!("HTTP batch returned {} ids for {} messages — skipping grpc/l7", msg_ids.len(), http_rows.len());
+                error!(
+                    "HTTP batch returned {} ids for {} messages — skipping grpc/l7",
+                    msg_ids.len(),
+                    http_rows.len()
+                );
             }
             Err(e) => {
                 error!("Batch HTTP message insert failed: {:?}", e);
@@ -365,10 +403,15 @@ async fn flush_batch(
     for pkt in buffer.iter() {
         let ts = pkt.timestamp_seconds as i64;
         let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0));
-        if ts > entry.0 { entry.0 = ts; }
+        if ts > entry.0 {
+            entry.0 = ts;
+        }
         entry.1 += 1;
     }
-    let stats_rows: Vec<(usize, i64, i64)> = stream_stats.iter().map(|(s, (ts, c))| (*s, *ts, *c)).collect();
+    let stats_rows: Vec<(usize, i64, i64)> = stream_stats
+        .iter()
+        .map(|(s, (ts, c))| (*s, *ts, *c))
+        .collect();
     if let Err(e) = db.update_streams_stats_batch(&stats_rows).await {
         error!("Failed to update stream stats: {:?}", e);
     }
@@ -396,8 +439,12 @@ async fn flush_batch(
         }
     }
 
-    debug!("Flushed {} packets ({} triggers, {} streams updated)",
-        count, trigger_rows.len(), stats_rows.len());
+    debug!(
+        "Flushed {} packets ({} triggers, {} streams updated)",
+        count,
+        trigger_rows.len(),
+        stats_rows.len()
+    );
     buffer.clear();
 }
 
@@ -405,7 +452,10 @@ async fn flush_batch(
 /// for a flushed batch. `packet_ids[i]` is the DB id of `buffer[i]`, so each
 /// trigger row pairs with ITS OWN packet's capture timestamp — this is what
 /// keeps `JOIN packets p ON p.timestamp = t.timestamp` correct in the backend.
-fn build_trigger_rows(packet_ids: &[i64], buffer: &[ProcessedPacket]) -> Vec<(i64, usize, usize, usize, i64)> {
+fn build_trigger_rows(
+    packet_ids: &[i64],
+    buffer: &[ProcessedPacket],
+) -> Vec<(i64, usize, usize, usize, i64)> {
     let mut rows = Vec::new();
     for (idx, pkt) in buffer.iter().enumerate() {
         let packet_id = packet_ids[idx];
@@ -422,7 +472,10 @@ fn build_trigger_rows(packet_ids: &[i64], buffer: &[ProcessedPacket]) -> Vec<(i6
 /// old materialized view produced, so UI semantics don't change). Triggers
 /// whose filter is no longer registered (removed mid-game) are skipped —
 /// losing one tag pair is acceptable degradation.
-fn build_stream_tag_pairs(buffer: &[ProcessedPacket], names: &HashMap<usize, String>) -> Vec<(usize, String)> {
+fn build_stream_tag_pairs(
+    buffer: &[ProcessedPacket],
+    names: &HashMap<usize, String>,
+) -> Vec<(usize, String)> {
     let mut seen: HashSet<(usize, &str)> = HashSet::new();
     let mut pairs: Vec<(usize, String)> = Vec::new();
     for pkt in buffer {
@@ -443,7 +496,11 @@ fn build_stream_tag_pairs(buffer: &[ProcessedPacket], names: &HashMap<usize, Str
 async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Option<Vec<i64>> {
     match db.insert_packets_batch(buffer).await {
         Ok(ids) if ids.len() == buffer.len() => return Some(ids),
-        Ok(ids) => error!("Batch insert returned {} ids for {} packets — retrying", ids.len(), buffer.len()),
+        Ok(ids) => error!(
+            "Batch insert returned {} ids for {} packets — retrying",
+            ids.len(),
+            buffer.len()
+        ),
         Err(e) => error!("Batch packet insert failed: {:?} — retrying", e),
     }
 
@@ -457,7 +514,11 @@ async fn insert_packets_with_retry(db: &DB, buffer: &[ProcessedPacket]) -> Optio
             None
         }
         Err(e) => {
-            warn!("Batch packet insert failed after retry: {:?} — dropping {} packets", e, buffer.len());
+            warn!(
+                "Batch packet insert failed after retry: {:?} — dropping {} packets",
+                e,
+                buffer.len()
+            );
             None
         }
     }
@@ -523,7 +584,7 @@ mod tests {
         let buffer = vec![
             packet(1_000, vec![(10, 0, 5)]),
             packet(1_001, vec![(10, 1, 4), (10, 2, 8)]), // same filter again
-            packet(1_002, vec![(11, 0, 3)]),              // different filter, same stream
+            packet(1_002, vec![(11, 0, 3)]),             // different filter, same stream
         ];
         // packet() helper pins stream_id=1; patch the third packet to
         // another stream to cover the cross-stream case.
@@ -540,11 +601,14 @@ mod tests {
         let mut pairs = build_stream_tag_pairs(&buffer, &names);
         pairs.sort();
 
-        assert_eq!(pairs, vec![
-            (1, "exploit".to_string()),
-            (1, "flag_leak".to_string()),
-            (2, "flag_leak".to_string()),
-        ]);
+        assert_eq!(
+            pairs,
+            vec![
+                (1, "exploit".to_string()),
+                (1, "flag_leak".to_string()),
+                (2, "flag_leak".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -578,7 +642,11 @@ mod tests {
         }
         // Every shard receives traffic for sequential stream ids.
         let covered: HashSet<usize> = (0..40usize).map(|s| sender.shard_for(s)).collect();
-        assert_eq!(covered, [0, 1, 2, 3].into_iter().collect(), "all shards used");
+        assert_eq!(
+            covered,
+            [0, 1, 2, 3].into_iter().collect(),
+            "all shards used"
+        );
     }
 
     #[tokio::test]
@@ -618,6 +686,9 @@ mod tests {
         for _ in 0..5 {
             sender.send(packet(1_000, vec![])).unwrap();
         }
-        assert!(flusher_queue_drops() >= before + 4, "4 of 5 packets dropped and counted");
+        assert!(
+            flusher_queue_drops() >= before + 4,
+            "4 of 5 packets dropped and counted"
+        );
     }
 }

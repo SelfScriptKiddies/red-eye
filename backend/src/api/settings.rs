@@ -1,5 +1,5 @@
 use actix_identity::Identity;
-use actix_web::{get, put, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, get, put, web};
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ async fn update_setting(
 ) -> impl Responder {
     match sqlx::query(
         "INSERT INTO app_settings (key, value) VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = $2"
+         ON CONFLICT (key) DO UPDATE SET value = $2",
     )
     .bind(key.as_str())
     .bind(&body.value)
@@ -55,8 +55,7 @@ async fn update_setting(
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(get_all_settings)
-        .service(update_setting);
+    cfg.service(get_all_settings).service(update_setting);
 }
 
 // Helper: read a setting value

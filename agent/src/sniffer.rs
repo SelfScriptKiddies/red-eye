@@ -55,8 +55,10 @@ impl SnifferHealth {
 /// back into the analyzer, creating a feedback loop.
 fn validate_ports(ports: &[u16]) -> Result<(), &'static str> {
     if ports.is_empty() {
-        Err("port list is empty; refusing to capture all traffic because \
-             that would feed the agent's own NATS connection back into the analyzer")
+        Err(
+            "port list is empty; refusing to capture all traffic because \
+             that would feed the agent's own NATS connection back into the analyzer",
+        )
     } else {
         Ok(())
     }
@@ -157,7 +159,8 @@ impl SnifferEngine {
         // never blocks a tokio worker thread. Payloads are raw tuples —
         // protobuf envelope encoding happens once per BATCH inside the NATS client's
         // batcher, not per packet in the capture thread.
-        let (tx, mut packet_rx) = tokio::sync::mpsc::channel::<crate::nats::RawPacket>(PACKET_QUEUE_CAPACITY);
+        let (tx, mut packet_rx) =
+            tokio::sync::mpsc::channel::<crate::nats::RawPacket>(PACKET_QUEUE_CAPACITY);
         self.active.store(true, Ordering::SeqCst);
         self.health.set_active(true);
         let active = Arc::clone(&self.active);
@@ -165,8 +168,7 @@ impl SnifferEngine {
         self.handle = Some(thread::spawn(move || {
             eprintln!("[SNIFFER] Capture thread spawned!");
             info!("Capture thread started, waiting for packets...");
-            let mut ports_snapshot: Vec<u16> =
-                ports.read().unwrap().iter().cloned().collect();
+            let mut ports_snapshot: Vec<u16> = ports.read().unwrap().iter().cloned().collect();
             let mut pkt_count: u64 = 0;
 
             while active.load(Ordering::SeqCst) {

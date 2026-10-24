@@ -1,25 +1,27 @@
 use log::{debug, error};
 use pcap::Packet as PcapPacket;
 use pnet::packet::Packet as PnetPacket;
-use pnet::packet::{ethernet::{EthernetPacket, EtherTypes}, 
-                  ip::IpNextHeaderProtocols,
-                  ipv4::Ipv4Packet, 
-                  ipv6::Ipv6Packet,
-                  tcp::{TcpPacket, TcpFlags}, 
-                  udp::UdpPacket};
+use pnet::packet::{
+    ethernet::{EtherTypes, EthernetPacket},
+    ip::IpNextHeaderProtocols,
+    ipv4::Ipv4Packet,
+    ipv6::Ipv6Packet,
+    tcp::{TcpFlags, TcpPacket},
+    udp::UdpPacket,
+};
 use std::net::IpAddr;
 use strum_macros::IntoStaticStr;
 
 #[derive(Debug, Clone, IntoStaticStr)]
 pub enum Protocol {
     TCP,
-    UDP
+    UDP,
 }
 
 #[derive(Debug, Clone, IntoStaticStr)]
 pub enum IpVersion {
     IPv4,
-    IPv6
+    IPv6,
 }
 
 /// Raw TCP header flags (pnet TcpFlags bit mask). Always 0 for UDP.
@@ -31,7 +33,7 @@ pub type TcpFlagsBits = u8;
 #[derive(Debug, Clone)]
 pub struct PacketInfo {
     pub payload: Vec<u8>,
-    pub timestamp_seconds: u64,  // seconds
+    pub timestamp_seconds: u64,      // seconds
     pub timestamp_microseconds: u64, // microseconds
     pub src_ip: IpAddr,
     pub src_port: u16,
@@ -61,18 +63,21 @@ pub fn tcp_is_connection_close(flags: TcpFlagsBits) -> bool {
 pub fn parse_packet(timestamp: (u64, u64), packet: Vec<u8>) -> Option<PacketInfo> {
     // Convert timestamp
     // let timestamp = 0;
-    
+
     // Get Ethernet frame
     if let Some(ethernet_packet) = EthernetPacket::new(&packet) {
         match ethernet_packet.get_ethertype() {
             EtherTypes::Ipv4 => {
                 return process_ipv4_packet(ethernet_packet.payload(), timestamp);
-            },
+            }
             EtherTypes::Ipv6 => {
                 return process_ipv6_packet(ethernet_packet.payload(), timestamp);
-            },
+            }
             _ => {
-                debug!("Unsupported Ethernet packet type: {:?}", ethernet_packet.get_ethertype());
+                debug!(
+                    "Unsupported Ethernet packet type: {:?}",
+                    ethernet_packet.get_ethertype()
+                );
                 return None;
             }
         }
@@ -87,17 +92,31 @@ fn process_ipv4_packet(packet_data: &[u8], timestamp: (u64, u64)) -> Option<Pack
     if let Some(ipv4_packet) = Ipv4Packet::new(packet_data) {
         let src_ip = IpAddr::V4(ipv4_packet.get_source());
         let dst_ip = IpAddr::V4(ipv4_packet.get_destination());
-        
+
         match ipv4_packet.get_next_level_protocol() {
             IpNextHeaderProtocols::Tcp => {
-                return process_tcp_packet(ipv4_packet.payload(), timestamp, src_ip, dst_ip, IpVersion::IPv4);
-            },
+                return process_tcp_packet(
+                    ipv4_packet.payload(),
+                    timestamp,
+                    src_ip,
+                    dst_ip,
+                    IpVersion::IPv4,
+                );
+            }
             IpNextHeaderProtocols::Udp => {
-                return process_udp_packet(ipv4_packet.payload(), timestamp, src_ip, dst_ip, IpVersion::IPv4);
-            },
+                return process_udp_packet(
+                    ipv4_packet.payload(),
+                    timestamp,
+                    src_ip,
+                    dst_ip,
+                    IpVersion::IPv4,
+                );
+            }
             _ => {
-                debug!("Неподдерживаемый протокол следующего уровня: {:?}", 
-                       ipv4_packet.get_next_level_protocol());
+                debug!(
+                    "Неподдерживаемый протокол следующего уровня: {:?}",
+                    ipv4_packet.get_next_level_protocol()
+                );
                 return None;
             }
         }
@@ -112,17 +131,31 @@ fn process_ipv6_packet(packet_data: &[u8], timestamp: (u64, u64)) -> Option<Pack
     if let Some(ipv6_packet) = Ipv6Packet::new(packet_data) {
         let src_ip = IpAddr::V6(ipv6_packet.get_source());
         let dst_ip = IpAddr::V6(ipv6_packet.get_destination());
-        
+
         match ipv6_packet.get_next_header() {
             IpNextHeaderProtocols::Tcp => {
-                return process_tcp_packet(ipv6_packet.payload(), timestamp, src_ip, dst_ip, IpVersion::IPv6);
-            },
+                return process_tcp_packet(
+                    ipv6_packet.payload(),
+                    timestamp,
+                    src_ip,
+                    dst_ip,
+                    IpVersion::IPv6,
+                );
+            }
             IpNextHeaderProtocols::Udp => {
-                return process_udp_packet(ipv6_packet.payload(), timestamp, src_ip, dst_ip, IpVersion::IPv6);
-            },
+                return process_udp_packet(
+                    ipv6_packet.payload(),
+                    timestamp,
+                    src_ip,
+                    dst_ip,
+                    IpVersion::IPv6,
+                );
+            }
             _ => {
-                debug!("Неподдерживаемый протокол следующего уровня IPv6: {:?}", 
-                       ipv6_packet.get_next_header());
+                debug!(
+                    "Неподдерживаемый протокол следующего уровня IPv6: {:?}",
+                    ipv6_packet.get_next_header()
+                );
                 return None;
             }
         }
@@ -133,7 +166,13 @@ fn process_ipv6_packet(packet_data: &[u8], timestamp: (u64, u64)) -> Option<Pack
 }
 
 /// Processing TCP packet
-fn process_tcp_packet(packet_data: &[u8], timestamp: (u64, u64), src_ip: IpAddr, dst_ip: IpAddr, ip_version: IpVersion) -> Option<PacketInfo> {
+fn process_tcp_packet(
+    packet_data: &[u8],
+    timestamp: (u64, u64),
+    src_ip: IpAddr,
+    dst_ip: IpAddr,
+    ip_version: IpVersion,
+) -> Option<PacketInfo> {
     if let Some(tcp_packet) = TcpPacket::new(packet_data) {
         let src_port = tcp_packet.get_source();
         let dst_port = tcp_packet.get_destination();
@@ -170,12 +209,18 @@ fn process_tcp_packet(packet_data: &[u8], timestamp: (u64, u64), src_ip: IpAddr,
 }
 
 /// Processing UDP packet
-fn process_udp_packet(packet_data: &[u8], timestamp: (u64, u64), src_ip: IpAddr, dst_ip: IpAddr, ip_version: IpVersion) -> Option<PacketInfo> {
+fn process_udp_packet(
+    packet_data: &[u8],
+    timestamp: (u64, u64),
+    src_ip: IpAddr,
+    dst_ip: IpAddr,
+    ip_version: IpVersion,
+) -> Option<PacketInfo> {
     if let Some(udp_packet) = UdpPacket::new(packet_data) {
         let src_port = udp_packet.get_source();
         let dst_port = udp_packet.get_destination();
         let payload = udp_packet.payload().to_vec();
-        
+
         // Return information only if there is a payload
         if !payload.is_empty() {
             return Some(PacketInfo {
@@ -226,9 +271,9 @@ mod tests {
 
     #[test]
     fn fin_and_rst_close_connection() {
-        assert!(tcp_is_connection_close(0x01));        // FIN
+        assert!(tcp_is_connection_close(0x01)); // FIN
         assert!(tcp_is_connection_close(0x01 | 0x10)); // FIN+ACK
-        assert!(tcp_is_connection_close(0x04));        // RST
+        assert!(tcp_is_connection_close(0x04)); // RST
         assert!(tcp_is_connection_close(0x04 | 0x10)); // RST+ACK
     }
 
@@ -251,13 +296,14 @@ mod tests {
             let tcp_len = 20;
             let mut buf = vec![0u8; 14 + 20 + tcp_len];
             // Ethernet: IPv4 ethertype
-            buf[12] = 0x08; buf[13] = 0x00;
+            buf[12] = 0x08;
+            buf[13] = 0x00;
             // IPv4 header
-            buf[14] = 0x45;                       // version + IHL
+            buf[14] = 0x45; // version + IHL
             buf[16] = ((20 + tcp_len) >> 8) as u8; // total length
             buf[17] = (20 + tcp_len) as u8;
-            buf[23] = 0x06;                       // protocol = TCP
-            // src/dst IP are left 0.0.0.0/0.0.0.0 — fine for parsing
+            buf[23] = 0x06; // protocol = TCP
+                            // src/dst IP are left 0.0.0.0/0.0.0.0 — fine for parsing
             let mut tcp = MutableTcpPacket::new(&mut buf[14 + 20..]).unwrap();
             tcp.set_source(12345);
             tcp.set_destination(80);

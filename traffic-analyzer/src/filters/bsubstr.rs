@@ -28,44 +28,46 @@ impl Filter for BinarySubstrFilter {
 
     fn processed(&self, packet: &[u8]) -> Vec<FilterTrigger> {
         let mut triggers = Vec::new();
-        
+
         for position in find_binary_pattern(packet, &self.binary_pattern) {
             triggers.push(FilterTrigger {
                 start_index: position,
                 end_index: position + self.binary_pattern.len(),
             });
         }
-        
-        trace!("Checking packet for binary pattern '{}': found {} matches", 
-               self.pattern_name, 
-               triggers.len());
-               
+
+        trace!(
+            "Checking packet for binary pattern '{}': found {} matches",
+            self.pattern_name,
+            triggers.len()
+        );
+
         triggers
     }
 }
 
 fn find_binary_pattern(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
     let mut positions = Vec::new();
-    
+
     if needle.is_empty() {
         return vec![0];
     }
     if needle.len() > haystack.len() {
         return positions;
     }
-    
+
     // KMP algorithm
     let lps = compute_lps_array(needle);
-    
+
     let mut i = 0;
     let mut j = 0;
-    
+
     while i < haystack.len() {
         if needle[j] == haystack[i] {
             i += 1;
             j += 1;
         }
-        
+
         if j == needle.len() {
             positions.push(i - j); // Add position where pattern was found
             j = lps[j - 1]; // Continue searching from the last partial match
@@ -77,7 +79,7 @@ fn find_binary_pattern(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
             }
         }
     }
-    
+
     positions
 }
 
@@ -85,7 +87,7 @@ fn compute_lps_array(pattern: &[u8]) -> Vec<usize> {
     let mut lps = vec![0; pattern.len()];
     let mut len = 0;
     let mut i = 1;
-    
+
     while i < pattern.len() {
         if pattern[i] == pattern[len] {
             len += 1;
@@ -100,8 +102,8 @@ fn compute_lps_array(pattern: &[u8]) -> Vec<usize> {
             }
         }
     }
-    
-    lps 
+
+    lps
 }
 
 #[cfg(test)]

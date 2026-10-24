@@ -1,5 +1,5 @@
 use actix_identity::Identity;
-use actix_web::{post, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, post, web};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -60,7 +60,10 @@ async fn toggle_protection(
     let service = match service_service.get_service_by_id(body.service_id).await {
         Ok(s) => s,
         Err(e) if crate::api::is_pool_timeout(&e) => return crate::api::sqlx_error_response(&e),
-        Err(_) => return HttpResponse::BadRequest().json(serde_json::json!({"error": "Service not found"})),
+        Err(_) => {
+            return HttpResponse::BadRequest()
+                .json(serde_json::json!({"error": "Service not found"}));
+        }
     };
 
     let rule_name = proxy_name(&service.name);
@@ -68,7 +71,8 @@ async fn toggle_protection(
         Some(p) => p,
         None => {
             let used_ports: Vec<u16> = agent_service
-                .get_agent(&body.agent_id).await
+                .get_agent(&body.agent_id)
+                .await
                 .map(|info| info.nft_redirects.iter().map(|r| r.to_port).collect())
                 .unwrap_or_default();
             default_proxy_port(service.port, &used_ports)
@@ -150,6 +154,5 @@ async fn toggle_ip_ban(
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(toggle_protection)
-        .service(toggle_ip_ban);
+    cfg.service(toggle_protection).service(toggle_ip_ban);
 }

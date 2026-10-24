@@ -2,24 +2,21 @@ pub mod service_dto;
 pub mod service_repository;
 pub mod service_service;
 
-use actix_identity::Identity;
-use actix_web::{web, HttpResponse, Responder};
 use crate::api::service::service_dto::{Service, ServiceTransfer};
 use crate::api::service::service_service::ServiceService;
 use crate::api::updater::UpdateAgent;
+use actix_identity::Identity;
 use actix_web::Either;
-use actix_web::{get, post, put, delete};
-
+use actix_web::{HttpResponse, Responder, web};
+use actix_web::{delete, get, post, put};
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg 
-        .service(get_all_services)
+    cfg.service(get_all_services)
         .service(get_service_by_id)
         .service(create_service)
         .service(update_service)
         .service(delete_service);
 }
-
 
 #[utoipa::path(
     get,
@@ -53,11 +50,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 #[get("/service")]
 async fn get_all_services(
     _identity: Identity,
-    service: web::Data<ServiceService>
+    service: web::Data<ServiceService>,
 ) -> impl Responder {
     match service.get_all_services().await {
         Ok(services) => HttpResponse::Ok().json(services),
-        Err(e) => crate::api::sqlx_error_response(&e)
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -84,12 +81,12 @@ async fn get_all_services(
 async fn get_service_by_id(
     _identity: Identity,
     service: web::Data<ServiceService>,
-    id: web::Path<i64>
+    id: web::Path<i64>,
 ) -> impl Responder {
     match service.get_service_by_id(id.into_inner()).await {
         Ok(service) => HttpResponse::Ok().json(service),
         Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
-        Err(_) => HttpResponse::NotFound().finish()
+        Err(_) => HttpResponse::NotFound().finish(),
     }
 }
 
@@ -119,11 +116,17 @@ async fn create_service(
     updater: web::Data<UpdateAgent>,
     pool: web::Data<sqlx::PgPool>,
     agent_svc: web::Data<std::sync::Arc<crate::api::agent::agent_service::AgentService>>,
-    new_service: Either<web::Form<ServiceTransfer>, web::Json<ServiceTransfer>>
+    new_service: Either<web::Form<ServiceTransfer>, web::Json<ServiceTransfer>>,
 ) -> impl Responder {
-    match service.create_service(&new_service.into_inner().into()).await {
+    match service
+        .create_service(&new_service.into_inner().into())
+        .await
+    {
         Ok(created) => {
-            if let Err(e) = updater.add_service(created.clone().into(), created.id.try_into().unwrap()).await {
+            if let Err(e) = updater
+                .add_service(created.clone().into(), created.id.try_into().unwrap())
+                .await
+            {
                 log::error!("Failed to send update: {}", e);
             }
 
@@ -135,7 +138,8 @@ async fn create_service(
             if agents.is_empty() {
                 log::info!(
                     "No live agents yet: service '{}' (id {}) will be bound when agents connect",
-                    created.name, created.id
+                    created.name,
+                    created.id
                 );
             }
             for a in &agents {
@@ -149,7 +153,10 @@ async fn create_service(
                 if let Err(e) = bind {
                     log::error!(
                         "Failed to bind service '{}' (id {}) to agent '{}': {} — service will not be sniffed on this agent",
-                        created.name, created.id, a.agent_id, e
+                        created.name,
+                        created.id,
+                        a.agent_id,
+                        e
                     );
                 }
             }
@@ -161,7 +168,7 @@ async fn create_service(
 
             HttpResponse::Created().json(created)
         }
-        Err(e) => crate::api::sqlx_error_response(&e)
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -190,20 +197,23 @@ async fn update_service(
     service: web::Data<ServiceService>,
     updater: web::Data<UpdateAgent>,
     id: web::Path<i64>,
-    updated_service: web::Json<ServiceTransfer>
+    updated_service: web::Json<ServiceTransfer>,
 ) -> impl Responder {
     let mut service_data: Service = updated_service.into_inner().into();
     service_data.id = id.into_inner();
-    
+
     match service.update_service(&service_data).await {
         Ok(updated) => {
-            if let Err(e) = updater.update_service(updated.id.try_into().unwrap(), updated.clone().into()).await {
+            if let Err(e) = updater
+                .update_service(updated.id.try_into().unwrap(), updated.clone().into())
+                .await
+            {
                 log::error!("Failed to send update: {}", e);
             }
             HttpResponse::Ok().json(updated)
         }
         Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
-        Err(_) => HttpResponse::NotFound().finish()
+        Err(_) => HttpResponse::NotFound().finish(),
     }
 }
 
@@ -222,7 +232,7 @@ async fn delete_service(
     _identity: Identity,
     service: web::Data<ServiceService>,
     updater: web::Data<UpdateAgent>,
-    id: web::Path<i64>
+    id: web::Path<i64>,
 ) -> impl Responder {
     let id = id.into_inner();
     match service.delete_service(id).await {
@@ -233,6 +243,6 @@ async fn delete_service(
             HttpResponse::Ok().finish()
         }
         Err(e) if crate::api::is_pool_timeout(&e) => crate::api::sqlx_error_response(&e),
-        Err(_) => HttpResponse::NotFound().finish()
+        Err(_) => HttpResponse::NotFound().finish(),
     }
 }

@@ -82,10 +82,7 @@ impl AgentConfig {
         }
 
         let ip = &self.machine_ip;
-        let raw = match hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-        {
+        let raw = match hostname::get().ok().and_then(|h| h.into_string().ok()) {
             Some(host) => format!("{}-{}", host, ip),
             None => {
                 if ip != "0.0.0.0" {

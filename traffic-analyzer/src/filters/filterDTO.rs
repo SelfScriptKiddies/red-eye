@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum FilterDirection {
     Inbound,
     Outbound,
-    Both
+    Both,
 }
 
 impl FilterDirection {
@@ -48,7 +48,7 @@ pub struct FilterDTO {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FilterTrigger {
     pub start_index: usize,
-    pub end_index: usize
+    pub end_index: usize,
 }
 
 #[cfg(test)]
@@ -59,14 +59,38 @@ mod tests {
     /// does before encoding a dto::Filter onto the NATS settings topic.
     #[test]
     fn from_tag_direction_mirrors_backend_dto_mapping() {
-        assert_eq!(FilterDirection::from_tag_direction("in"), FilterDirection::Inbound);
-        assert_eq!(FilterDirection::from_tag_direction("out"), FilterDirection::Outbound);
-        assert_eq!(FilterDirection::from_tag_direction("both"), FilterDirection::Both);
+        assert_eq!(
+            FilterDirection::from_tag_direction("in"),
+            FilterDirection::Inbound
+        );
+        assert_eq!(
+            FilterDirection::from_tag_direction("out"),
+            FilterDirection::Outbound
+        );
+        assert_eq!(
+            FilterDirection::from_tag_direction("both"),
+            FilterDirection::Both
+        );
         // Backend lowercases before matching; unknown values fall back to Both.
-        assert_eq!(FilterDirection::from_tag_direction("IN"), FilterDirection::Inbound);
-        assert_eq!(FilterDirection::from_tag_direction("Out"), FilterDirection::Outbound);
-        assert_eq!(FilterDirection::from_tag_direction("BOTH"), FilterDirection::Both);
-        assert_eq!(FilterDirection::from_tag_direction(""), FilterDirection::Both);
-        assert_eq!(FilterDirection::from_tag_direction("garbage"), FilterDirection::Both);
+        assert_eq!(
+            FilterDirection::from_tag_direction("IN"),
+            FilterDirection::Inbound
+        );
+        assert_eq!(
+            FilterDirection::from_tag_direction("Out"),
+            FilterDirection::Outbound
+        );
+        assert_eq!(
+            FilterDirection::from_tag_direction("BOTH"),
+            FilterDirection::Both
+        );
+        assert_eq!(
+            FilterDirection::from_tag_direction(""),
+            FilterDirection::Both
+        );
+        assert_eq!(
+            FilterDirection::from_tag_direction("garbage"),
+            FilterDirection::Both
+        );
     }
 }
