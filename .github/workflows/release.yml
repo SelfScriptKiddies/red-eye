@@ -1,0 +1,190 @@
+# Release pipeline — runs on every merge to main.
+#
+# Flow: validate the VERSION file (must be semver and must NOT match any
+# already-released tag — 'make bump V=X.Y.Z' before merging), tag the merge
+# commit, then in parallel: push the four stack images to ghcr.io and build
+# the static musl agent binary. Finally a GitHub release is published with
+# the binary attached and auto-generated notes.
+#
+# Failures after the tag step are resumable: re-run the workflow
+# (workflow_dispatch) — the version job recognizes a tag that already
+# points at HEAD and continues.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # tag push + GitHub release
+  packages: write # ghcr.io push
+
+# Never run two releases concurrently — the version job creates the tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      short_sha: ${{ steps.ver.outputs.short_sha }}
+      image_prefix: ${{ steps.ver.outputs.image_prefix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read and validate VERSION
+        id: ver
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::VERSION file contains '$VERSION' — expected semver X.Y.Z"
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+            echo "short_sha=${GITHUB_SHA::7}"
+            # ghcr.io image paths must be lowercase
+            echo "image_prefix=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/red-eye"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag is new (or points at this commit) and push it
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: v${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          EXISTING="$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)"
+          if [ -n "$EXISTING" ]; then
+            if [ "$EXISTING" = "$GITHUB_SHA" ]; then
+              echo "$TAG already points at this commit — resuming the release"
+              exit 0
+            fi
+            echo "::error::$TAG was already released from $EXISTING. Bump the version ('make bump V=X.Y.Z') and merge to main again."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+
+  images:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: .
+            file: backend/Dockerfile
+          - name: frontend
+            context: ./frontend
+            file: frontend/Dockerfile
+          - name: traffic-analyzer
+            context: .
+            file: traffic-analyzer/Dockerfile
+          - name: database
+            context: ./database
+            file: database/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ needs.version.outputs.image_prefix }}-${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ needs.version.outputs.tag }}
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Stamped into the binaries' version strings (see build.rs).
+          build-args: |
+            RED_EYE_GIT_SHA=${{ needs.version.outputs.short_sha }}
+            RED_EYE_VERSION=${{ needs.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  agent:
+    # Static musl build so the binary runs on any Linux amd64 host
+    # regardless of the libc installed there (service hosts are arbitrary).
+    # Also served by the backend at /api/agent/download — this artifact is
+    # for hosts without access to the running stack.
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      RED_EYE_VERSION: ${{ needs.version.outputs.version }}
+      RED_EYE_GIT_SHA: ${{ needs.version.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+          key: musl
+
+      - name: Build agent (static musl)
+        working-directory: agent
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Sanity-check --version is stamped
+        run: |
+          BIN=agent/target/x86_64-unknown-linux-musl/release/red-eye-agent
+          OUT="$("$BIN" --version)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "${RED_EYE_VERSION}+${RED_EYE_GIT_SHA}"
+
+      - name: Package
+        run: |
+          cp agent/target/x86_64-unknown-linux-musl/release/red-eye-agent \
+             red-eye-agent-${{ needs.version.outputs.tag }}-linux-amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: red-eye-agent
+          path: red-eye-agent-*-linux-amd64
+          if-no-files-found: error
+
+  release:
+    needs: [version, images, agent]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: red-eye-agent
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: red-eye ${{ needs.version.outputs.tag }}
+          files: red-eye-agent-*-linux-amd64
+          generate_release_notes: true
