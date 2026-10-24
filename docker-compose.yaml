@@ -57,6 +57,7 @@ services:
       args:
         # Stamps backend + bundled agent binary; exported by the Makefile.
         RED_EYE_GIT_SHA: ${RED_EYE_GIT_SHA:-}
+        RED_EYE_VERSION: ${RED_EYE_VERSION:-}
     restart: always
     logging:
       driver: json-file
@@ -83,6 +84,7 @@ services:
       dockerfile: traffic-analyzer/Dockerfile
       args:
         RED_EYE_GIT_SHA: ${RED_EYE_GIT_SHA:-}
+        RED_EYE_VERSION: ${RED_EYE_VERSION:-}
     restart: always
     logging:
       driver: json-file
@@ -100,6 +102,7 @@ services:
       context: ./frontend
       args:
         RED_EYE_GIT_SHA: ${RED_EYE_GIT_SHA:-}
+        RED_EYE_VERSION: ${RED_EYE_VERSION:-}
     restart: always
     logging:
       driver: json-file

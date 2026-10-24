@@ -3,8 +3,10 @@ DOCKER_COMPOSE_FILE := docker-compose.yaml
 
 # Stamp every image with the building commit — /api/version uses it to
 # spot drift between backend / analyzer / frontend / agents. `export`
-# propagates it into compose build args.
+# propagates it into compose build args. RED_EYE_VERSION comes from the
+# repo-root VERSION file (canonical version source).
 export RED_EYE_GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+export RED_EYE_VERSION ?= $(shell cat VERSION 2>/dev/null || echo unknown)
 
 # docker-compose command
 DC := docker-compose -f $(DOCKER_COMPOSE_FILE)
@@ -14,7 +16,7 @@ GREEN=\033[0;32m
 YELLOW=\033[0;33m
 NC=\033[0m
 
-.PHONY: help build up down restart clean logs ps prune
+.PHONY: help build up down restart clean logs ps prune bump
 
 help:
 	@echo -e "\n${GREEN}Available Commands:${NC}"
@@ -26,6 +28,7 @@ help:
 	@echo -e "  ${YELLOW}make logs${NC}            - View logs of all services"
 	@echo -e "  ${YELLOW}make ps${NC}              - Show container status"
 	@echo -e "  ${YELLOW}make prune${NC}           - Clean up unused Docker resources"
+	@echo -e "  ${YELLOW}make bump V=X.Y.Z${NC}    - Bump the project version (VERSION, Cargo.tomls, package.json)"
 	@echo -e "  ${YELLOW}make help${NC}            - Show this help\n"
 
 # Build all docker containers
@@ -91,3 +94,10 @@ prune:
 	@echo -e "  - Deleting stopped containers, old networks and build cache."
 	docker system prune -f
 	@echo -e "${GREEN}Cleaning completed.${NC}\n"
+
+# Bump the project version: VERSION file + the three Cargo.tomls +
+# frontend/package.json (see scripts/bump-version.sh). The release
+# workflow rejects a release whose VERSION matches an existing tag, so
+# every merge to main must carry a bump.
+bump:
+	@./scripts/bump-version.sh $(V)
