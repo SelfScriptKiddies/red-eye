@@ -1,13 +1,13 @@
+use crate::configuration::updater::dto;
+use crate::proto_schema::ProtoSchema;
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
-use dashmap::DashMap;
-use crate::configuration::updater::dto;
-use crate::proto_schema::ProtoSchema;
 pub mod services;
 pub mod streams;
-pub use services::ServicesCache as ServicesCache;
-pub use streams::StreamsCache as StreamsCache;
+pub use services::ServicesCache;
+pub use streams::StreamsCache;
 
 pub struct Cache {
     pub services: Arc<RwLock<HashMap<usize, dto::Service>>>,
@@ -76,7 +76,8 @@ impl Cache {
     }
 
     pub fn cleanup_unused_locks(&self) {
-        let keys_to_remove: Vec<String> = self.stream_locks
+        let keys_to_remove: Vec<String> = self
+            .stream_locks
             .iter()
             .filter_map(|entry| {
                 if !self.streams.contains_key(entry.key()) {

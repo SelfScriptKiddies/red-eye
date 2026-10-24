@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use actix_identity::Identity;
-use actix_web::{get, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, get, web};
 use async_nats::Client;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
@@ -140,14 +140,19 @@ impl VersionService {
     async fn probe_frontend(&self) -> ServiceVersion {
         let url = format!("{}/version.json", self.frontend_url.trim_end_matches('/'));
         match self.http.get(&url).timeout(PROBE_TIMEOUT).send().await {
-            Ok(response) if response.status().is_success() => match response.json::<FrontendVersionReply>().await {
+            Ok(response) if response.status().is_success() => match response
+                .json::<FrontendVersionReply>()
+                .await
+            {
                 Ok(parsed) => match (parsed.version, parsed.git_sha) {
                     (Some(v), Some(sha)) => ServiceVersion::ok(v, sha),
                     _ => ServiceVersion::err("frontend version.json missing fields"),
                 },
                 Err(e) => ServiceVersion::err(format!("malformed frontend version.json: {}", e)),
             },
-            Ok(response) => ServiceVersion::err(format!("frontend returned HTTP {}", response.status())),
+            Ok(response) => {
+                ServiceVersion::err(format!("frontend returned HTTP {}", response.status()))
+            }
             Err(e) => ServiceVersion::err(format!("frontend unreachable: {}", e)),
         }
     }
@@ -158,7 +163,10 @@ impl VersionService {
         // Fast path: fresh cache.
         {
             let cache = self.cache.read().await;
-            if let Some(cached) = cache.as_ref().filter(|c| c.fetched_at.elapsed() < CACHE_TTL) {
+            if let Some(cached) = cache
+                .as_ref()
+                .filter(|c| c.fetched_at.elapsed() < CACHE_TTL)
+            {
                 return cached.clone();
             }
         }
@@ -167,7 +175,10 @@ impl VersionService {
         let _guard = self.refresh_lock.lock().await;
         {
             let cache = self.cache.read().await;
-            if let Some(cached) = cache.as_ref().filter(|c| c.fetched_at.elapsed() < CACHE_TTL) {
+            if let Some(cached) = cache
+                .as_ref()
+                .filter(|c| c.fetched_at.elapsed() < CACHE_TTL)
+            {
                 return cached.clone();
             }
         }

@@ -532,7 +532,9 @@ impl DB {
                 // header_json is carried as text — cast to the column type.
                 q1.push_str(&format!("(${}, ${}::jsonb)", base + 1, base + 2));
             }
-            q1.push_str(" ON CONFLICT (hash) DO UPDATE SET headers = EXCLUDED.headers RETURNING hash, id");
+            q1.push_str(
+                " ON CONFLICT (hash) DO UPDATE SET headers = EXCLUDED.headers RETURNING hash, id",
+            );
             let mut query1 = sqlx::query(&q1);
             for (h, j) in &distinct {
                 query1 = query1.bind(*h).bind(*j);
@@ -564,9 +566,7 @@ impl DB {
 
         let mut q = sqlx::query_scalar::<_, i64>(&query);
         for (packet_id, http) in rows {
-            let header_set_id = http
-                .header_hash
-                .and_then(|h| id_by_hash.get(&h).copied());
+            let header_set_id = http.header_hash.and_then(|h| id_by_hash.get(&h).copied());
             q = q
                 .bind(http.stream_id as i64)
                 .bind(*packet_id)

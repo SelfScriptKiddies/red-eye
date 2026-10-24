@@ -1,7 +1,7 @@
+use crate::configuration::ApplicationConfig;
 use log::{debug, error};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Error, Pool, Postgres};
-use crate::configuration::ApplicationConfig;
 
 /// Connection URL for the application database, including the
 /// `statement_timeout` applied to every connection opened with it.

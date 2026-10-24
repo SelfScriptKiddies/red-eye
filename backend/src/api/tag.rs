@@ -1,14 +1,14 @@
-use actix_identity::Identity;
-use actix_web::{get, put, post, delete, web, Responder, HttpResponse};
-use serde_json::json;
-use std::sync::Arc;
-use sqlx::PgPool;
-use crate::api::tag::tag_service::TagService;
-use crate::api::tag::tag_dto::Tag;
-use crate::api::tag::tag_dto::TagName;
-use crate::api::updater::UpdateAgent;
 use crate::api::agent::agent_service::AgentService;
 use crate::api::block_sync::sync_block_filters;
+use crate::api::tag::tag_dto::Tag;
+use crate::api::tag::tag_dto::TagName;
+use crate::api::tag::tag_service::TagService;
+use crate::api::updater::UpdateAgent;
+use actix_identity::Identity;
+use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
+use serde_json::json;
+use sqlx::PgPool;
+use std::sync::Arc;
 
 fn is_block_type(st: Option<&str>) -> bool {
     matches!(st, Some("block") | Some("block_conn"))
@@ -52,14 +52,16 @@ use crate::api::tag::tag_dto::TagNameCreate;
 async fn get_tags_by_stream_id(
     _identity: Identity,
     path: web::Path<(i64,)>,
-    tag_service: web::Data<TagService>
+    tag_service: web::Data<TagService>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let stream_id: i64 = path.into_inner().0;
 
     match tag_service.get_tags_by_stream_id(stream_id).await {
         Ok(stream) => Ok(HttpResponse::Ok().json(stream)),
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tags for stream not found"}))),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Tags for stream not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -89,11 +91,11 @@ async fn get_tags_by_stream_id(
 #[get("/tag/names")]
 async fn get_all_tag_names(
     _identity: Identity,
-    tag_service: web::Data<TagService>
+    tag_service: web::Data<TagService>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     match tag_service.get_all_tag_names().await {
         Ok(tag_names) => Ok(HttpResponse::Ok().json(tag_names)),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -117,16 +119,17 @@ async fn get_all_tag_names(
 async fn get_tag_name_by_id(
     _identity: Identity,
     path: web::Path<(i64,)>,
-    tag_service: web::Data<TagService>
+    tag_service: web::Data<TagService>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
     match tag_service.get_tag_name_by_id(id).await {
         Ok(tag_name) => Ok(HttpResponse::Ok().json(tag_name)),
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
-
 
 #[utoipa::path(
     post,
@@ -159,7 +162,7 @@ async fn create_tag_name(
             }
             Ok(HttpResponse::Ok().json(created_tag))
         }
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -186,8 +189,11 @@ async fn update_tag_name(
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
     // Check if old tag was block (need to re-sync if changing away from block)
-    let was_block = tag_service.get_tag_name_by_id(id).await
-        .map(|t| is_block_type(t.special_type.as_deref())).unwrap_or(false);
+    let was_block = tag_service
+        .get_tag_name_by_id(id)
+        .await
+        .map(|t| is_block_type(t.special_type.as_deref()))
+        .unwrap_or(false);
     let will_be_block = is_block_type(tag_name.special_type.as_deref());
     match tag_service.update_tag_name(id, tag_name.into_inner()).await {
         Ok(updated_tag) => {
@@ -200,8 +206,10 @@ async fn update_tag_name(
             }
             Ok(HttpResponse::Ok().json(updated_tag))
         }
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
 
@@ -226,8 +234,11 @@ async fn delete_tag_name(
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
     // Check if deleted tag was block type (need to re-sync after delete)
-    let was_block = tag_service.get_tag_name_by_id(id).await
-        .map(|t| is_block_type(t.special_type.as_deref())).unwrap_or(false);
+    let was_block = tag_service
+        .get_tag_name_by_id(id)
+        .await
+        .map(|t| is_block_type(t.special_type.as_deref()))
+        .unwrap_or(false);
     match tag_service.delete_tag_name(id).await {
         Ok(_) => {
             if let Err(e) = updater.remove_filter(id.try_into().unwrap()).await {
@@ -238,11 +249,12 @@ async fn delete_tag_name(
             }
             Ok(HttpResponse::NoContent().finish())
         }
-        Err(sqlx::Error::RowNotFound) => Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"}))),
-        Err(e) => Ok(crate::api::sqlx_error_response(&e))
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
     }
 }
-
 
 #[utoipa::path(
     get,
@@ -259,23 +271,27 @@ async fn get_tag_metrics(
     tag_service: web::Data<TagService>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
-    let minutes = query.get("minutes")
+    let minutes = query
+        .get("minutes")
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(30);
 
     match tag_service.get_tag_metrics(minutes).await {
         Ok(data) => {
-            let metrics: Vec<serde_json::Value> = data.iter().map(|(tag_id, tag_name, minute_ts, count)| {
-                json!({
-                    "tag_id": tag_id,
-                    "tag_name": tag_name,
-                    "timestamp": minute_ts,
-                    "count": count
+            let metrics: Vec<serde_json::Value> = data
+                .iter()
+                .map(|(tag_id, tag_name, minute_ts, count)| {
+                    json!({
+                        "tag_id": tag_id,
+                        "tag_name": tag_name,
+                        "timestamp": minute_ts,
+                        "count": count
+                    })
                 })
-            }).collect();
+                .collect();
             HttpResponse::Ok().json(metrics)
         }
-        Err(e) => crate::api::sqlx_error_response(&e)
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
@@ -295,29 +311,32 @@ async fn get_flag_balance(
     tag_service: web::Data<TagService>,
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
-    let minutes = query.get("minutes")
+    let minutes = query
+        .get("minutes")
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(5);
 
     match tag_service.get_flag_balance(minutes).await {
         Ok(data) => {
-            let result: Vec<serde_json::Value> = data.iter().map(|(service_id, service_name, incoming, outgoing)| {
-                serde_json::json!({
-                    "service_id": service_id,
-                    "service_name": service_name,
-                    "incoming": incoming,
-                    "outgoing": outgoing
+            let result: Vec<serde_json::Value> = data
+                .iter()
+                .map(|(service_id, service_name, incoming, outgoing)| {
+                    serde_json::json!({
+                        "service_id": service_id,
+                        "service_name": service_name,
+                        "incoming": incoming,
+                        "outgoing": outgoing
+                    })
                 })
-            }).collect();
+                .collect();
             HttpResponse::Ok().json(result)
         }
-        Err(e) => crate::api::sqlx_error_response(&e)
+        Err(e) => crate::api::sqlx_error_response(&e),
     }
 }
 
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
-    cfg
-        .service(get_tags_by_stream_id)
+    cfg.service(get_tags_by_stream_id)
         .service(get_all_tag_names)
         .service(get_tag_name_by_id)
         .service(create_tag_name)

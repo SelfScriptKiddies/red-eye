@@ -15,8 +15,8 @@
 
 use std::time::Duration;
 
-use bollard::query_parameters::ListContainersOptions;
 use bollard::models::{ContainerSummary, PortSummary, PortSummaryTypeEnum};
+use bollard::query_parameters::ListContainersOptions;
 use bollard::Docker;
 use serde::{Deserialize, Serialize};
 
@@ -103,13 +103,10 @@ pub async fn list_running_containers() -> Result<Vec<ContainerInfo>, String> {
         ..Default::default()
     };
 
-    let summaries = tokio::time::timeout(
-        DOCKER_TIMEOUT,
-        docker.list_containers(Some(options)),
-    )
-    .await
-    .map_err(|_| format!("docker API timed out after {:?}", DOCKER_TIMEOUT))?
-    .map_err(|e| format!("docker list failed: {}", e))?;
+    let summaries = tokio::time::timeout(DOCKER_TIMEOUT, docker.list_containers(Some(options)))
+        .await
+        .map_err(|_| format!("docker API timed out after {:?}", DOCKER_TIMEOUT))?
+        .map_err(|e| format!("docker list failed: {}", e))?;
 
     Ok(summaries.iter().map(summary_to_info).collect())
 }
@@ -119,11 +116,7 @@ fn summary_to_info(c: &ContainerSummary) -> ContainerInfo {
     ContainerInfo {
         name: container_display_name(c),
         image: c.image.clone().unwrap_or_default(),
-        state: c
-            .state
-            .as_ref()
-            .map(|s| s.to_string())
-            .unwrap_or_default(),
+        state: c.state.as_ref().map(|s| s.to_string()).unwrap_or_default(),
         ports: map_container_ports(c.ports.as_deref().unwrap_or(&[])),
     }
 }
@@ -235,7 +228,10 @@ mod tests {
 
     #[test]
     fn falls_back_to_exposed_private_ports() {
-        let ports = vec![tcp(8080, None), port(53, None, Some(PortSummaryTypeEnum::UDP))];
+        let ports = vec![
+            tcp(8080, None),
+            port(53, None, Some(PortSummaryTypeEnum::UDP)),
+        ];
         let mapped = map_container_ports(&ports);
         assert_eq!(
             mapped,
@@ -297,7 +293,10 @@ mod tests {
             .iter()
             .map(|p| (p.port, p.protocol.as_str()))
             .collect();
-        assert_eq!(keys, vec![(53, "tcp"), (53, "udp"), (8080, "tcp"), (9000, "tcp")]);
+        assert_eq!(
+            keys,
+            vec![(53, "tcp"), (53, "udp"), (8080, "tcp"), (9000, "tcp")]
+        );
     }
 
     #[test]
@@ -404,7 +403,10 @@ mod tests {
             .expect("reply published within 15s")
             .expect("non-empty message");
 
-        println!("raw wire payload: {}", String::from_utf8_lossy(&msg.payload));
+        println!(
+            "raw wire payload: {}",
+            String::from_utf8_lossy(&msg.payload)
+        );
         let status: DockerContainersStatus =
             serde_json::from_slice(&msg.payload).expect("round-trip through the broker parses");
         assert_eq!(status.agent_id, "live-test-agent");
@@ -412,13 +414,13 @@ mod tests {
         // reply — either is a valid live outcome, but never both empty-handed.
         assert!(status.error.is_some() || !status.containers.is_empty());
         if let Some(err) = &status.error {
-            println!("agent reported docker error (expected when Docker is absent): {}", err);
+            println!(
+                "agent reported docker error (expected when Docker is absent): {}",
+                err
+            );
         } else {
             for c in &status.containers {
-                println!(
-                    "container: {} ({}), ports: {:?}",
-                    c.name, c.image, c.ports
-                );
+                println!("container: {} ({}), ports: {:?}", c.name, c.image, c.ports);
             }
         }
     }

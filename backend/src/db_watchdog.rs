@@ -19,8 +19,8 @@ use crate::configuration::ApplicationConfig;
 use crate::db;
 use crate::health::HealthMonitor;
 use log::{error, info, warn};
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -134,7 +134,10 @@ pub fn spawn(config: &ApplicationConfig, monitor: Arc<HealthMonitor>) {
             // The URL was already validated by establish_connection at
             // startup, so this is practically unreachable; still, never
             // take the app down — just run without the watchdog.
-            error!("Stuck-query watchdog could not parse database URL, not started: {}", e);
+            error!(
+                "Stuck-query watchdog could not parse database URL, not started: {}",
+                e
+            );
             return;
         }
     };
@@ -234,10 +237,11 @@ mod live_tests {
         let mut victim = sqlx::postgres::PgConnection::connect(&url)
             .await
             .expect("connect victim session");
-        let victim_task =
-            tokio::spawn(
-                async move { sqlx::query("SELECT pg_sleep(60)").execute(&mut victim).await },
-            );
+        let victim_task = tokio::spawn(async move {
+            sqlx::query("SELECT pg_sleep(60)")
+                .execute(&mut victim)
+                .await
+        });
 
         // Wait past the 1s threshold so the sleep registers as stuck.
         tokio::time::sleep(Duration::from_millis(1_600)).await;
@@ -246,7 +250,10 @@ mod live_tests {
         let found = scan_once(&watchdog_pool, 1_000, &monitor)
             .await
             .expect("scan_once");
-        assert!(found >= 1, "expected at least one stuck query, found {found}");
+        assert!(
+            found >= 1,
+            "expected at least one stuck query, found {found}"
+        );
 
         // The victim must observe a cancellation error quickly — not wait
         // out the remaining ~58s of pg_sleep.

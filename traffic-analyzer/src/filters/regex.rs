@@ -1,6 +1,6 @@
-use regex::bytes::Regex;
 use crate::filters::filterDTO::Filter;
-use log::{trace, error};
+use log::{error, trace};
+use regex::bytes::Regex;
 
 pub struct RegexFilter {
     id: usize,
@@ -49,8 +49,11 @@ impl Filter for RegexFilter {
             });
         }
 
-        trace!("Checking packet with regex '{}': {} matches found",
-               self.pattern_name, triggers.len());
+        trace!(
+            "Checking packet with regex '{}': {} matches found",
+            self.pattern_name,
+            triggers.len()
+        );
 
         triggers
     }
@@ -82,7 +85,10 @@ mod tests {
         let packet = b"\x00\x02\x00\x01\xFF\xFEflag{stolen_secret}\x00\xFF\x10";
         let triggers = filter.processed(packet);
         assert_eq!(triggers.len(), 1);
-        assert_eq!(&packet[triggers[0].start_index..triggers[0].end_index], b"flag{stolen_secret}");
+        assert_eq!(
+            &packet[triggers[0].start_index..triggers[0].end_index],
+            b"flag{stolen_secret}"
+        );
         // Offsets must address the raw payload (binary prefix counts).
         assert_eq!(triggers[0].start_index, 6);
         assert_eq!(triggers[0].end_index, 25);

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use log::debug;
+use std::collections::HashMap;
 
 use crate::proto_schema::ProtoSchema;
 
@@ -56,7 +56,8 @@ pub fn try_parse_grpc_body(
 
     let decoded_json = decode_protobuf_raw(payload, field_names);
 
-    debug!("gRPC parsed: {}/{} ({} bytes payload)",
+    debug!(
+        "gRPC parsed: {}/{} ({} bytes payload)",
         service_name.as_deref().unwrap_or("?"),
         method_name.as_deref().unwrap_or("?"),
         length
@@ -122,7 +123,9 @@ fn decode_protobuf_raw(data: &[u8], field_names: Option<&HashMap<u64, String>>) 
                     if pos + length <= data.len() {
                         let value = &data[pos..pos + length];
                         if let Ok(s) = std::str::from_utf8(value) {
-                            if s.chars().all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t') {
+                            if s.chars()
+                                .all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+                            {
                                 fields.push(format!("{}: \"{}\"", key, s.replace('\"', "\\\"")));
                             } else {
                                 fields.push(format!("{}: \"<{} bytes>\"", key, length));

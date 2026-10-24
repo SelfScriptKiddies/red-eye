@@ -53,8 +53,7 @@ pub fn spawn_heartbeat(
     let started_at = Instant::now();
 
     tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
 
         loop {
             interval.tick().await;

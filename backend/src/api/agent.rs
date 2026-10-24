@@ -4,7 +4,7 @@ pub mod agent_service;
 use std::sync::Arc;
 
 use actix_identity::Identity;
-use actix_web::{get, post, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, get, post, web};
 
 use serde::Deserialize;
 
@@ -152,8 +152,7 @@ async fn get_agent_containers(
 ) -> impl Responder {
     let agent_id = id.into_inner();
     if agent_service.get_agent(&agent_id).await.is_none() {
-        return HttpResponse::NotFound()
-            .json(serde_json::json!({"error": "Agent not found"}));
+        return HttpResponse::NotFound().json(serde_json::json!({"error": "Agent not found"}));
     }
     HttpResponse::Ok().json(agent_service.get_containers(&agent_id).await)
 }
@@ -167,12 +166,11 @@ async fn get_agent_services(
     pool: web::Data<sqlx::PgPool>,
 ) -> impl Responder {
     let agent_id = id.into_inner();
-    let services = sqlx::query_scalar::<_, i64>(
-        "SELECT service_id FROM agent_service WHERE agent_id = $1"
-    )
-    .bind(&agent_id)
-    .fetch_all(pool.get_ref())
-    .await;
+    let services =
+        sqlx::query_scalar::<_, i64>("SELECT service_id FROM agent_service WHERE agent_id = $1")
+            .bind(&agent_id)
+            .fetch_all(pool.get_ref())
+            .await;
 
     match services {
         Ok(ids) => HttpResponse::Ok().json(ids),
@@ -195,7 +193,7 @@ async fn bind_agent_service(
 ) -> impl Responder {
     let agent_id = id.into_inner();
     let result = sqlx::query(
-        "INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+        "INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(&agent_id)
     .bind(body.service_id)
@@ -221,13 +219,11 @@ async fn unbind_agent_service(
     agent_service: web::Data<Arc<AgentService>>,
 ) -> impl Responder {
     let agent_id = id.into_inner();
-    let result = sqlx::query(
-        "DELETE FROM agent_service WHERE agent_id = $1 AND service_id = $2"
-    )
-    .bind(&agent_id)
-    .bind(body.service_id)
-    .execute(pool.get_ref())
-    .await;
+    let result = sqlx::query("DELETE FROM agent_service WHERE agent_id = $1 AND service_id = $2")
+        .bind(&agent_id)
+        .bind(body.service_id)
+        .execute(pool.get_ref())
+        .await;
 
     match result {
         Ok(_) => {
@@ -262,7 +258,7 @@ pub async fn bind_all_services_to_agent(agent_id: &str, pool: &sqlx::PgPool) {
     if let Err(e) = sqlx::query(
         "INSERT INTO agent_service (agent_id, service_id)
          SELECT $1, id FROM service
-         ON CONFLICT DO NOTHING"
+         ON CONFLICT DO NOTHING",
     )
     .bind(agent_id)
     .execute(pool)
@@ -272,7 +268,8 @@ pub async fn bind_all_services_to_agent(agent_id: &str, pool: &sqlx::PgPool) {
         // the operator must see it, not wonder why there is no traffic.
         log::error!(
             "Failed to bind services to agent '{}': {} — agent will not sniff any services until rebound",
-            agent_id, e
+            agent_id,
+            e
         );
     }
 }

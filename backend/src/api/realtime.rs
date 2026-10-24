@@ -30,8 +30,8 @@ async fn ws_handler(
     app_config: web::Data<ApplicationConfig>,
 ) -> Result<HttpResponse, Error> {
     // Auth: accept session cookie or token query parameter
-    let authenticated = identity.is_some()
-        || query.token.as_deref() == Some(&app_config.web_password);
+    let authenticated =
+        identity.is_some() || query.token.as_deref() == Some(&app_config.web_password);
 
     if !authenticated {
         return Ok(HttpResponse::Unauthorized().json(

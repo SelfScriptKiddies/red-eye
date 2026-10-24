@@ -28,7 +28,7 @@ impl Filter for SubstrFilter {
 
     fn processed(&self, packet: &[u8]) -> Vec<FilterTrigger> {
         let mut triggers = Vec::new();
-        
+
         if let Some(positions) = find_all_subsequences(packet, &self.substring) {
             for (start, end) in positions {
                 triggers.push(FilterTrigger {
@@ -37,10 +37,13 @@ impl Filter for SubstrFilter {
                 });
             }
         }
-        
-        trace!("Checking packet for substring '{}': {} matches found", 
-               self.pattern_name, triggers.len());
-        
+
+        trace!(
+            "Checking packet for substring '{}': {} matches found",
+            self.pattern_name,
+            triggers.len()
+        );
+
         triggers
     }
 }
@@ -52,19 +55,19 @@ fn find_all_subsequences(haystack: &[u8], needle: &[u8]) -> Option<Vec<(usize, u
     if needle.len() > haystack.len() {
         return None;
     }
-    
+
     let lps = compute_lps_array(needle);
     let mut matches = Vec::new();
-    
+
     let mut i = 0;
     let mut j = 0;
-    
+
     while i < haystack.len() {
         if needle[j] == haystack[i] {
             i += 1;
             j += 1;
         }
-        
+
         if j == needle.len() {
             let start = i - j;
             let end = i;
@@ -78,7 +81,7 @@ fn find_all_subsequences(haystack: &[u8], needle: &[u8]) -> Option<Vec<(usize, u
             }
         }
     }
-    
+
     if matches.is_empty() {
         None
     } else {
@@ -90,7 +93,7 @@ fn compute_lps_array(pattern: &[u8]) -> Vec<usize> {
     let mut lps = vec![0; pattern.len()];
     let mut len = 0;
     let mut i = 1;
-    
+
     while i < pattern.len() {
         if pattern[i] == pattern[len] {
             len += 1;
@@ -105,7 +108,7 @@ fn compute_lps_array(pattern: &[u8]) -> Vec<usize> {
             }
         }
     }
-    
+
     lps
 }
 

@@ -5,6 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prost_build::Config::new().compile_fds(file_descriptors)?;
     println!("cargo:rerun-if-changed=proto/wire.proto");
     stamp_git_sha();
+    stamp_version();
     Ok(())
 }
 
@@ -26,4 +27,24 @@ fn stamp_git_sha() {
         })
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=RED_EYE_GIT_SHA={}", sha);
+}
+
+/// Bake the release version into the binary (`RED_EYE_VERSION` env at
+/// compile time, see src/version.rs). Explicit env wins (Docker builds
+/// pass the version via build arg), then the repo-root VERSION file —
+/// the canonical version source (see scripts/bump-version.sh) —, then
+/// "unknown". Serves /api/version drift detection and `--version`.
+fn stamp_version() {
+    let version = std::env::var("RED_EYE_VERSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::fs::read_to_string("../VERSION")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rerun-if-changed=../VERSION");
+    println!("cargo:rustc-env=RED_EYE_VERSION={}", version);
 }

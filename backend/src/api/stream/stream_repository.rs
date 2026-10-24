@@ -1,15 +1,13 @@
-use sqlx::PgPool;
 use crate::api::stream::stream_dto::Stream;
+use sqlx::PgPool;
 
 pub struct StreamRepository {
-    pgpool: PgPool
+    pgpool: PgPool,
 }
 
 impl StreamRepository {
     pub(super) fn new(pgpool: PgPool) -> Self {
-        StreamRepository {
-            pgpool
-        }
+        StreamRepository { pgpool }
     }
 
     pub async fn get_packet_by_id(&self, stream_id: i64) -> Result<Stream, sqlx::Error> {
@@ -50,8 +48,33 @@ impl StreamRepository {
     /// expression index idx_stream_last_time_id (see
     /// database/migrations/stream_keyset_index.sql). `offset` is kept for
     /// legacy callers (deprecated) and ignored when `cursor` is set.
-    pub async fn get_streams_with_tags(&self, limit: i64, offset: i64, cursor: Option<(i64, i64)>, tags: Option<Vec<i64>>, services: Option<Vec<i64>>, start_time: Option<i64>, end_time: Option<i64>) -> Result<Vec<(i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>, sqlx::Error> {
-        let mut sql = String::from(r#"
+    pub async fn get_streams_with_tags(
+        &self,
+        limit: i64,
+        offset: i64,
+        cursor: Option<(i64, i64)>,
+        tags: Option<Vec<i64>>,
+        services: Option<Vec<i64>>,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+    ) -> Result<
+        Vec<(
+            i64,
+            Option<i64>,
+            Option<i64>,
+            i64,
+            Vec<String>,
+            Option<String>,
+            Option<i64>,
+            bool,
+            String,
+            Option<String>,
+            Option<String>,
+        )>,
+        sqlx::Error,
+    > {
+        let mut sql = String::from(
+            r#"
             SELECT
                 stream_id,
                 first_time,
@@ -84,7 +107,8 @@ impl StreamRepository {
                     FROM stream_tag stg
                     WHERE stg.stream_id = str.id
                 ) st ON true
-            ) streams_list"#);
+            ) streams_list"#,
+        );
 
         let mut where_clauses = Vec::new();
         let mut param_idx: usize = 0;
@@ -152,9 +176,33 @@ impl StreamRepository {
         ));
 
         log::debug!("SQL Query: {}", sql);
-        log::debug!("Params: tags={:?}, services={:?}, start_time={:?}, end_time={:?}, cursor={:?}, limit={}, offset={}", tags, services, start_time, end_time, cursor, limit, offset);
+        log::debug!(
+            "Params: tags={:?}, services={:?}, start_time={:?}, end_time={:?}, cursor={:?}, limit={}, offset={}",
+            tags,
+            services,
+            start_time,
+            end_time,
+            cursor,
+            limit,
+            offset
+        );
 
-        let mut query = sqlx::query_as::<_, (i64, Option<i64>, Option<i64>, i64, Vec<String>, Option<String>, Option<i64>, bool, String, Option<String>, Option<String>)>(&sql);
+        let mut query = sqlx::query_as::<
+            _,
+            (
+                i64,
+                Option<i64>,
+                Option<i64>,
+                i64,
+                Vec<String>,
+                Option<String>,
+                Option<i64>,
+                bool,
+                String,
+                Option<String>,
+                Option<String>,
+            ),
+        >(&sql);
 
         // Bind tag IDs
         if let Some(ref tag_ids) = tags {
@@ -196,7 +244,10 @@ impl StreamRepository {
     /// (idx_packets_timestamp); flags are tag triggers whose tag_name has
     /// special_type='flag'. FULL JOIN so buckets with only flags (or only
     /// packets) are kept.
-    pub async fn get_stream_histogram(&self, bucket_secs: i32) -> Result<Vec<(i64, i64, i64)>, sqlx::Error> {
+    pub async fn get_stream_histogram(
+        &self,
+        bucket_secs: i32,
+    ) -> Result<Vec<(i64, i64, i64)>, sqlx::Error> {
         sqlx::query_as::<_, (i64, i64, i64)>(
             r#"
             WITH packets AS (
@@ -217,10 +268,11 @@ impl StreamRepository {
             FROM packets p
             FULL OUTER JOIN flags f ON f.bucket_ts = p.bucket_ts
             ORDER BY bucket_ts ASC
-            "#)
-            .bind(bucket_secs as i64)
-            .fetch_all(&self.pgpool)
-            .await
+            "#,
+        )
+        .bind(bucket_secs as i64)
+        .fetch_all(&self.pgpool)
+        .await
     }
 
     pub async fn set_favorite(&self, stream_id: i64, favorite: bool) -> Result<bool, sqlx::Error> {
@@ -238,5 +290,3 @@ impl StreamRepository {
         .await
     }
 }
-
-

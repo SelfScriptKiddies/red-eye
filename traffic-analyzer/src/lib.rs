@@ -1,21 +1,21 @@
+pub mod batch_flusher;
+pub mod cache;
 pub mod configuration;
-pub mod message_broker;
-pub mod filters;
 pub mod db;
 pub mod ethernet;
-pub mod cache;
-pub mod process_packet;
-pub mod http_parser;
+pub mod filters;
 pub mod grpc_parser;
+pub mod http_parser;
+pub mod message_broker;
+pub mod process_packet;
 pub mod proto_schema;
-pub mod batch_flusher;
 pub mod version;
-pub mod ws_aggregator;
 pub mod wire;
+pub mod ws_aggregator;
 use crate::configuration::init;
 use crate::filters::add_filter;
 use crate::filters::filterDTO::FilterDirection;
-use log::{info, debug, error};
+use log::{debug, error, info};
 use std::sync::Arc;
 
 /// Load proto files from DB and populate the proto_schemas cache.
@@ -128,9 +128,7 @@ pub async fn run() {
     info!("Starting Red Eye traffic analyzer");
     debug!("{:?}", config);
 
-    let cache = Arc::new(
-        cache::Cache::new(config.cache_stream_ttl_secs)
-    );
+    let cache = Arc::new(cache::Cache::new(config.cache_stream_ttl_secs));
 
     // Periodic eviction task for expired streams and unused locks
     tokio::spawn({
@@ -146,8 +144,11 @@ pub async fn run() {
                 let evicted = cache.streams.evict_expired();
                 cache.cleanup_unused_locks();
                 if evicted > 0 {
-                    debug!("Cache eviction: removed {} expired streams, {} remaining",
-                        evicted, cache.streams.len());
+                    debug!(
+                        "Cache eviction: removed {} expired streams, {} remaining",
+                        evicted,
+                        cache.streams.len()
+                    );
                 }
             }
         }
@@ -186,17 +187,31 @@ pub async fn run() {
         .unwrap_or_default();
 
         let mut services = cache.services.write().unwrap();
-        for (id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse) in rows {
-            services.insert(id as usize, configuration::updater::dto::Service {
-                name,
-                port: port as u16,
-                chunked_transfer_encoding,
-                decrypt_tls,
-                inflate_websockets,
-                merge_adjacent_packets,
-                urldecode,
-                http_parse,
-            });
+        for (
+            id,
+            name,
+            port,
+            chunked_transfer_encoding,
+            decrypt_tls,
+            inflate_websockets,
+            merge_adjacent_packets,
+            urldecode,
+            http_parse,
+        ) in rows
+        {
+            services.insert(
+                id as usize,
+                configuration::updater::dto::Service {
+                    name,
+                    port: port as u16,
+                    chunked_transfer_encoding,
+                    decrypt_tls,
+                    inflate_websockets,
+                    merge_adjacent_packets,
+                    urldecode,
+                    http_parse,
+                },
+            );
         }
         info!("Loaded {} services from DB into cache", services.len());
     }
@@ -216,7 +231,9 @@ pub async fn run() {
     } else {
         // No NATS for WS events: aggregation still runs (cheap), frames
         // just have no publisher — browsers rely on periodic refresh.
-        log::warn!("No NATS connection for WS activity publishing — WebSocket live updates disabled");
+        log::warn!(
+            "No NATS connection for WS activity publishing — WebSocket live updates disabled"
+        );
     }
 
     // Warm packet filters from DB before the NATS loops start. Until this
@@ -234,7 +251,10 @@ pub async fn run() {
         let cache = cache.clone();
         async move {
             let update_listener = configuration::updater::UpdateListener::new(&config).await;
-            update_listener.listen_to_updates(&config.nats_updates_topic, cache).await.unwrap();
+            update_listener
+                .listen_to_updates(&config.nats_updates_topic, cache)
+                .await
+                .unwrap();
         }
     });
 
@@ -257,7 +277,15 @@ pub async fn run() {
         ws_aggregator,
     );
 
-    match message_broker::consume_raw_packets(consumer, cache, Arc::new(config), db, Arc::new(batch_tx)).await {
+    match message_broker::consume_raw_packets(
+        consumer,
+        cache,
+        Arc::new(config),
+        db,
+        Arc::new(batch_tx),
+    )
+    .await
+    {
         Ok(_) => (),
         Err(e) => {
             error!("Error consuming raw packets: {}", e);

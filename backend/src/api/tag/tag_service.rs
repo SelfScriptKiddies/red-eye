@@ -1,6 +1,6 @@
-use sqlx::PgPool;
 use crate::api::tag::tag_dto::{Tag, TagName, TagNameCreate};
 use crate::api::tag::tag_repository::TagRepository;
+use sqlx::PgPool;
 
 pub(crate) struct TagService {
     repository: TagRepository,
@@ -8,14 +8,12 @@ pub(crate) struct TagService {
 
 impl TagService {
     pub fn new(repository: TagRepository) -> Self {
-        Self {
-            repository
-        }
+        Self { repository }
     }
 
     pub fn new_from_pgpool(pool: PgPool) -> Self {
         Self {
-            repository: TagRepository::new(pool)
+            repository: TagRepository::new(pool),
         }
     }
 
@@ -35,7 +33,11 @@ impl TagService {
         self.repository.get_tag_name_by_id(id).await
     }
 
-    pub async fn update_tag_name(&self, id: i64, tag_name: TagNameCreate) -> Result<TagName, sqlx::Error> {
+    pub async fn update_tag_name(
+        &self,
+        id: i64,
+        tag_name: TagNameCreate,
+    ) -> Result<TagName, sqlx::Error> {
         self.repository.update_tag_name(id, tag_name).await
     }
 
@@ -51,11 +53,17 @@ impl TagService {
         self.repository.get_all_tag_names().await
     }
 
-    pub async fn get_tag_metrics(&self, minutes: i32) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
+    pub async fn get_tag_metrics(
+        &self,
+        minutes: i32,
+    ) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
         self.repository.get_tag_metrics(minutes).await
     }
 
-    pub async fn get_flag_balance(&self, minutes: i32) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
+    pub async fn get_flag_balance(
+        &self,
+        minutes: i32,
+    ) -> Result<Vec<(i64, String, i64, i64)>, sqlx::Error> {
         self.repository.get_flag_balance(minutes).await
     }
 }

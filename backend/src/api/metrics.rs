@@ -1,5 +1,5 @@
-use actix_web::{get, web, HttpResponse, Responder};
-use prometheus::{Encoder, TextEncoder, IntGauge, IntCounter, Registry, Opts};
+use actix_web::{HttpResponse, Responder, get, web};
+use prometheus::{Encoder, IntCounter, IntGauge, Opts, Registry, TextEncoder};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -65,14 +65,16 @@ pub fn register_metrics() {
 async fn refresh_gauges(pool: &PgPool, agent_service: &AgentService) {
     // Active streams
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stream WHERE active = true")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         ACTIVE_STREAMS.set(row);
     }
 
     // Total streams
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stream")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         STREAMS_TOTAL.reset();
         let _ = STREAMS_TOTAL.inc_by(row as u64);
@@ -80,14 +82,16 @@ async fn refresh_gauges(pool: &PgPool, agent_service: &AgentService) {
 
     // Services
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM service")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         SERVICES_COUNT.set(row);
     }
 
     // DB size
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT pg_database_size(current_database())")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         DB_SIZE_BYTES.set(row);
     }
@@ -102,21 +106,24 @@ async fn refresh_gauges(pool: &PgPool, agent_service: &AgentService) {
 
     // HTTP messages
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM http_message")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         HTTP_MESSAGES_TOTAL.set(row);
     }
 
     // gRPC messages
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM grpc_message")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         GRPC_MESSAGES_TOTAL.set(row);
     }
 
     // Tag triggers
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tag")
-        .fetch_one(pool).await
+        .fetch_one(pool)
+        .await
     {
         TAG_TRIGGERS_TOTAL.set(row);
     }

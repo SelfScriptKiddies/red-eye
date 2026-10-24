@@ -4,21 +4,21 @@ pub mod block_sync;
 pub mod download;
 pub mod l7;
 pub mod metrics;
+pub(crate) mod packet;
 pub mod protect;
 pub mod proto;
-pub(crate) mod packet;
 pub mod realtime;
 pub mod service;
-pub(crate) mod stream;
 pub mod settings;
 pub mod special_triggers;
 pub mod stats;
+pub(crate) mod stream;
 pub mod tag;
 pub mod updater;
 pub mod version;
+use actix_web::HttpResponse;
 use actix_web::http::header::RETRY_AFTER;
 use actix_web::web;
-use actix_web::HttpResponse;
 use serde_json::json;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -54,33 +54,31 @@ pub(crate) fn sqlx_error_response(error: &sqlx::Error) -> HttpResponse {
 pub fn api_config(cfg: &mut web::ServiceConfig) {
     // Prometheus metrics — outside /api scope, no auth
     metrics::register_metrics();
-    cfg
-    .configure(metrics::config)
-    // Agent binary download — outside /api scope, PUBLIC by design
-    // (operators wget it before they have credentials; see api/download.rs)
-    .configure(download::public_config)
-    .service(
-        SwaggerUi::new("/api/docs/{_:.*}")
-        .url("/api/docs/openapi.json", ApiDoc::openapi())
-    )
-    .service(
-        web::scope("/api")
-            .configure(packet::packet_config)
-            .configure(stream::stream_config)
-            .configure(tag::tag_config)
-            .configure(service::config)
-            .configure(realtime::config)
-            .configure(agent::config)
-            .configure(l7::config)
-            .configure(settings::config)
-            .configure(protect::config)
-            .configure(proto::config)
-            .configure(stats::config)
-            .configure(version::config)
-            .configure(download::config)
-            .configure(crate::health::config)
-            .service(web::redirect("/docs", "/api/docs/"))
-    );
+    cfg.configure(metrics::config)
+        // Agent binary download — outside /api scope, PUBLIC by design
+        // (operators wget it before they have credentials; see api/download.rs)
+        .configure(download::public_config)
+        .service(
+            SwaggerUi::new("/api/docs/{_:.*}").url("/api/docs/openapi.json", ApiDoc::openapi()),
+        )
+        .service(
+            web::scope("/api")
+                .configure(packet::packet_config)
+                .configure(stream::stream_config)
+                .configure(tag::tag_config)
+                .configure(service::config)
+                .configure(realtime::config)
+                .configure(agent::config)
+                .configure(l7::config)
+                .configure(settings::config)
+                .configure(protect::config)
+                .configure(proto::config)
+                .configure(stats::config)
+                .configure(version::config)
+                .configure(download::config)
+                .configure(crate::health::config)
+                .service(web::redirect("/docs", "/api/docs/")),
+        );
 }
 
 #[derive(OpenApi)]
@@ -162,7 +160,9 @@ mod tests {
         let resp = sqlx_error_response(&sqlx::Error::PoolTimedOut);
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            resp.headers().get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
             Some("1")
         );
     }
@@ -172,7 +172,9 @@ mod tests {
         let resp = pool_timeout_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            resp.headers().get(RETRY_AFTER).and_then(|v| v.to_str().ok()),
+            resp.headers()
+                .get(RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
             Some("1")
         );
     }
