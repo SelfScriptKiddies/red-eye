@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use log::debug;
+use std::collections::HashMap;
 
 /// Parsed .proto schema — maps gRPC service/method to field definitions.
 #[derive(Debug, Clone)]
@@ -23,10 +23,7 @@ impl ProtoSchema {
         is_request: bool,
     ) -> Option<&HashMap<u64, String>> {
         // service_path can be "ctf.UserService" or just "UserService"
-        let svc_name = service_path
-            .rsplit('.')
-            .next()
-            .unwrap_or(service_path);
+        let svc_name = service_path.rsplit('.').next().unwrap_or(service_path);
 
         let method_map = self.methods.get(svc_name)?;
         let (req_type, resp_type) = method_map.get(method_name)?;
@@ -190,10 +187,7 @@ fn tokenize(content: &str) -> Vec<String> {
 }
 
 /// Parse `{ rpc Name(ReqType) returns (RespType); ... }`
-fn parse_service_block(
-    tokens: &[String],
-    pos: &mut usize,
-) -> HashMap<String, (String, String)> {
+fn parse_service_block(tokens: &[String], pos: &mut usize) -> HashMap<String, (String, String)> {
     let mut methods = HashMap::new();
     // Skip to opening brace
     while *pos < tokens.len() && tokens[*pos] != "{" {
@@ -223,7 +217,7 @@ fn parse_service_block(
                 let req_type = tokens[*pos].clone();
                 *pos += 1; // skip req_type
                 *pos += 1; // skip )
-                // "returns"
+                           // "returns"
                 if *pos < tokens.len() && tokens[*pos] == "returns" {
                     *pos += 1;
                 }
@@ -243,10 +237,7 @@ fn parse_service_block(
 }
 
 /// Parse `{ type name = number; ... }` — extracts field_number → field_name
-fn parse_message_block(
-    tokens: &[String],
-    pos: &mut usize,
-) -> HashMap<u64, String> {
+fn parse_message_block(tokens: &[String], pos: &mut usize) -> HashMap<u64, String> {
     let mut fields = HashMap::new();
     while *pos < tokens.len() && tokens[*pos] != "{" {
         *pos += 1;
@@ -276,8 +267,12 @@ fn parse_message_block(
             *pos += 1; // skip {
             let mut inner_depth = 1;
             while *pos < tokens.len() && inner_depth > 0 {
-                if tokens[*pos] == "{" { inner_depth += 1; }
-                if tokens[*pos] == "}" { inner_depth -= 1; }
+                if tokens[*pos] == "{" {
+                    inner_depth += 1;
+                }
+                if tokens[*pos] == "}" {
+                    inner_depth -= 1;
+                }
                 *pos += 1;
             }
             continue;
@@ -381,15 +376,21 @@ mod tests {
         assert_eq!(login_req.get(&2), Some(&"password".to_string()));
 
         // Check resolve
-        let fields = schema.resolve_fields("ctf.UserService", "Login", true).unwrap();
+        let fields = schema
+            .resolve_fields("ctf.UserService", "Login", true)
+            .unwrap();
         assert_eq!(fields.get(&1), Some(&"username".to_string()));
         assert_eq!(fields.get(&2), Some(&"password".to_string()));
 
-        let fields = schema.resolve_fields("ctf.UserService", "Login", false).unwrap();
+        let fields = schema
+            .resolve_fields("ctf.UserService", "Login", false)
+            .unwrap();
         assert_eq!(fields.get(&1), Some(&"token".to_string()));
         assert_eq!(fields.get(&2), Some(&"success".to_string()));
 
-        let fields = schema.resolve_fields("ctf.UserService", "GetUser", false).unwrap();
+        let fields = schema
+            .resolve_fields("ctf.UserService", "GetUser", false)
+            .unwrap();
         assert_eq!(fields.get(&1), Some(&"user_id".to_string()));
         assert_eq!(fields.get(&4), Some(&"role".to_string()));
     }

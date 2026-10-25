@@ -79,12 +79,18 @@ impl NftablesManager {
     /// Skips if a redirect for this original_port already exists.
     pub fn add_redirect(&mut self, rule: RedirectRule) -> Result<()> {
         // Deduplicate: if a rule for this port exists, update it
-        if let Some(existing) = self.rules.iter().position(|r| r.original_port == rule.original_port) {
+        if let Some(existing) = self
+            .rules
+            .iter()
+            .position(|r| r.original_port == rule.original_port)
+        {
             if self.rules[existing].redirect_port == rule.redirect_port
                 && self.rules[existing].protocol == rule.protocol
             {
-                debug!("nftables redirect {} {} -> {} already exists, skipping",
-                    rule.protocol, rule.original_port, rule.redirect_port);
+                debug!(
+                    "nftables redirect {} {} -> {} already exists, skipping",
+                    rule.protocol, rule.original_port, rule.redirect_port
+                );
                 return Ok(());
             }
             // Different target — remove old, add new
@@ -123,10 +129,7 @@ impl NftablesManager {
             for rule in &self.rules.clone() {
                 self.add_redirect_rule(rule)?;
             }
-            info!(
-                "Removed nftables redirect for port {}",
-                original_port
-            );
+            info!("Removed nftables redirect for port {}", original_port);
         }
         Ok(())
     }
@@ -208,10 +211,7 @@ impl NftablesManager {
     }
 
     fn flush_chain(&self) -> Result<()> {
-        run_nft(&format!(
-            "flush chain inet {} {}",
-            TABLE_NAME, CHAIN_NAME
-        ))
+        run_nft(&format!("flush chain inet {} {}", TABLE_NAME, CHAIN_NAME))
     }
 
     fn add_redirect_rule(&self, rule: &RedirectRule) -> Result<()> {
@@ -237,10 +237,7 @@ fn run_nft(cmd: &str) -> Result<()> {
     let full_cmd = format!("nft {}", cmd);
     debug!("Running: {}", full_cmd);
 
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&full_cmd)
-        .output()?;
+    let output = Command::new("sh").arg("-c").arg(&full_cmd).output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

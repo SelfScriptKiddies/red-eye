@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 use crate::api::settings::get_setting;
 
@@ -94,11 +94,14 @@ const MAX_SUBMITTED_CACHE: usize = 10000;
 /// (name→ip inverted). Values containing '/' are parsed as networks
 /// and matched by containment; anything else is an exact host string.
 async fn fetch_team_map(farm_url: &str, farm_password: &str) -> Option<TeamMap> {
-    let base = farm_url.trim_end_matches("/api/post_flags").trim_end_matches('/');
+    let base = farm_url
+        .trim_end_matches("/api/post_flags")
+        .trim_end_matches('/');
     let config_url = format!("{}/api/get_config", base);
 
     let client = reqwest::Client::new();
-    let mut req = client.get(&config_url)
+    let mut req = client
+        .get(&config_url)
         .timeout(std::time::Duration::from_secs(5));
 
     if !farm_password.is_empty() {
@@ -135,7 +138,11 @@ async fn fetch_team_map(farm_url: &str, farm_password: &str) -> Option<TeamMap> 
 /// Resolve a bare host IP string against a team map: exact string match
 /// first, then containment in network entries. Returns None when no entry
 /// matches (caller falls back to the raw IP string).
-fn match_team(exact: &HashMap<String, String>, nets: &[(IpNetwork, String)], ip: &str) -> Option<String> {
+fn match_team(
+    exact: &HashMap<String, String>,
+    nets: &[(IpNetwork, String)],
+    ip: &str,
+) -> Option<String> {
     if let Some(name) = exact.get(ip) {
         return Some(name.clone());
     }
@@ -151,15 +158,12 @@ fn match_team(exact: &HashMap<String, String>, nets: &[(IpNetwork, String)], ip:
 
 /// Background task: polls for new triggers with special_type (flag, alert).
 /// Runs every 3 seconds.
-pub fn spawn_special_trigger_handler(
-    pool: PgPool,
-    broadcaster: Arc<broadcast::Sender<String>>,
-) {
+pub fn spawn_special_trigger_handler(pool: PgPool, broadcaster: Arc<broadcast::Sender<String>>) {
     let team_cache = Arc::new(RwLock::new(TeamCache::new()));
     let flag_queue = Arc::new(RwLock::new(FlagQueue::new()));
 
     tokio::spawn(async move {
-        use tokio::time::{interval, Duration};
+        use tokio::time::{Duration, interval};
         let mut ticker = interval(Duration::from_secs(3));
         let mut last_check_id: i64 = 0;
 
@@ -199,11 +203,12 @@ pub fn spawn_special_trigger_handler(
                         OR (tn.direction = 'in'  AND p.direction = 'dest')
                         OR (tn.direction = 'out' AND p.direction = 'orig')
                    )
-                 ORDER BY t.packet_id, tn.id, t.timestamp, t.id ASC"
+                 ORDER BY t.packet_id, tn.id, t.timestamp, t.id ASC",
             )
             .bind(last_check_id)
             .fetch_all(&pool)
-            .await {
+            .await
+            {
                 Ok(rows) => rows,
                 Err(e) => {
                     debug!("Special trigger poll error: {}", e);
@@ -222,10 +227,22 @@ pub fn spawn_special_trigger_handler(
                 // broadcasts for extra matches carry no extra info.
                 let mut alerted: HashSet<(i64, i64)> = HashSet::new();
 
-                for (packet_id, start_idx, end_idx, tag_id, tag_name, special_type, stream_id) in &triggers {
+                for (packet_id, start_idx, end_idx, tag_id, tag_name, special_type, stream_id) in
+                    &triggers
+                {
                     match special_type.as_str() {
                         "flag" => {
-                            handle_flag(&pool, *packet_id, *start_idx, *end_idx, tag_name, *stream_id, &team_cache, &flag_queue).await;
+                            handle_flag(
+                                &pool,
+                                *packet_id,
+                                *start_idx,
+                                *end_idx,
+                                tag_name,
+                                *stream_id,
+                                &team_cache,
+                                &flag_queue,
+                            )
+                            .await;
                         }
                         "alert" => {
                             if alerted.insert((*packet_id, *tag_id)) {
@@ -240,7 +257,9 @@ pub fn spawn_special_trigger_handler(
             // Retry failed flag submissions
             {
                 let farm_url = get_setting(&pool, "farm_url").await.unwrap_or_default();
-                let farm_password = get_setting(&pool, "farm_password").await.unwrap_or_default();
+                let farm_password = get_setting(&pool, "farm_password")
+                    .await
+                    .unwrap_or_default();
                 if !farm_url.is_empty() {
                     let mut q = flag_queue.write().await;
                     let mut i = 0;
@@ -257,7 +276,8 @@ pub fn spawn_special_trigger_handler(
                             "team": entry.team,
                         }]);
                         let client = reqwest::Client::new();
-                        let mut req = client.post(&farm_url)
+                        let mut req = client
+                            .post(&farm_url)
                             .json(&payload)
                             .timeout(std::time::Duration::from_secs(5));
                         if !farm_password.is_empty() {
@@ -265,12 +285,20 @@ pub fn spawn_special_trigger_handler(
                         }
                         match req.send().await {
                             Ok(resp) if resp.status().is_success() => {
-                                info!("Retry succeeded for flag '{}': {}", entry.flag, resp.status());
+                                info!(
+                                    "Retry succeeded for flag '{}': {}",
+                                    entry.flag,
+                                    resp.status()
+                                );
                                 let flag = q.retry_queue.remove(i).unwrap().flag;
                                 q.mark_submitted(flag);
                             }
                             Ok(resp) => {
-                                warn!("Retry rejected for flag '{}': {}", entry.flag, resp.status());
+                                warn!(
+                                    "Retry rejected for flag '{}': {}",
+                                    entry.flag,
+                                    resp.status()
+                                );
                                 q.retry_queue[i].attempts += 1;
                                 i += 1;
                             }
@@ -315,7 +343,16 @@ async fn resolve_team(
     ip.to_string()
 }
 
-async fn handle_flag(pool: &PgPool, packet_id: i64, start_idx: i32, end_idx: i32, tag_name: &str, stream_id: i64, team_cache: &Arc<RwLock<TeamCache>>, flag_queue: &Arc<RwLock<FlagQueue>>) {
+async fn handle_flag(
+    pool: &PgPool,
+    packet_id: i64,
+    start_idx: i32,
+    end_idx: i32,
+    tag_name: &str,
+    stream_id: i64,
+    team_cache: &Arc<RwLock<TeamCache>>,
+    flag_queue: &Arc<RwLock<FlagQueue>>,
+) {
     let farm_enabled = get_setting(pool, "farm_enabled").await.unwrap_or_default();
     if farm_enabled != "true" {
         debug!("Flag found but farm disabled (packet_id={})", packet_id);
@@ -334,13 +371,14 @@ async fn handle_flag(pool: &PgPool, packet_id: i64, start_idx: i32, end_idx: i32
 
     // Extract matched text from packet
     let matched = match sqlx::query_scalar::<_, Vec<u8>>(
-        "SELECT substring(packet_data FROM $2 FOR $3) FROM packets WHERE id = $1"
+        "SELECT substring(packet_data FROM $2 FOR $3) FROM packets WHERE id = $1",
     )
     .bind(packet_id)
     .bind(start_idx + 1) // SQL substring is 1-indexed
     .bind(end_idx - start_idx)
     .fetch_optional(pool)
-    .await {
+    .await
+    {
         Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).to_string(),
         _ => {
             error!("Failed to extract flag text from packet {}", packet_id);
@@ -377,19 +415,22 @@ async fn handle_flag(pool: &PgPool, packet_id: i64, start_idx: i32, end_idx: i32
     // never matched and the raw netmask-suffixed string was submitted.)
     // host() renders the inet as a bare address (no "/32" suffix), keeping
     // the fallback team string farm-parseable.
-    let remote_ip = match sqlx::query_scalar::<_, String>(
-        "SELECT host(dst_ip) FROM stream WHERE id = $1"
-    )
-    .bind(stream_id)
-    .fetch_optional(pool)
-    .await {
-        Ok(Some(ip)) => ip,
-        _ => "unknown".to_string(),
-    };
+    let remote_ip =
+        match sqlx::query_scalar::<_, String>("SELECT host(dst_ip) FROM stream WHERE id = $1")
+            .bind(stream_id)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(Some(ip)) => ip,
+            _ => "unknown".to_string(),
+        };
 
     let team = resolve_team(&remote_ip, &farm_url, &farm_password, team_cache).await;
 
-    info!("Submitting flag to farm: '{}' team={} (tag={}, packet={})", matched, team, tag_name, packet_id);
+    info!(
+        "Submitting flag to farm: '{}' team={} (tag={}, packet={})",
+        matched, team, tag_name, packet_id
+    );
 
     // S4DFarm protocol: POST /api/post_flags with Authorization header
     let payload = serde_json::json!([{
@@ -399,7 +440,8 @@ async fn handle_flag(pool: &PgPool, packet_id: i64, start_idx: i32, end_idx: i32
     }]);
 
     let client = reqwest::Client::new();
-    let mut req = client.post(&farm_url)
+    let mut req = client
+        .post(&farm_url)
         .json(&payload)
         .timeout(std::time::Duration::from_secs(5));
 
@@ -526,10 +568,15 @@ mod tests {
     fn address_family_mismatch_is_no_match_not_panic() {
         let (exact, nets) = sample_map();
         // v4 host against only v6 nets (v4 exact entries absent).
-        let (empty_exact, v6_only): (HashMap<String, String>, Vec<(IpNetwork, String)>) =
-            (HashMap::new(), vec![("2001:db8::/64".parse().unwrap(), "TeamV6".to_string())]);
+        let (empty_exact, v6_only): (HashMap<String, String>, Vec<(IpNetwork, String)>) = (
+            HashMap::new(),
+            vec![("2001:db8::/64".parse().unwrap(), "TeamV6".to_string())],
+        );
         assert_eq!(match_team(&empty_exact, &v6_only, "10.10.4.57"), None);
-        assert_eq!(match_team(&exact, &nets, "2001:db8::1"), Some("TeamV6".to_string()));
+        assert_eq!(
+            match_team(&exact, &nets, "2001:db8::1"),
+            Some("TeamV6".to_string())
+        );
     }
 
     #[test]

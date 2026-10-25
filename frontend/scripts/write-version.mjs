@@ -4,7 +4,11 @@
 //
 // The git sha comes from RED_EYE_GIT_SHA when set (Docker build arg, see
 // frontend/Dockerfile — no .git in the image context), else from the local
-// git checkout, else "unknown".
+// git checkout, else "unknown". The version comes from RED_EYE_VERSION
+// when set (Docker build arg — the frontend build context is ./frontend,
+// so the repo-root VERSION file is not available there), else from the
+// local ../VERSION file (the canonical version source), else from
+// package.json.
 import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -20,13 +24,24 @@ const sha =
         }
     })();
 
+const version =
+    process.env.RED_EYE_VERSION?.trim() ||
+    (() => {
+        try {
+            return readFileSync('../VERSION', 'utf8').trim();
+        } catch {
+            return '';
+        }
+    })() ||
+    pkg.version;
+
 mkdirSync('dist', { recursive: true });
 writeFileSync(
     'dist/version.json',
     JSON.stringify(
         {
             service: 'frontend',
-            version: pkg.version,
+            version: version,
             git_sha: sha,
             built_at: new Date().toISOString(),
         },
@@ -34,4 +49,4 @@ writeFileSync(
         2,
     ) + '\n',
 );
-console.log(`version.json: ${pkg.version}+${sha}`);
+console.log(`version.json: ${version}+${sha}`);

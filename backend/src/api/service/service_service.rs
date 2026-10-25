@@ -1,15 +1,15 @@
-use sqlx::PgPool;
 use crate::api::service::service_dto::Service;
 use crate::api::service::service_repository::ServiceRepository;
+use sqlx::PgPool;
 
 pub struct ServiceService {
-    repository: ServiceRepository
+    repository: ServiceRepository,
 }
 
 impl ServiceService {
     pub fn new_from_pgpool(pgpool: PgPool) -> Self {
         ServiceService {
-            repository: ServiceRepository::new(pgpool)
+            repository: ServiceRepository::new(pgpool),
         }
     }
 

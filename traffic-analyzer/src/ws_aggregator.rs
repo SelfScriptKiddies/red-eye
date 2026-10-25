@@ -28,9 +28,9 @@
 //!   frontend just re-runs its streams query; same behavior the backend
 //!   had on its own restarts).
 
+use log::{debug, error, info};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use log::{debug, error, info};
 
 /// Aggregation window: one frame per second (matches the backend ticker
 /// this replaces — the browser contract is one frame/s).
@@ -168,7 +168,10 @@ pub fn spawn_ws_aggregate_publisher(
     aggregator: SharedWsAggregator,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        info!("WS activity aggregate publisher started (topic {}, one frame per second)", topic);
+        info!(
+            "WS activity aggregate publisher started (topic {}, one frame per second)",
+            topic
+        );
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(WINDOW_SECS));
         // Never burst after a slow tick: skip missed windows instead of
         // flushing several combined frames back to back.
@@ -179,7 +182,11 @@ pub fn spawn_ws_aggregate_publisher(
 
         loop {
             ticker.tick().await;
-            let frame = aggregator.lock().map(|mut agg| agg.take_frame()).ok().flatten();
+            let frame = aggregator
+                .lock()
+                .map(|mut agg| agg.take_frame())
+                .ok()
+                .flatten();
             let Some(frame) = frame else { continue };
             match serde_json::to_vec(&frame) {
                 Ok(payload) => {
@@ -216,8 +223,16 @@ mod tests {
         assert_eq!(
             frame.streams,
             vec![
-                StreamActivity { id: 7, count: 3, last_time: 104 },
-                StreamActivity { id: 9, count: 1, last_time: 50 },
+                StreamActivity {
+                    id: 7,
+                    count: 3,
+                    last_time: 104
+                },
+                StreamActivity {
+                    id: 9,
+                    count: 1,
+                    last_time: 50
+                },
             ]
         );
         assert_eq!(frame.packets_available, vec![7, 9]);
@@ -236,7 +251,14 @@ mod tests {
         agg.record(7, 200);
         agg.record(7, 201);
         let second = agg.take_frame().unwrap();
-        assert_eq!(second.streams, vec![StreamActivity { id: 7, count: 2, last_time: 201 }]);
+        assert_eq!(
+            second.streams,
+            vec![StreamActivity {
+                id: 7,
+                count: 2,
+                last_time: 201
+            }]
+        );
         assert!(second.new_streams.is_empty());
         assert_eq!(second.packets_available, vec![7]);
     }
@@ -291,11 +313,13 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a scratch NATS broker (NATS_TEST_URL, default nats://127.0.0.1:4222)"]
     async fn ws_topic_rate_per_packet_vs_summary_live() {
-        use std::time::Duration;
         use futures::StreamExt;
+        use std::time::Duration;
 
         let url = std::env::var("NATS_TEST_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
-        let client = async_nats::connect(&url).await.expect("scratch NATS reachable");
+        let client = async_nats::connect(&url)
+            .await
+            .expect("scratch NATS reachable");
         let topic = format!("ws-rate-test-{}", std::process::id());
         let mut sub = client.subscribe(topic.clone()).await.unwrap();
 
@@ -326,7 +350,10 @@ mod tests {
                 "timestamp_microseconds": i % 1_000_000,
                 "direction": "orig",
             });
-            client.publish(topic.clone(), serde_json::to_vec(&event).unwrap().into()).await.unwrap();
+            client
+                .publish(topic.clone(), serde_json::to_vec(&event).unwrap().into())
+                .await
+                .unwrap();
         }
         let (received, wire_bytes) = reader.await.unwrap();
         let per_packet_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -336,7 +363,8 @@ mod tests {
         // events fed through the aggregator — record all n events, then
         // count frames received in the following 3 seconds (expect ~3).
         let aggregator = shared_aggregator();
-        let publisher = spawn_ws_aggregate_publisher(client.clone(), topic.clone(), aggregator.clone());
+        let publisher =
+            spawn_ws_aggregate_publisher(client.clone(), topic.clone(), aggregator.clone());
         tokio::time::sleep(Duration::from_millis(300)).await; // let the interval tick align
         {
             let mut agg = aggregator.lock().unwrap();
@@ -355,7 +383,8 @@ mod tests {
             frame_bytes += msg.payload.len();
             if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
                 if let Some(streams) = json["streams"].as_array() {
-                    frame_sum_counts += streams.iter()
+                    frame_sum_counts += streams
+                        .iter()
                         .map(|s| s["count"].as_u64().unwrap_or(0))
                         .sum::<u64>();
                 }
@@ -370,7 +399,14 @@ mod tests {
         );
         // All events were recorded inside one 1-second window, so exactly
         // one non-idle frame must carry them (idle seconds emit nothing).
-        assert_eq!(frames, 1, "one non-idle window -> one frame, got {}", frames);
-        assert_eq!(frame_sum_counts, n as u64, "every event accounted for in the summary frame");
+        assert_eq!(
+            frames, 1,
+            "one non-idle window -> one frame, got {}",
+            frames
+        );
+        assert_eq!(
+            frame_sum_counts, n as u64,
+            "every event accounted for in the summary frame"
+        );
     }
 }

@@ -8,7 +8,6 @@ use tokio::sync::Mutex;
 
 mod commands;
 mod config;
-pub mod version;
 /// Public for the `list_containers` live-verification example.
 pub mod docker;
 mod harpoon;
@@ -19,6 +18,7 @@ mod packet_synthesis;
 mod sniffer;
 mod tls_certs;
 mod updates;
+pub mod version;
 mod wire;
 
 use config::AgentConfig;
@@ -31,14 +31,9 @@ fn init_logging(level: &str) {
 
     // RUST_LOG takes priority; fallback includes harpoon_core
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            EnvFilter::new(format!("{l},harpoon_core={l}", l = level))
-        });
+        .unwrap_or_else(|_| EnvFilter::new(format!("{l},harpoon_core={l}", l = level)));
 
-    fmt()
-        .with_env_filter(env_filter)
-        .with_target(true)
-        .init();
+    fmt().with_env_filter(env_filter).with_target(true).init();
 }
 
 pub async fn run() {
@@ -59,7 +54,10 @@ pub async fn run() {
             Some(certs)
         }
         Err(e) => {
-            warn!("Failed to initialize TLS certs: {} (TLS MITM will be unavailable)", e);
+            warn!(
+                "Failed to initialize TLS certs: {} (TLS MITM will be unavailable)",
+                e
+            );
             None
         }
     };
@@ -81,11 +79,7 @@ pub async fn run() {
 
     // Harpoon engine with TLS certs and nftables manager
     let tls_available = tls_certs.is_some();
-    let harpoon_engine = HarpoonEngine::new(
-        ports_cache.clone(),
-        restart_tx.clone(),
-        tls_certs,
-    );
+    let harpoon_engine = HarpoonEngine::new(ports_cache.clone(), restart_tx.clone(), tls_certs);
     let harpoon = Arc::new(Mutex::new(harpoon_engine));
 
     // Capture forwarder: harpoon packets → NATS (same format as sniffer)

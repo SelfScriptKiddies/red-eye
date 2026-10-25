@@ -1,11 +1,11 @@
-use actix_web::{get, web, HttpResponse};
+use actix_web::{HttpResponse, get, web};
+use log::{error, info, warn};
 use serde::Serialize;
 use sqlx::PgPool;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use log::{warn, error, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -69,7 +69,9 @@ impl HealthMonitor {
                     *since = None;
                     info!("Health recovered to Healthy (P95={}ms)", p95);
                 }
-                None => { *since = Some(Instant::now()); }
+                None => {
+                    *since = Some(Instant::now());
+                }
                 _ => {}
             }
         } else {
@@ -86,7 +88,9 @@ impl HealthMonitor {
     }
 
     fn compute_p95(window: &VecDeque<(Instant, Duration)>) -> u64 {
-        if window.is_empty() { return 0; }
+        if window.is_empty() {
+            return 0;
+        }
         let mut latencies: Vec<u64> = window.iter().map(|(_, d)| d.as_millis() as u64).collect();
         latencies.sort_unstable();
         let idx = ((latencies.len() as f64) * 0.95).ceil() as usize - 1;

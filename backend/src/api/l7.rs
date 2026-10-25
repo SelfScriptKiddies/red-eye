@@ -3,7 +3,7 @@ pub mod l7_repository;
 pub mod l7_service;
 
 use actix_identity::Identity;
-use actix_web::{get, post, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, get, post, web};
 use serde::Deserialize;
 
 use self::l7_dto::{HeaderSearchQuery, HeaderSearchResult};
@@ -33,7 +33,10 @@ async fn get_http_messages(
     l7_service: web::Data<L7Service>,
     stream_id: web::Path<i64>,
 ) -> impl Responder {
-    match l7_service.get_messages_by_stream(stream_id.into_inner()).await {
+    match l7_service
+        .get_messages_by_stream(stream_id.into_inner())
+        .await
+    {
         Ok(messages) => HttpResponse::Ok().json(messages),
         Err(e) => crate::api::sqlx_error_response(&e),
     }

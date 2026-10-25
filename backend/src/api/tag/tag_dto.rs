@@ -21,7 +21,6 @@ pub struct TagNameCreate {
     pub special_type: Option<String>,
 }
 
-
 /// Triggered tag, so filters found something
 #[derive(sqlx::FromRow, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct Tag {
@@ -31,6 +30,5 @@ pub struct Tag {
     pub packet_id: i64,
     pub tag_id: i64,
     pub start_index: i32,
-    pub end_index: i32
+    pub end_index: i32,
 }
-

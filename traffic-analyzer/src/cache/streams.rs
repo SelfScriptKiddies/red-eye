@@ -30,7 +30,14 @@ impl StreamsCache {
         }
     }
 
-    pub fn insert(&self, src_ip: &str, src_port: u16, dst_ip: &str, dst_port: u16, stream_id: usize) {
+    pub fn insert(
+        &self,
+        src_ip: &str,
+        src_port: u16,
+        dst_ip: &str,
+        dst_port: u16,
+        stream_id: usize,
+    ) {
         let key = Self::format_key(src_ip, src_port, dst_ip, dst_port);
         self.entries.insert(key.clone(), stream_id);
         self.last_seen.insert(key, Instant::now());
@@ -51,7 +58,8 @@ impl StreamsCache {
     pub fn evict_expired(&self) -> usize {
         let cutoff = Instant::now() - std::time::Duration::from_secs(self.ttl_secs);
         let mut removed = 0;
-        let expired_keys: Vec<String> = self.last_seen
+        let expired_keys: Vec<String> = self
+            .last_seen
             .iter()
             .filter(|entry| *entry.value() < cutoff)
             .map(|entry| entry.key().clone())

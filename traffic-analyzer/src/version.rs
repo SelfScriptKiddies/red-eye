@@ -10,9 +10,9 @@ use futures::StreamExt;
 use log::{error, info};
 use serde_json::json;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("RED_EYE_VERSION");
 pub const GIT_SHA: &str = env!("RED_EYE_GIT_SHA");
-pub const FULL: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("RED_EYE_GIT_SHA"));
+pub const FULL: &str = concat!(env!("RED_EYE_VERSION"), "+", env!("RED_EYE_GIT_SHA"));
 
 /// The exact bytes the backend expects as a reply (locked by tests on both
 /// sides): `{"service":"traffic-analyzer","version":..,"git_sha":..}`.
@@ -34,7 +34,10 @@ pub fn spawn_version_responder(client: Client, subject: String) {
         let mut subscriber = match client.subscribe(subject.clone()).await {
             Ok(sub) => sub,
             Err(e) => {
-                error!("Failed to subscribe to {} for version requests: {}", subject, e);
+                error!(
+                    "Failed to subscribe to {} for version requests: {}",
+                    subject, e
+                );
                 return;
             }
         };

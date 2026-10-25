@@ -1,21 +1,23 @@
-use std::io::Error;
-use crate::ethernet::{self, PacketInfo, Protocol};
-use crate::filters::apply_filters;
-use crate::http_parser;
-use crate::grpc_parser;
-use crate::batch_flusher::{ProcessedPacket, HttpMessageData, GrpcMessageData, NatsEventData, ShardedBatchSender};
-use log::{debug, error};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use crate::cache::Cache;
+use crate::batch_flusher::{
+    GrpcMessageData, HttpMessageData, NatsEventData, ProcessedPacket, ShardedBatchSender,
+};
 use crate::cache::streams::StreamsCache;
+use crate::cache::Cache;
 use crate::configuration::ApplicationConfig;
 use crate::db::DB;
+use crate::ethernet::{self, PacketInfo, Protocol};
+use crate::filters::apply_filters;
+use crate::grpc_parser;
+use crate::http_parser;
+use log::{debug, error};
+use std::io::Error;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug, PartialEq)]
 pub enum Direction {
     Inbound,
-    Outbound
+    Outbound,
 }
 
 #[derive(Debug)]
@@ -27,15 +29,20 @@ pub struct PacketEvent {
     pub direction: String,
 }
 
- pub struct PacketProcessor {
+pub struct PacketProcessor {
     cache: Arc<Cache>,
     config: Arc<ApplicationConfig>,
     db: DB,
     batch_tx: Arc<ShardedBatchSender>,
- }
+}
 
 impl PacketProcessor {
-    pub fn new(cache: Arc<Cache>, config: Arc<ApplicationConfig>, db: DB, batch_tx: Arc<ShardedBatchSender>) -> Self {
+    pub fn new(
+        cache: Arc<Cache>,
+        config: Arc<ApplicationConfig>,
+        db: DB,
+        batch_tx: Arc<ShardedBatchSender>,
+    ) -> Self {
         Self {
             cache,
             config,
@@ -51,11 +58,15 @@ impl PacketProcessor {
     fn find_service_and_direction(&self, packet: &PacketInfo) -> Option<(usize, Direction)> {
         let services = self.cache.services.read().unwrap();
         for (id, service) in services.iter() {
-            if self.compare_ip(&self.config.machine_ip, &packet.src_ip.to_string()) && service.port == packet.src_port {
+            if self.compare_ip(&self.config.machine_ip, &packet.src_ip.to_string())
+                && service.port == packet.src_port
+            {
                 return Some((*id, Direction::Outbound));
             }
 
-            if self.compare_ip(&self.config.machine_ip, &packet.dst_ip.to_string()) && service.port == packet.dst_port {
+            if self.compare_ip(&self.config.machine_ip, &packet.dst_ip.to_string())
+                && service.port == packet.dst_port
+            {
                 return Some((*id, Direction::Inbound));
             }
         }
@@ -67,12 +78,16 @@ impl PacketProcessor {
     fn normalized_tuple(packet: &PacketInfo, direction: &Direction) -> (String, u16, String, u16) {
         match direction {
             Direction::Outbound => (
-                packet.src_ip.to_string(), packet.src_port,
-                packet.dst_ip.to_string(), packet.dst_port,
+                packet.src_ip.to_string(),
+                packet.src_port,
+                packet.dst_ip.to_string(),
+                packet.dst_port,
             ),
             Direction::Inbound => (
-                packet.dst_ip.to_string(), packet.dst_port,
-                packet.src_ip.to_string(), packet.src_port,
+                packet.dst_ip.to_string(),
+                packet.dst_port,
+                packet.src_ip.to_string(),
+                packet.src_port,
             ),
         }
     }
@@ -95,7 +110,12 @@ impl PacketProcessor {
         is_syn && !(syn_pending && has_cached_stream)
     }
 
-    async fn find_stream_id(&self, packet: &PacketInfo, direction: &Direction, service_id: usize) -> Result<usize, Error> {
+    async fn find_stream_id(
+        &self,
+        packet: &PacketInfo,
+        direction: &Direction,
+        service_id: usize,
+    ) -> Result<usize, Error> {
         let (src_ip, src_port, dst_ip, dst_port) = Self::normalized_tuple(packet, direction);
         let key = StreamsCache::format_key(&src_ip, src_port, &dst_ip, dst_port);
 
@@ -113,7 +133,9 @@ impl PacketProcessor {
         }
 
         // Per-key lock for stream creation (prevents duplicates)
-        let lock = self.cache.stream_locks
+        let lock = self
+            .cache
+            .stream_locks
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
@@ -126,16 +148,36 @@ impl PacketProcessor {
         }
 
         // Try database
-        if let Some(stream_id) = self.db.get_stream_id(&src_ip, src_port, &dst_ip, dst_port).await {
-            self.cache.streams.insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
+        if let Some(stream_id) = self
+            .db
+            .get_stream_id(&src_ip, src_port, &dst_ip, dst_port)
+            .await
+        {
+            self.cache
+                .streams
+                .insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
             return Ok(stream_id);
         }
 
         // Create new stream
-        let stream_id = self.db.create_stream(&src_ip, src_port, &dst_ip, dst_port, &packet.protocol, &packet.ip_version, service_id, packet.timestamp_seconds as i64).await
+        let stream_id = self
+            .db
+            .create_stream(
+                &src_ip,
+                src_port,
+                &dst_ip,
+                dst_port,
+                &packet.protocol,
+                &packet.ip_version,
+                service_id,
+                packet.timestamp_seconds as i64,
+            )
+            .await
             .map_err(|e| Error::other(format!("Stream creation failed: {:?}", e)))?;
 
-        self.cache.streams.insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
+        self.cache
+            .streams
+            .insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
         Ok(stream_id)
     }
 
@@ -144,13 +186,20 @@ impl PacketProcessor {
     /// active=false flush) and creates a fresh row so connections on a
     /// reused 4-tuple no longer merge into one stream.
     /// `tuple` is the direction-normalized (src_ip, src_port, dst_ip, dst_port).
-    async fn start_new_stream(&self, tuple: &(String, u16, String, u16), packet: &PacketInfo, service_id: usize) -> Result<usize, Error> {
+    async fn start_new_stream(
+        &self,
+        tuple: &(String, u16, String, u16),
+        packet: &PacketInfo,
+        service_id: usize,
+    ) -> Result<usize, Error> {
         let (src_ip, src_port, dst_ip, dst_port) = tuple;
         let key = StreamsCache::format_key(src_ip, *src_port, dst_ip, *dst_port);
 
         // Same per-key lock as the miss path: concurrent SYNs/data for one
         // tuple must not interleave retire/create/caches.
-        let lock = self.cache.stream_locks
+        let lock = self
+            .cache
+            .stream_locks
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
@@ -171,7 +220,19 @@ impl PacketProcessor {
             self.cache.mark_stream_closed(old_id);
         }
 
-        let stream_id = self.db.create_stream(src_ip, *src_port, dst_ip, *dst_port, &packet.protocol, &packet.ip_version, service_id, packet.timestamp_seconds as i64).await
+        let stream_id = self
+            .db
+            .create_stream(
+                src_ip,
+                *src_port,
+                dst_ip,
+                *dst_port,
+                &packet.protocol,
+                &packet.ip_version,
+                service_id,
+                packet.timestamp_seconds as i64,
+            )
+            .await
             .map_err(|e| {
                 // Degradation, not failure: the SYN's stream row is missing
                 // but the next payload packet falls through to the normal
@@ -179,17 +240,23 @@ impl PacketProcessor {
                 std::io::Error::other(format!("Stream creation on SYN failed: {:?}", e))
             })?;
 
-        self.cache.streams.insert(src_ip, *src_port, dst_ip, *dst_port, stream_id);
+        self.cache
+            .streams
+            .insert(src_ip, *src_port, dst_ip, *dst_port, stream_id);
         self.cache.mark_syn_pending(&key);
         Ok(stream_id)
     }
 
     pub async fn process_packet(&self, packet: PacketInfo) -> Result<(), Error> {
         // Find service and direction
-        let (service_id, direction) = self.find_service_and_direction(&packet)
-                                                            .ok_or(Error::other("Service not found"))?;
+        let (service_id, direction) = self
+            .find_service_and_direction(&packet)
+            .ok_or(Error::other("Service not found"))?;
 
-        debug!("Processing packet: \nService ID: {:?}\nDirection: {:?}", service_id, direction);
+        debug!(
+            "Processing packet: \nService ID: {:?}\nDirection: {:?}",
+            service_id, direction
+        );
 
         // TCP lifecycle (flags absent/UDP -> same behavior as before).
         let is_tcp = matches!(packet.protocol, Protocol::TCP);
@@ -236,7 +303,8 @@ impl PacketProcessor {
         let trigger_tuples: Vec<(usize, usize, usize)> = triggers
             .iter()
             .flat_map(|(filter_id, arr)| {
-                arr.iter().map(move |t| (*filter_id, t.start_index, t.end_index))
+                arr.iter()
+                    .map(move |t| (*filter_id, t.start_index, t.end_index))
             })
             .collect();
 
@@ -248,89 +316,99 @@ impl PacketProcessor {
         // Try L7 HTTP parsing (only if service has http_parse enabled)
         let should_parse_http = {
             let services = self.cache.services.read().unwrap();
-            services.get(&service_id).map(|s| s.http_parse).unwrap_or(false)
+            services
+                .get(&service_id)
+                .map(|s| s.http_parse)
+                .unwrap_or(false)
         };
 
         let mut http_message: Option<HttpMessageData> = None;
 
         if should_parse_http {
-        if let Some(parsed) = http_parser::try_parse_http(&packet.payload) {
-            let content_type = parsed.headers.iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
-                .map(|(_, v)| v.clone());
-            let content_length = parsed.headers.iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
-                .and_then(|(_, v)| v.parse::<i32>().ok());
-            let body_length = (packet.payload.len() as i32 - parsed.body_offset as i32).max(0);
+            if let Some(parsed) = http_parser::try_parse_http(&packet.payload) {
+                let content_type = parsed
+                    .headers
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                    .map(|(_, v)| v.clone());
+                let content_length = parsed
+                    .headers
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, v)| v.parse::<i32>().ok());
+                let body_length = (packet.payload.len() as i32 - parsed.body_offset as i32).max(0);
 
-            // Header dedup key + JSONB — resolved to a header_set id per
-            // flush batch (no per-packet DB call, no stale id cache).
-            let (header_hash, header_json) = if parsed.headers.is_empty() {
-                (None, None)
-            } else {
-                let (h, j) = DB::hash_headers(&parsed.headers);
-                (Some(h), Some(j.to_string()))
-            };
-
-            // Detect gRPC
-            let is_grpc = content_type.as_deref()
-                .map(|ct| ct.starts_with("application/grpc"))
-                .unwrap_or(false);
-
-            let mut grpc_data: Option<GrpcMessageData> = None;
-            let l7_protocol;
-
-            if is_grpc {
-                let body = &packet.payload[parsed.body_offset..];
-                let proto = {
-                    let schemas = self.cache.proto_schemas.read().unwrap();
-                    schemas.get(&service_id).cloned()
-                };
-                if let Some(grpc) = grpc_parser::try_parse_grpc_body(
-                    body,
-                    parsed.path.as_deref(),
-                    parsed.is_request,
-                    proto.as_ref(),
-                ) {
-                    l7_protocol = "grpc".to_string();
-                    grpc_data = Some(GrpcMessageData {
-                        stream_id,
-                        service_name: grpc.service_name,
-                        method_name: grpc.method_name,
-                        is_request: grpc.is_request,
-                        decoded_json: grpc.decoded_json,
-                        timestamp: packet.timestamp_seconds as i64,
-                    });
-                    debug!("gRPC parsed for batch");
+                // Header dedup key + JSONB — resolved to a header_set id per
+                // flush batch (no per-packet DB call, no stale id cache).
+                let (header_hash, header_json) = if parsed.headers.is_empty() {
+                    (None, None)
                 } else {
-                    l7_protocol = "http2".to_string();
+                    let (h, j) = DB::hash_headers(&parsed.headers);
+                    (Some(h), Some(j.to_string()))
+                };
+
+                // Detect gRPC
+                let is_grpc = content_type
+                    .as_deref()
+                    .map(|ct| ct.starts_with("application/grpc"))
+                    .unwrap_or(false);
+
+                let mut grpc_data: Option<GrpcMessageData> = None;
+                let l7_protocol;
+
+                if is_grpc {
+                    let body = &packet.payload[parsed.body_offset..];
+                    let proto = {
+                        let schemas = self.cache.proto_schemas.read().unwrap();
+                        schemas.get(&service_id).cloned()
+                    };
+                    if let Some(grpc) = grpc_parser::try_parse_grpc_body(
+                        body,
+                        parsed.path.as_deref(),
+                        parsed.is_request,
+                        proto.as_ref(),
+                    ) {
+                        l7_protocol = "grpc".to_string();
+                        grpc_data = Some(GrpcMessageData {
+                            stream_id,
+                            service_name: grpc.service_name,
+                            method_name: grpc.method_name,
+                            is_request: grpc.is_request,
+                            decoded_json: grpc.decoded_json,
+                            timestamp: packet.timestamp_seconds as i64,
+                        });
+                        debug!("gRPC parsed for batch");
+                    } else {
+                        l7_protocol = "http2".to_string();
+                    }
+                } else {
+                    l7_protocol = "http1".to_string();
                 }
-            } else {
-                l7_protocol = "http1".to_string();
+
+                http_message = Some(HttpMessageData {
+                    stream_id,
+                    is_request: parsed.is_request,
+                    method: parsed.method,
+                    path: parsed.path,
+                    status_code: parsed.status_code,
+                    http_version: parsed.http_version,
+                    content_type,
+                    content_length,
+                    body_offset: parsed.body_offset as i32,
+                    body_length,
+                    header_hash,
+                    header_json,
+                    timestamp: packet.timestamp_seconds as i64,
+                    l7_protocol,
+                    grpc: grpc_data,
+                });
+
+                debug!(
+                    "HTTP parsed for batch: {} headers (hash={:?})",
+                    parsed.headers.len(),
+                    header_hash
+                );
             }
-
-            http_message = Some(HttpMessageData {
-                stream_id,
-                is_request: parsed.is_request,
-                method: parsed.method,
-                path: parsed.path,
-                status_code: parsed.status_code,
-                http_version: parsed.http_version,
-                content_type,
-                content_length,
-                body_offset: parsed.body_offset as i32,
-                body_length,
-                header_hash,
-                header_json,
-                timestamp: packet.timestamp_seconds as i64,
-                l7_protocol,
-                grpc: grpc_data,
-            });
-
-            debug!("HTTP parsed for batch: {} headers (hash={:?})",
-                parsed.headers.len(), header_hash
-            );
-        }
         } // should_parse_http
 
         // Build NATS event data
@@ -358,7 +436,8 @@ impl PacketProcessor {
         // drops the packet with a counter inside) — blocking here would hold
         // one of the analyzer's concurrency permits and backpressure the
         // NATS consumer.
-        self.batch_tx.send(processed)
+        self.batch_tx
+            .send(processed)
             .map_err(|e| Error::other(format!("Batch channel send failed: {}", e)))?;
 
         Ok(())
@@ -405,7 +484,9 @@ mod tests {
 
     #[test]
     fn non_syn_packets_never_take_the_new_stream_path() {
-        assert!(!PacketProcessor::should_start_new_stream(false, false, false));
+        assert!(!PacketProcessor::should_start_new_stream(
+            false, false, false
+        ));
         assert!(!PacketProcessor::should_start_new_stream(false, true, true));
     }
 
@@ -420,7 +501,8 @@ mod tests {
         let local: std::net::IpAddr = Ipv4Addr::new(10, 0, 0, 5).into();
         let remote: std::net::IpAddr = Ipv4Addr::new(10, 0, 0, 9).into();
 
-        let response_packet = PacketInfo { // local:80 -> remote:40000
+        let response_packet = PacketInfo {
+            // local:80 -> remote:40000
             payload: vec![1, 2, 3],
             timestamp_seconds: 0,
             timestamp_microseconds: 0,
@@ -434,7 +516,8 @@ mod tests {
             tcp_flags: 0,
         };
 
-        let request_packet = PacketInfo { // remote:40000 -> local:80
+        let request_packet = PacketInfo {
+            // remote:40000 -> local:80
             src_ip: remote,
             src_port: 40000,
             dst_ip: local,

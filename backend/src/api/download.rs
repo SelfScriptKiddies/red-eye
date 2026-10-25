@@ -12,7 +12,7 @@
 //! `AGENT_BINARY_PATH` at a custom file to override.
 
 use actix_identity::Identity;
-use actix_web::{get, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, get, web};
 use serde_json::json;
 
 /// Serve the agent binary. PUBLIC BY DESIGN and mounted OUTSIDE the /api
@@ -40,15 +40,15 @@ async fn download_agent_binary(
                 "attachment; filename=\"red-eye-agent\"",
             ))
             .body(bytes),
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NotFound().json(
-            json!({
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            HttpResponse::NotFound().json(json!({
                 "error": format!(
                     "agent binary not found at {} — image built without it; \
                      download from GitHub releases or rebuild the backend image",
                     config.agent_binary_path
                 )
-            }),
-        ),
+            }))
+        }
         Ok(Err(e)) => HttpResponse::InternalServerError()
             .json(json!({"error": format!("failed to read agent binary: {}", e)})),
         Err(e) => HttpResponse::InternalServerError()

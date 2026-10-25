@@ -7,10 +7,9 @@ pub mod red_eye {
     }
 }
 
-pub use red_eye::wire::{PacketBatch, RawPacket as WireRawPacket};
+pub use red_eye::wire::settings_envelope;
 pub use red_eye::wire::{
     ConfigSync as WireConfigSync, Filter as WireFilter, FilterDirection as WireFilterDirection,
-    FilterOp as WireFilterOp, Service as WireService, ServiceOp as WireServiceOp,
-    SettingsEnvelope,
+    FilterOp as WireFilterOp, Service as WireService, ServiceOp as WireServiceOp, SettingsEnvelope,
 };
-pub use red_eye::wire::settings_envelope;
+pub use red_eye::wire::{PacketBatch, RawPacket as WireRawPacket};

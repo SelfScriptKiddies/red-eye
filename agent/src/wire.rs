@@ -7,6 +7,6 @@ pub mod red_eye {
     }
 }
 
+pub use red_eye::wire::settings_envelope;
 pub use red_eye::wire::{PacketBatch, RawPacket as WireRawPacket};
 pub use red_eye::wire::{Service as WireService, SettingsEnvelope};
-pub use red_eye::wire::settings_envelope;

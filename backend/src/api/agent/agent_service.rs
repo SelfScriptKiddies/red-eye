@@ -51,8 +51,14 @@ impl AgentService {
     /// Update agent status from heartbeat data
     pub async fn update_status(&self, mut status: AgentInfo) {
         status.online = true;
-        debug!("Heartbeat from agent '{}' (uptime: {}s)", status.agent_id, status.uptime_secs);
-        self.agents.write().await.insert(status.agent_id.clone(), status);
+        debug!(
+            "Heartbeat from agent '{}' (uptime: {}s)",
+            status.agent_id, status.uptime_secs
+        );
+        self.agents
+            .write()
+            .await
+            .insert(status.agent_id.clone(), status);
     }
 
     /// Get all known agents with online/offline status
@@ -89,7 +95,11 @@ impl AgentService {
     }
 
     /// Send a command to a specific agent
-    pub async fn send_command(&self, agent_id: &str, command: &serde_json::Value) -> Result<(), String> {
+    pub async fn send_command(
+        &self,
+        agent_id: &str,
+        command: &serde_json::Value,
+    ) -> Result<(), String> {
         // NATS is fire-and-forget: a command for a dead agent vanishes
         // with nobody the wiser (the UI showed "sent"). Refuse instead —
         // no heartbeat within the timeout means nobody is listening.
@@ -97,7 +107,7 @@ impl AgentService {
             None => {
                 return Err(format!(
                     "agent '{agent_id}' is not known (never sent a heartbeat)"
-                ))
+                ));
             }
             Some(info) if !info.online => {
                 let now_ms = std::time::SystemTime::now()
@@ -215,7 +225,10 @@ impl AgentService {
                     .last_request_ms = now;
                 let cmd = serde_json::json!({ "type": "DockerListContainers" });
                 if let Err(e) = self.send_command(agent_id, &cmd).await {
-                    warn!("Failed to request containers from agent '{}': {}", agent_id, e);
+                    warn!(
+                        "Failed to request containers from agent '{}': {}",
+                        agent_id, e
+                    );
                 }
             }
         }
@@ -247,11 +260,7 @@ impl AgentService {
 /// nothing cached → "pending" (handled by the caller).
 pub(crate) fn classify_containers(age_ms: u64, has_error: bool) -> &'static str {
     if age_ms < CONTAINERS_FRESH_MS {
-        if has_error {
-            "error"
-        } else {
-            "ok"
-        }
+        if has_error { "error" } else { "ok" }
     } else {
         "stale"
     }
@@ -285,7 +294,11 @@ pub fn spawn_heartbeat_listener(
         while let Some(msg) = subscriber.next().await {
             match serde_json::from_slice::<AgentInfo>(&msg.payload) {
                 Ok(status) => {
-                    let is_new = !agent_service.agents_store().read().await.contains_key(&status.agent_id);
+                    let is_new = !agent_service
+                        .agents_store()
+                        .read()
+                        .await
+                        .contains_key(&status.agent_id);
                     let agent_id = status.agent_id.clone();
                     agent_service.update_status(status).await;
 

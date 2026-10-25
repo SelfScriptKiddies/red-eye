@@ -1,17 +1,17 @@
-pub mod regex;
 pub mod bsubstr;
-pub mod substr;
 pub mod filterDTO;
+pub mod regex;
+pub mod substr;
 
-use log::{error, warn, debug};
+use crate::filters::bsubstr::BinarySubstrFilter;
+use crate::filters::filterDTO::{Filter, FilterDirection};
+use crate::filters::regex::RegexFilter;
+use crate::filters::substr::SubstrFilter;
+use crate::process_packet::Direction;
+use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::RwLock;
-use crate::filters::filterDTO::{Filter, FilterDirection};
-use crate::filters::regex::RegexFilter;
-use crate::filters::bsubstr::BinarySubstrFilter;
-use crate::filters::substr::SubstrFilter;
-use crate::process_packet::Direction;
 
 /// A registered filter plus the direction it is allowed to match in.
 /// Direction comes from tag_name ('in'/'out'/'both') via the settings
@@ -63,7 +63,13 @@ pub fn direction_matches(filter_direction: &FilterDirection, packet_direction: &
 /// Returns true when the filter was registered, false when the row was
 /// rejected (unsupported type / bad payload — reason is logged). Callers
 /// that only need the side effect may ignore the result.
-pub fn add_filter(id: usize, pattern_name: String, pattern_type: String, payload: &[u8], direction: FilterDirection) -> bool {
+pub fn add_filter(
+    id: usize,
+    pattern_name: String,
+    pattern_type: String,
+    payload: &[u8],
+    direction: FilterDirection,
+) -> bool {
     let mut filters = PACKET_FILTERS.write().unwrap();
 
     // Build first: on a bad filter (unsupported type / bad regex payload)
@@ -122,17 +128,25 @@ pub fn remove_filter(index: usize) {
     let mut filters = PACKET_FILTERS.write().unwrap();
 
     // Find the index of the filter with the specified id
-    if let Some(position) = filters.iter().position(|entry| entry.filter.get_id() == index) {
+    if let Some(position) = filters
+        .iter()
+        .position(|entry| entry.filter.get_id() == index)
+    {
         // Remove the filter by found index
         filters.remove(position);
         debug!("Filter with id {} removed successfully", index);
     } else {
         error!("Filter with id {} not found", index);
     }
-
 }
 
-pub fn edit_filter(index: usize, pattern_name: String, pattern_type: String, payload: &[u8], direction: FilterDirection) {
+pub fn edit_filter(
+    index: usize,
+    pattern_name: String,
+    pattern_type: String,
+    payload: &[u8],
+    direction: FilterDirection,
+) {
     remove_filter(index);
     add_filter(index, pattern_name, pattern_type, payload, direction);
 }
@@ -148,7 +162,10 @@ pub fn get_filter_ids() -> Vec<usize> {
 /// them back to names), so UI semantics don't change.
 pub fn filter_names_snapshot() -> HashMap<usize, String> {
     let filters = PACKET_FILTERS.read().unwrap();
-    filters.iter().map(|entry| (entry.filter.get_id(), entry.filter.get_pattern_name())).collect()
+    filters
+        .iter()
+        .map(|entry| (entry.filter.get_id(), entry.filter.get_pattern_name()))
+        .collect()
 }
 
 pub fn sync_filters(filters_data: Vec<(usize, String, String, Vec<u8>, FilterDirection)>) {
@@ -162,17 +179,18 @@ pub fn sync_filters(filters_data: Vec<(usize, String, String, Vec<u8>, FilterDir
         .into_iter()
         .filter(|(id, _, _, _, _)| !existing_ids.contains(id))
         .collect();
-    let to_remove: Vec<_> = existing_ids
-        .difference(&incoming_ids)
-        .cloned()
-        .collect();
+    let to_remove: Vec<_> = existing_ids.difference(&incoming_ids).cloned().collect();
 
     if missing.is_empty() && to_remove.is_empty() {
         debug!("Filters sync: no changes needed");
         return;
     }
 
-    debug!("Filters sync: adding {} missing, removing {} stale", missing.len(), to_remove.len());
+    debug!(
+        "Filters sync: adding {} missing, removing {} stale",
+        missing.len(),
+        to_remove.len()
+    );
 
     // Удаляем лишние
     for id in to_remove {
@@ -186,7 +204,10 @@ pub fn sync_filters(filters_data: Vec<(usize, String, String, Vec<u8>, FilterDir
 }
 
 // Function to apply all filters to a packet, honoring each filter's direction
-pub fn apply_filters(packet: &[u8], direction: &Direction) -> Vec<(usize, Vec<filterDTO::FilterTrigger>)> {
+pub fn apply_filters(
+    packet: &[u8],
+    direction: &Direction,
+) -> Vec<(usize, Vec<filterDTO::FilterTrigger>)> {
     let filters = PACKET_FILTERS.read().unwrap();
     let mut results: Vec<(usize, Vec<filterDTO::FilterTrigger>)> = Vec::new();
 
@@ -214,20 +235,38 @@ mod tests {
 
     #[test]
     fn inbound_filter_matches_only_inbound_packets() {
-        assert!(direction_matches(&FilterDirection::Inbound, &Direction::Inbound));
-        assert!(!direction_matches(&FilterDirection::Inbound, &Direction::Outbound));
+        assert!(direction_matches(
+            &FilterDirection::Inbound,
+            &Direction::Inbound
+        ));
+        assert!(!direction_matches(
+            &FilterDirection::Inbound,
+            &Direction::Outbound
+        ));
     }
 
     #[test]
     fn outbound_filter_matches_only_outbound_packets() {
-        assert!(!direction_matches(&FilterDirection::Outbound, &Direction::Inbound));
-        assert!(direction_matches(&FilterDirection::Outbound, &Direction::Outbound));
+        assert!(!direction_matches(
+            &FilterDirection::Outbound,
+            &Direction::Inbound
+        ));
+        assert!(direction_matches(
+            &FilterDirection::Outbound,
+            &Direction::Outbound
+        ));
     }
 
     #[test]
     fn both_direction_filter_matches_everything() {
-        assert!(direction_matches(&FilterDirection::Both, &Direction::Inbound));
-        assert!(direction_matches(&FilterDirection::Both, &Direction::Outbound));
+        assert!(direction_matches(
+            &FilterDirection::Both,
+            &Direction::Inbound
+        ));
+        assert!(direction_matches(
+            &FilterDirection::Both,
+            &Direction::Outbound
+        ));
     }
 
     #[test]
@@ -236,24 +275,44 @@ mod tests {
         // Unique high id so we cannot collide with filters added by live
         // settings updates between our add and remove.
         let id = 987_654;
-        add_filter(id, "dir_test".to_string(), "substr".to_string(), b"flag", FilterDirection::Inbound);
+        add_filter(
+            id,
+            "dir_test".to_string(),
+            "substr".to_string(),
+            b"flag",
+            FilterDirection::Inbound,
+        );
 
         let payload = b"flag{xxx}";
 
         // Inbound packet -> trigger fires
         let hit = apply_filters(payload, &Direction::Inbound);
-        assert!(hit.iter().any(|(fid, t)| *fid == id && !t.is_empty()),
-            "inbound filter must trigger on inbound packet");
+        assert!(
+            hit.iter().any(|(fid, t)| *fid == id && !t.is_empty()),
+            "inbound filter must trigger on inbound packet"
+        );
 
         // Outbound packet -> no trigger from this filter
         let miss = apply_filters(payload, &Direction::Outbound);
-        assert!(!miss.iter().any(|(fid, _)| *fid == id),
-            "inbound filter must NOT trigger on outbound packet");
+        assert!(
+            !miss.iter().any(|(fid, _)| *fid == id),
+            "inbound filter must NOT trigger on outbound packet"
+        );
 
         // Both -> fires in either direction
-        edit_filter(id, "dir_test".to_string(), "substr".to_string(), b"flag", FilterDirection::Both);
-        assert!(apply_filters(payload, &Direction::Inbound).iter().any(|(fid, t)| *fid == id && !t.is_empty()));
-        assert!(apply_filters(payload, &Direction::Outbound).iter().any(|(fid, t)| *fid == id && !t.is_empty()));
+        edit_filter(
+            id,
+            "dir_test".to_string(),
+            "substr".to_string(),
+            b"flag",
+            FilterDirection::Both,
+        );
+        assert!(apply_filters(payload, &Direction::Inbound)
+            .iter()
+            .any(|(fid, t)| *fid == id && !t.is_empty()));
+        assert!(apply_filters(payload, &Direction::Outbound)
+            .iter()
+            .any(|(fid, t)| *fid == id && !t.is_empty()));
 
         remove_filter(id);
     }
@@ -266,8 +325,20 @@ mod tests {
     fn add_filter_is_idempotent_by_id() {
         let _guard = FILTERS_TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let id = 987_655;
-        add_filter(id, "dup".to_string(), "substr".to_string(), b"flag", FilterDirection::Both);
-        add_filter(id, "dup".to_string(), "substr".to_string(), b"flag", FilterDirection::Both);
+        add_filter(
+            id,
+            "dup".to_string(),
+            "substr".to_string(),
+            b"flag",
+            FilterDirection::Both,
+        );
+        add_filter(
+            id,
+            "dup".to_string(),
+            "substr".to_string(),
+            b"flag",
+            FilterDirection::Both,
+        );
         assert_eq!(
             get_filter_ids().iter().filter(|&&fid| fid == id).count(),
             1,
@@ -373,8 +444,20 @@ mod tests {
         let stale_id = 987_657;
         let live_id = 987_658;
 
-        add_filter(stale_id, "stale".to_string(), "substr".to_string(), b"stale", FilterDirection::Both);
-        add_filter(live_id, "live".to_string(), "substr".to_string(), b"live", FilterDirection::Both);
+        add_filter(
+            stale_id,
+            "stale".to_string(),
+            "substr".to_string(),
+            b"stale",
+            FilterDirection::Both,
+        );
+        add_filter(
+            live_id,
+            "live".to_string(),
+            "substr".to_string(),
+            b"live",
+            FilterDirection::Both,
+        );
 
         // Sync that no longer contains stale_id.
         sync_filters(vec![(
@@ -386,7 +469,10 @@ mod tests {
         )]);
 
         let ids = get_filter_ids();
-        assert!(!ids.contains(&stale_id), "stale filter must be removed by sync");
+        assert!(
+            !ids.contains(&stale_id),
+            "stale filter must be removed by sync"
+        );
         assert_eq!(ids.iter().filter(|&&fid| fid == live_id).count(), 1);
         remove_filter(live_id);
     }
@@ -399,8 +485,20 @@ mod tests {
     fn edit_filter_after_warmup_replaces_not_duplicates() {
         let _guard = FILTERS_TEST_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let id = 987_659;
-        add_filter(id, "warm".to_string(), "substr".to_string(), b"old", FilterDirection::Both);
-        edit_filter(id, "warm".to_string(), "substr".to_string(), b"new", FilterDirection::Inbound);
+        add_filter(
+            id,
+            "warm".to_string(),
+            "substr".to_string(),
+            b"old",
+            FilterDirection::Both,
+        );
+        edit_filter(
+            id,
+            "warm".to_string(),
+            "substr".to_string(),
+            b"new",
+            FilterDirection::Inbound,
+        );
 
         assert_eq!(
             get_filter_ids().iter().filter(|&&fid| fid == id).count(),
@@ -408,9 +506,15 @@ mod tests {
             "edit after warm-up must leave exactly one entry"
         );
         // New payload + direction took effect.
-        assert!(apply_filters(b"new", &Direction::Inbound).iter().any(|(fid, t)| *fid == id && !t.is_empty()));
-        assert!(!apply_filters(b"new", &Direction::Outbound).iter().any(|(fid, _)| *fid == id));
-        assert!(!apply_filters(b"old", &Direction::Inbound).iter().any(|(fid, _)| *fid == id));
+        assert!(apply_filters(b"new", &Direction::Inbound)
+            .iter()
+            .any(|(fid, t)| *fid == id && !t.is_empty()));
+        assert!(!apply_filters(b"new", &Direction::Outbound)
+            .iter()
+            .any(|(fid, _)| *fid == id));
+        assert!(!apply_filters(b"old", &Direction::Inbound)
+            .iter()
+            .any(|(fid, _)| *fid == id));
         remove_filter(id);
     }
 }

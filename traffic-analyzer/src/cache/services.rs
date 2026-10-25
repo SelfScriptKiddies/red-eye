@@ -1,7 +1,7 @@
+use crate::configuration::updater::dto;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
-use crate::configuration::updater::dto;
 
 // Структура кеша сервисов
 pub struct ServicesCache {
@@ -37,6 +37,9 @@ impl ServicesCache {
 
     pub fn get_services(&self) -> Vec<(usize, dto::Service)> {
         let services = self.services.read().unwrap();
-        services.iter().map(|(id, service)| (*id, service.clone())).collect()
+        services
+            .iter()
+            .map(|(id, service)| (*id, service.clone()))
+            .collect()
     }
 }

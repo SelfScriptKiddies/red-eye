@@ -1,14 +1,14 @@
-use std::net::IpAddr;
-use serde::{Deserialize, Serialize};
-use strum_macros::Display;
 use crate::api::packet::packet_dto::PacketResponse;
 use crate::api::packet::packet_service::PacketService;
+use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
+use strum_macros::Display;
 
 #[derive(Debug, Serialize, Deserialize, Display, sqlx::Type)]
 #[sqlx(type_name = "VARCHAR")]
 pub enum Protocol {
     TCP,
-    UDP
+    UDP,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Stream {
@@ -36,7 +36,7 @@ pub struct StreamResponse {
     pub packet_count: i32,
     pub favorite: bool,
     pub l7_protocol: String,
-    pub packets: Vec<PacketResponse>
+    pub packets: Vec<PacketResponse>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -76,11 +76,13 @@ impl Stream {
             packet_count: self.packet_count,
             favorite: self.favorite,
             l7_protocol: self.l7_protocol.clone(),
-            packets: service.get_packets_by_stream_id(self.id).await
-                            .unwrap_or(vec![])
-                            .iter()
-                            .map(|packet| packet.to_response())
-                            .collect()
+            packets: service
+                .get_packets_by_stream_id(self.id)
+                .await
+                .unwrap_or(vec![])
+                .iter()
+                .map(|packet| packet.to_response())
+                .collect(),
         }
     }
 }

@@ -14,10 +14,7 @@ impl L7Service {
         }
     }
 
-    pub async fn get_messages_by_stream(
-        &self,
-        stream_id: i64,
-    ) -> Result<Vec<HttpMessage>, Error> {
+    pub async fn get_messages_by_stream(&self, stream_id: i64) -> Result<Vec<HttpMessage>, Error> {
         self.repository.get_messages_by_stream(stream_id).await
     }
 
@@ -68,8 +65,6 @@ impl L7Service {
         &self,
         stream_id: i64,
     ) -> Result<Vec<super::l7_dto::GrpcMessage>, Error> {
-        self.repository
-            .get_grpc_messages_by_stream(stream_id)
-            .await
+        self.repository.get_grpc_messages_by_stream(stream_id).await
     }
 }

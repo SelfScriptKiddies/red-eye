@@ -49,7 +49,10 @@ async fn main() {
         let mut sub = client.subscribe(topic.clone()).await.expect("subscribe");
 
         let payload = serde_json::to_vec(&status).expect("serialize");
-        client.publish(topic.clone(), payload.into()).await.expect("publish");
+        client
+            .publish(topic.clone(), payload.into())
+            .await
+            .expect("publish");
         client.flush().await.expect("flush");
 
         let msg = tokio::time::timeout(std::time::Duration::from_secs(5), sub.next())

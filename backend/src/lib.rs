@@ -1,29 +1,30 @@
+use crate::api::{
+    agent::agent_service::{
+        AgentService, spawn_docker_containers_listener, spawn_heartbeat_listener,
+    },
+    l7::l7_service::L7Service,
+    packet::packet_service::PacketService,
+    service::service_service::ServiceService,
+    stream::stream_service::StreamService,
+    tag::tag_service::TagService,
+    updater::{UpdateAgent, start_config_sync_scheduler},
+};
 use crate::configuration::ApplicationConfig;
 use crate::db::establish_connection;
 use actix_identity::IdentityMiddleware;
+use actix_session::SessionMiddleware;
 use actix_session::config::CookieContentSecurity;
 use actix_session::storage::CookieSessionStore;
-use actix_session::SessionMiddleware;
 use actix_web::cookie::{Key, SameSite};
+use actix_web::http::StatusCode;
 use actix_web::middleware::{ErrorHandlers, Logger};
 use actix_web::{App, HttpServer, web};
-use actix_web::http::StatusCode;
-use config_manager::ConfigInit;
-use log::{debug, info, error};
 use api::auth;
-use crate::api::{
-    packet::packet_service::PacketService,
-    stream::stream_service::StreamService,
-    tag::tag_service::TagService,
-    service::service_service::ServiceService,
-    updater::{UpdateAgent, start_config_sync_scheduler},
-    agent::agent_service::{AgentService, spawn_docker_containers_listener, spawn_heartbeat_listener},
-    l7::l7_service::L7Service,
-};
-use std::sync::Arc;
 use async_nats::ConnectOptions;
+use config_manager::ConfigInit;
+use log::{debug, error, info};
+use std::sync::Arc;
 use tokio::sync::broadcast;
-
 
 mod api;
 mod configuration;
@@ -33,8 +34,6 @@ mod health;
 mod version;
 mod wire;
 mod ws_activity;
-
-
 
 /// Ensure DEFAULT partitions exist for all partitioned tables (idempotent).
 /// Inlined SQL twin of ensure_default_partitions() from
@@ -147,13 +146,13 @@ pub async fn run() -> std::io::Result<()> {
     // Создаём UpdateAgent для использования в web и фоновой задаче
     let updater_arc = Arc::new(UpdateAgent::new(&config).await);
     let updater = web::Data::from(updater_arc.clone());
-    
+
     debug!("{:?}", &config);
 
     // Запускаем периодическую синхронизацию конфигурации каждые 5 минут
     let service_service_arc = Arc::new(ServiceService::new_from_pgpool(pool.clone()));
     let tag_service_arc = Arc::new(TagService::new_from_pgpool(pool.clone()));
-    
+
     tokio::spawn(async move {
         start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
     });
@@ -165,7 +164,7 @@ pub async fn run() -> std::io::Result<()> {
         let interval_minutes = config.cleanup_interval_minutes;
         let max_disk_mb = config.cleanup_max_disk_mb;
         tokio::spawn(async move {
-            use tokio::time::{interval, sleep, Duration};
+            use tokio::time::{Duration, interval, sleep};
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
 
             // Partitioned tables managed here (kept in sync with
@@ -181,11 +180,9 @@ pub async fn run() -> std::io::Result<()> {
                 // range partition cannot be created because rows for that
                 // range already sit in DEFAULT — those rows keep landing in
                 // DEFAULT until an operator resolves the overlap.
-                match sqlx::query_scalar::<_, i32>(
-                    "SELECT ensure_current_partitions(60, 120, 300)"
-                )
-                .fetch_one(&cleanup_pool)
-                .await
+                match sqlx::query_scalar::<_, i32>("SELECT ensure_current_partitions(60, 120, 300)")
+                    .fetch_one(&cleanup_pool)
+                    .await
                 {
                     Ok(created) => {
                         if created > 0 {
@@ -207,12 +204,10 @@ pub async fn run() -> std::io::Result<()> {
                 }
 
                 // Drop old partitions + prune DEFAULT partitions + orphaned streams
-                match sqlx::query_as::<_, (i32, i64)>(
-                    "SELECT * FROM cleanup_old_data($1)"
-                )
-                .bind(age_minutes as i32)
-                .fetch_one(&cleanup_pool)
-                .await
+                match sqlx::query_as::<_, (i32, i64)>("SELECT * FROM cleanup_old_data($1)")
+                    .bind(age_minutes as i32)
+                    .fetch_one(&cleanup_pool)
+                    .await
                 {
                     Ok((partitions, streams)) => {
                         if partitions > 0 || streams > 0 {
@@ -262,7 +257,10 @@ pub async fn run() -> std::io::Result<()> {
 
                         match total_mb {
                             Some(mb) if mb > max_disk_mb => {
-                                info!("Disk pressure: {}MB > {}MB limit, dropping oldest partitions", mb, max_disk_mb);
+                                info!(
+                                    "Disk pressure: {}MB > {}MB limit, dropping oldest partitions",
+                                    mb, max_disk_mb
+                                );
 
                                 let now_ts = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
@@ -275,13 +273,11 @@ pub async fn run() -> std::io::Result<()> {
 
                                 for table in PARTITIONED_TABLES {
                                     // (1) clamped partition drops
-                                    let _ = sqlx::query(
-                                        "SELECT drop_old_partitions($1, $2)"
-                                    )
-                                    .bind(table)
-                                    .bind(protected_from)
-                                    .execute(&cleanup_pool)
-                                    .await;
+                                    let _ = sqlx::query("SELECT drop_old_partitions($1, $2)")
+                                        .bind(table)
+                                        .bind(protected_from)
+                                        .execute(&cleanup_pool)
+                                        .await;
 
                                     // (2) old skewed rows in DEFAULT
                                     // (exists by now: ensured earlier this
@@ -310,7 +306,9 @@ pub async fn run() -> std::io::Result<()> {
                                             .execute(&cleanup_pool)
                                             .await
                                         {
-                                            Ok(res) if res.rows_affected() >= DELETE_CHUNK as u64 => {
+                                            Ok(res)
+                                                if res.rows_affected() >= DELETE_CHUNK as u64 =>
+                                            {
                                                 // full chunk deleted — pause to
                                                 // stay friendly to the writer
                                                 sleep(Duration::from_millis(50)).await;
@@ -341,7 +339,7 @@ pub async fn run() -> std::io::Result<()> {
     // Create AgentService for agent management
     let agent_nats_client = ConnectOptions::with_user_and_password(
         config.nats_login.clone(),
-        config.nats_password.clone()
+        config.nats_password.clone(),
     )
     .connect(&config.nats_broker)
     .await
@@ -351,7 +349,11 @@ pub async fn run() -> std::io::Result<()> {
     let agent_service_data = web::Data::new(agent_service.clone());
 
     // Subscribe to agent heartbeats (syncs block filters on new agent connect)
-    spawn_heartbeat_listener(agent_nats_client.clone(), agent_service.clone(), pool.clone());
+    spawn_heartbeat_listener(
+        agent_nats_client.clone(),
+        agent_service.clone(),
+        pool.clone(),
+    );
 
     // Subscribe to agent Docker container listings (UI "add by container")
     spawn_docker_containers_listener(agent_nats_client.clone(), agent_service.clone());
@@ -362,10 +364,7 @@ pub async fn run() -> std::io::Result<()> {
     let broadcaster = web::Data::new(broadcaster_tx.clone());
 
     // Spawn special trigger handler (flag farm + alert notifications)
-    api::special_triggers::spawn_special_trigger_handler(
-        pool.clone(),
-        broadcaster_tx.clone(),
-    );
+    api::special_triggers::spawn_special_trigger_handler(pool.clone(), broadcaster_tx.clone());
 
     // Subscribe to NATS per-packet events and broadcast ONE aggregated
     // "activity" frame per second to WebSocket clients (see ws_activity.rs
@@ -413,7 +412,7 @@ pub async fn run() -> std::io::Result<()> {
                 .cookie_http_only(false)
                 .cookie_same_site(SameSite::Lax)
                 .cookie_content_security(CookieContentSecurity::Private)
-                .build()
+                .build(),
             )
             .configure(auth::auth_config)
             .configure(api::api_config)

@@ -11,10 +11,7 @@ impl L7Repository {
         Self { pgpool }
     }
 
-    pub async fn get_messages_by_stream(
-        &self,
-        stream_id: i64,
-    ) -> Result<Vec<HttpMessage>, Error> {
+    pub async fn get_messages_by_stream(&self, stream_id: i64) -> Result<Vec<HttpMessage>, Error> {
         sqlx::query_as::<_, HttpMessage>(
             "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
                     http_version, content_type, content_length, body_offset, body_length,
@@ -116,11 +113,7 @@ impl L7Repository {
     }
 
     /// Search streams by IP address
-    pub async fn search_streams_by_ip(
-        &self,
-        ip: &str,
-        limit: i64,
-    ) -> Result<Vec<i64>, Error> {
+    pub async fn search_streams_by_ip(&self, ip: &str, limit: i64) -> Result<Vec<i64>, Error> {
         sqlx::query_scalar::<_, i64>(
             "SELECT id FROM stream
              WHERE src_ip::text = $1 OR dst_ip::text = $1
@@ -134,11 +127,7 @@ impl L7Repository {
     }
 
     /// Search streams by HTTP path (supports prefix match with LIKE)
-    pub async fn search_streams_by_path(
-        &self,
-        path: &str,
-        limit: i64,
-    ) -> Result<Vec<i64>, Error> {
+    pub async fn search_streams_by_path(&self, path: &str, limit: i64) -> Result<Vec<i64>, Error> {
         // Use LIKE if path contains %, otherwise exact or prefix match
         let pattern = if path.contains('%') {
             path.to_string()
@@ -171,11 +160,14 @@ impl L7Repository {
 
         for (name, value) in filters {
             let ids = if name == "_path" {
-                self.search_streams_by_path(value.as_deref().unwrap_or(""), limit).await?
+                self.search_streams_by_path(value.as_deref().unwrap_or(""), limit)
+                    .await?
             } else if name == "_ip" {
-                self.search_streams_by_ip(value.as_deref().unwrap_or(""), limit).await?
+                self.search_streams_by_ip(value.as_deref().unwrap_or(""), limit)
+                    .await?
             } else {
-                self.search_streams_by_header(name, value.as_deref(), limit).await?
+                self.search_streams_by_header(name, value.as_deref(), limit)
+                    .await?
             };
 
             result = Some(match result {

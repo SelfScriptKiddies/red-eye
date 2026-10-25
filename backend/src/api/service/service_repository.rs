@@ -1,15 +1,13 @@
-use sqlx::PgPool;
 use crate::api::service::service_dto::Service;
+use sqlx::PgPool;
 
 pub struct ServiceRepository {
-    pgpool: PgPool
+    pgpool: PgPool,
 }
 
 impl ServiceRepository {
     pub fn new(pgpool: PgPool) -> Self {
-        ServiceRepository {
-            pgpool
-        }
+        ServiceRepository { pgpool }
     }
 
     pub async fn get_service_by_id(&self, id: i64) -> Result<Service, sqlx::Error> {
@@ -20,10 +18,11 @@ impl ServiceRepository {
                    alert_flag_leak
             FROM service
             WHERE id = $1
-            "#)
-            .bind(id)
-            .fetch_one(&self.pgpool)
-            .await
+            "#,
+        )
+        .bind(id)
+        .fetch_one(&self.pgpool)
+        .await
     }
 
     pub async fn get_all_services(&self) -> Result<Vec<Service>, sqlx::Error> {
@@ -33,9 +32,10 @@ impl ServiceRepository {
                    merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
                    alert_flag_leak
             FROM service
-            "#)
-            .fetch_all(&self.pgpool)
-            .await
+            "#,
+        )
+        .fetch_all(&self.pgpool)
+        .await
     }
 
     pub async fn create_service(&self, service: &Service) -> Result<Service, sqlx::Error> {
@@ -94,10 +94,11 @@ impl ServiceRepository {
         sqlx::query(
             r#"
             DELETE FROM service WHERE id = $1
-            "#)
-            .bind(id)
-            .execute(&self.pgpool)
-            .await?;
+            "#,
+        )
+        .bind(id)
+        .execute(&self.pgpool)
+        .await?;
         Ok(())
     }
 }

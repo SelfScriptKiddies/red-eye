@@ -21,20 +21,21 @@ pub fn try_parse_http(payload: &[u8]) -> Option<HttpParsed> {
     // Harpoon serializes HTTP/2 as "HTTP/2" — httparse only understands HTTP/1.x
     // Rewrite to HTTP/1.1 for parsing, but remember the original for body_offset
     let original = payload;
-    let (payload, is_h2) = if payload.starts_with(b"HTTP/2 ") || payload.windows(8).any(|w| w == b" HTTP/2\r") {
-        let mut fixed = payload.to_vec();
-        // Replace "HTTP/2 " with "HTTP/1.1 " in responses
-        if let Some(pos) = fixed.windows(7).position(|w| w == b"HTTP/2 ") {
-            fixed.splice(pos..pos + 6, b"HTTP/1.1".iter().cloned());
-        }
-        // Replace " HTTP/2\r" with " HTTP/1.1\r" in requests
-        if let Some(pos) = fixed.windows(8).position(|w| w == b" HTTP/2\r") {
-            fixed.splice(pos + 1..pos + 7, b"HTTP/1.1".iter().cloned());
-        }
-        (std::borrow::Cow::Owned(fixed), true)
-    } else {
-        (std::borrow::Cow::Borrowed(payload), false)
-    };
+    let (payload, is_h2) =
+        if payload.starts_with(b"HTTP/2 ") || payload.windows(8).any(|w| w == b" HTTP/2\r") {
+            let mut fixed = payload.to_vec();
+            // Replace "HTTP/2 " with "HTTP/1.1 " in responses
+            if let Some(pos) = fixed.windows(7).position(|w| w == b"HTTP/2 ") {
+                fixed.splice(pos..pos + 6, b"HTTP/1.1".iter().cloned());
+            }
+            // Replace " HTTP/2\r" with " HTTP/1.1\r" in requests
+            if let Some(pos) = fixed.windows(8).position(|w| w == b" HTTP/2\r") {
+                fixed.splice(pos + 1..pos + 7, b"HTTP/1.1".iter().cloned());
+            }
+            (std::borrow::Cow::Owned(fixed), true)
+        } else {
+            (std::borrow::Cow::Borrowed(payload), false)
+        };
     let payload = payload.as_ref();
 
     // Quick check: does it look like HTTP?

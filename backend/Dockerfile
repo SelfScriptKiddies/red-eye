@@ -29,13 +29,15 @@ COPY --from=planner /usr/src/app/recipe.json recipe.json
 # Build dependencies - this layer will be cached
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
-# Stamp the built binary with the building commit (no .git in the context).
-# Kept BELOW the chef-cook layer on purpose: the sha changes with every
-# commit and must not invalidate the cached dependency build.
-# Passed by the Makefile via compose build args; empty -> build.rs falls
-# back to git -> "unknown".
+# Stamp the built binary with the building commit and release version
+# (no .git in the context). Kept BELOW the chef-cook layer on purpose:
+# the sha changes with every commit and must not invalidate the cached
+# dependency build. Passed by the Makefile via compose build args; empty
+# -> build.rs falls back to git / the VERSION file -> "unknown".
 ARG RED_EYE_GIT_SHA=""
 ENV RED_EYE_GIT_SHA=${RED_EYE_GIT_SHA}
+ARG RED_EYE_VERSION=""
+ENV RED_EYE_VERSION=${RED_EYE_VERSION}
 
 # Copy source code and build application
 COPY proto/ ./proto/
@@ -71,6 +73,8 @@ RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path r
 # Below the cook layer on purpose — see the builder stage note above.
 ARG RED_EYE_GIT_SHA=""
 ENV RED_EYE_GIT_SHA=${RED_EYE_GIT_SHA}
+ARG RED_EYE_VERSION=""
+ENV RED_EYE_VERSION=${RED_EYE_VERSION}
 
 COPY proto/ ./proto/
 COPY agent/ .

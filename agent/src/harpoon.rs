@@ -354,15 +354,12 @@ impl HarpoonEngine {
             .context("Failed to start harpoon engine")?;
 
         for name in self.rules.keys() {
-            if let Err(e) = self
-                .capture_mgr
-                .start(
-                    name.clone(),
-                    CAPTURE_MAX_PACKETS,
-                    CAPTURE_MAX_PAYLOAD,
-                    CAPTURE_TIMEOUT_SECS,
-                )
-            {
+            if let Err(e) = self.capture_mgr.start(
+                name.clone(),
+                CAPTURE_MAX_PACKETS,
+                CAPTURE_MAX_PAYLOAD,
+                CAPTURE_TIMEOUT_SECS,
+            ) {
                 warn!("Failed to start capture for rule '{}': {}", name, e);
             }
         }
@@ -395,12 +392,7 @@ impl HarpoonEngine {
 }
 
 /// Parse a filter definition from JSON fields into a harpoon-core Filter.
-pub fn parse_filter(
-    kind: &str,
-    pattern: &str,
-    direction: &str,
-    action: &str,
-) -> Result<Filter> {
+pub fn parse_filter(kind: &str, pattern: &str, direction: &str, action: &str) -> Result<Filter> {
     let filter_kind = match kind {
         "substr" => FilterKind::Substr(pattern.to_string()),
         "bsubstr" => {
@@ -474,7 +466,10 @@ mod tests {
         let (restart_tx, restart_rx) = tokio::sync::watch::channel(());
         let ports_cache: PortsCache =
             Arc::new(std::sync::RwLock::new(std::collections::HashSet::new()));
-        (HarpoonEngine::new(ports_cache, restart_tx, None), restart_rx)
+        (
+            HarpoonEngine::new(ports_cache, restart_tx, None),
+            restart_rx,
+        )
     }
 
     async fn spawn_echo_server() -> SocketAddr {

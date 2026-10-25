@@ -1,5 +1,5 @@
-use sqlx::{Error, PgPool};
 use super::proto_dto::ProtoFile;
+use sqlx::{Error, PgPool};
 
 pub struct ProtoRepository {
     pool: PgPool,
@@ -21,17 +21,22 @@ impl ProtoRepository {
 
     pub async fn get_by_id(&self, id: i64) -> Result<ProtoFile, Error> {
         sqlx::query_as::<_, ProtoFile>(
-            "SELECT id, service_id, filename, content FROM proto_file WHERE id = $1"
+            "SELECT id, service_id, filename, content FROM proto_file WHERE id = $1",
         )
         .bind(id)
         .fetch_one(&self.pool)
         .await
     }
 
-    pub async fn create(&self, service_id: i64, filename: &str, content: &str) -> Result<ProtoFile, Error> {
+    pub async fn create(
+        &self,
+        service_id: i64,
+        filename: &str,
+        content: &str,
+    ) -> Result<ProtoFile, Error> {
         sqlx::query_as::<_, ProtoFile>(
             "INSERT INTO proto_file (service_id, filename, content) VALUES ($1, $2, $3)
-             RETURNING id, service_id, filename, content"
+             RETURNING id, service_id, filename, content",
         )
         .bind(service_id)
         .bind(filename)
