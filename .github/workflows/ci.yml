@@ -45,6 +45,35 @@ jobs:
               - 'VERSION'
               - '.github/workflows/ci.yml'
 
+  # A release PR (base = main) must carry a real version bump: VERSION has
+  # to be a valid semver STRICTLY GREATER than the latest released tag.
+  # Runs on every PR into main regardless of changed paths (a docs-only
+  # "release" without a bump must fail here, not in release.yml).
+  release-version:
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: VERSION must be semver and strictly greater than the last release
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::VERSION file contains '$VERSION' — expected semver X.Y.Z"
+            exit 1
+          fi
+          LATEST="$(git ls-remote --tags origin 'refs/tags/v*' \
+            | awk '{print $2}' | sed 's|^refs/tags/v||; s|\^{}$||' | sort -uV | tail -1)"
+          echo "proposed: $VERSION, latest released: ${LATEST:-<none>}"
+          if [ -n "$LATEST" ]; then
+            HIGHEST="$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)"
+            if [ "$VERSION" = "$LATEST" ] || [ "$HIGHEST" != "$VERSION" ]; then
+              echo "::error::VERSION $VERSION is not greater than the last released $LATEST — run 'make bump V=<higher>' before merging to main"
+              exit 1
+            fi
+          fi
+
   frontend:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
@@ -121,7 +150,7 @@ jobs:
 
   # Aggregate job — list this one as the required status check on main.
   checks-ok:
-    needs: [frontend, rust]
+    needs: [release-version, frontend, rust]
     if: always()
     runs-on: ubuntu-latest
     steps:
