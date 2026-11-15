@@ -54,7 +54,7 @@ jobs:
             echo "image_prefix=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/red-eye"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Ensure tag is new (or points at this commit) and push it
+      - name: Verify the version is new and greater than the last release, then tag
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           TAG: v${{ steps.ver.outputs.version }}
@@ -68,6 +68,16 @@ jobs:
             fi
             echo "::error::$TAG was already released from $EXISTING. Bump the version ('make bump V=X.Y.Z') and merge to main again."
             exit 1
+          fi
+          LATEST="$(git ls-remote --tags origin 'refs/tags/v*' \
+            | awk '{print $2}' | sed 's|^refs/tags/v||; s|\^{}$||' | sort -uV | tail -1)"
+          echo "proposed: $VERSION, latest released: ${LATEST:-<none>}"
+          if [ -n "$LATEST" ]; then
+            HIGHEST="$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)"
+            if [ "$VERSION" = "$LATEST" ] || [ "$HIGHEST" != "$VERSION" ]; then
+              echo "::error::VERSION $VERSION is not greater than the last released $LATEST — downgrades and re-releases are rejected. Run 'make bump V=<higher>' and merge to main again."
+              exit 1
+            fi
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
