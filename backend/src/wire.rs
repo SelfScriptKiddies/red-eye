@@ -6,8 +6,9 @@ pub mod red_eye {
 
 pub use red_eye::wire::settings_envelope;
 pub use red_eye::wire::{
-    AgentConfigSnapshot as WireAgentConfigSnapshot,
+    ActiveBlock as WireActiveBlock, AgentConfigSnapshot as WireAgentConfigSnapshot,
     AgentNetworkSettings as WireAgentNetworkSettings, ConfigSync as WireConfigSync,
     Filter as WireFilter, FilterDirection as WireFilterDirection, FilterOp as WireFilterOp,
-    Protocol as WireProtocol, Service as WireService, ServiceOp as WireServiceOp, SettingsEnvelope,
+    IpEndpoint as WireIpEndpoint, Protocol as WireProtocol, Service as WireService,
+    ServiceOp as WireServiceOp, SettingsEnvelope, Threshold as WireThreshold,
 };

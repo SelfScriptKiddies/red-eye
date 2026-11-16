@@ -7,6 +7,10 @@ use std::time::{Duration, Instant};
 pub static UNKNOWN_SERVICE_DROPS: AtomicU64 = AtomicU64::new(0);
 pub static UNKNOWN_AGENT_DROPS: AtomicU64 = AtomicU64::new(0);
 pub static AMBIGUOUS_DIRECTION_DROPS: AtomicU64 = AtomicU64::new(0);
+/// Expression evaluation failures (non-match for that filter only).
+pub static EXPRESSION_EVAL_ERRORS: AtomicU64 = AtomicU64::new(0);
+/// Threshold block writes rejected (local machine address or validation).
+pub static THRESHOLD_BLOCK_REJECTS: AtomicU64 = AtomicU64::new(0);
 
 /// Minimum spacing between rate-limited log lines (shared guard so a
 /// burst of drops cannot flood the log under game load).

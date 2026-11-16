@@ -7,7 +7,6 @@ use crate::configuration::updater::dto::TransportProto;
 use crate::configuration::ApplicationConfig;
 use crate::db::DB;
 use crate::ethernet::{self, PacketInfo, Protocol};
-use crate::filters::apply_filters;
 use crate::grpc_parser;
 use crate::http_parser;
 use crate::metrics;
@@ -18,7 +17,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
     Inbound,
     Outbound,
@@ -390,19 +389,46 @@ impl PacketProcessor {
             .await?;
         debug!("Stream ID: {:?}", stream_id);
 
-        // Checking all of the filters (direction-aware: a filter tagged
-        // 'in'/'out' only fires on packets flowing that way)
-        let triggers = apply_filters(&packet.payload, &direction);
-        debug!("Triggers: {:?}", triggers);
+        // Checking all filters (direction-aware, target-aware, OR
+        // semantics: every matching filter emits its own tag) and running
+        // the threshold gates for alert/block actions.
+        let machine_ip = context.machine_ip;
+        let filter_ctx = crate::filters::FilterContext {
+            payload: &packet.payload,
+            direction,
+            agent_id: &context.agent_id,
+            service_id: service_id as u64,
+            stream_id: stream_id as u64,
+            src_ip: packet.src_ip,
+            dst_ip: packet.dst_ip,
+            src_port: packet.src_port,
+            dst_port: packet.dst_port,
+            machine_ip,
+            protocol: match packet.protocol {
+                Protocol::TCP => "TCP",
+                Protocol::UDP => "UDP",
+            },
+            timestamp_secs: packet.timestamp_seconds,
+            now_ms: now_epoch_ms(),
+        };
+        let matches = crate::filters::apply_filters(&filter_ctx);
+        debug!("Filter matches: {}", matches.len());
 
-        // Flatten triggers into (filter_id, start_index, end_index)
-        let trigger_tuples: Vec<(usize, usize, usize)> = triggers
-            .iter()
-            .flat_map(|(filter_id, arr)| {
-                arr.iter()
-                    .map(move |t| (*filter_id, t.start_index, t.end_index))
-            })
-            .collect();
+        // Flatten payload offsets into (filter_id, start_index, end_index)
+        // and process threshold-gated actions (alerts and temporary
+        // blocks). Each persisted packet match counts ONCE per filter
+        // (matches are already one entry per filter).
+        let mut trigger_tuples: Vec<(usize, usize, usize)> = Vec::new();
+        for m in &matches {
+            for t in &m.offsets {
+                if m.offset_tag {
+                    trigger_tuples.push((m.filter_id as usize, t.start_index, t.end_index));
+                }
+            }
+            if let Some(threshold) = &m.threshold {
+                process_threshold_match(&self.db, m, threshold, &filter_ctx, stream_id).await;
+            }
+        }
 
         let direction_str = match direction {
             Direction::Inbound => "inbound".to_string(),
@@ -538,6 +564,136 @@ impl PacketProcessor {
 
         Ok(())
     }
+}
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Threshold gate for one (packet, filter) match. Tag rows are emitted
+/// unconditionally by the caller; this only gates the alert or block
+/// action, counting each persisted packet match once per filter.
+async fn process_threshold_match(
+    db: &DB,
+    m: &crate::filters::FilterMatch,
+    threshold: &crate::filters::spec::ThresholdCfg,
+    ctx: &crate::filters::FilterContext<'_>,
+    stream_id: usize,
+) {
+    use crate::filters::spec::{Action, GroupBy};
+    use crate::thresholds::{record_hit, CounterKey, ThresholdOutcome};
+
+    let now = now_epoch_secs();
+    let remote_ip = crate::filters::remote_ip_of(ctx);
+    let key = match threshold.group_by {
+        GroupBy::RemoteIp => CounterKey::RemoteIp {
+            filter_id: m.filter_id,
+            agent_id: ctx.agent_id.to_string(),
+            ip: remote_ip.to_string(),
+        },
+        GroupBy::Stream => CounterKey::Stream {
+            filter_id: m.filter_id,
+            agent_id: ctx.agent_id.to_string(),
+            stream_id: ctx.stream_id,
+        },
+        GroupBy::Service => CounterKey::Service {
+            filter_id: m.filter_id,
+            agent_id: ctx.agent_id.to_string(),
+            service_id: ctx.service_id,
+        },
+    };
+
+    match record_hit(
+        key,
+        threshold.count,
+        threshold.window_secs,
+        threshold.cooldown_secs,
+        now,
+    ) {
+        ThresholdOutcome::Below | ThresholdOutcome::Suppressed => return,
+        ThresholdOutcome::Fire => {}
+    }
+
+    let (kind, block_until): (&str, Option<i64>) = match m.action {
+        Action::Alert => ("alert", None),
+        Action::Block => {
+            // A threshold block NEVER blocks the local machine address.
+            if remote_ip == ctx.machine_ip {
+                metrics::THRESHOLD_BLOCK_REJECTS.fetch_add(1, Ordering::Relaxed);
+                metrics::rate_limited_log(
+                    "threshold-block-local",
+                    metrics::THRESHOLD_BLOCK_REJECTS.load(Ordering::Relaxed),
+                    || {
+                        format!(
+                            "filter {} threshold block rejected: {} is the agent's machine IP",
+                            m.filter_id, remote_ip
+                        )
+                    },
+                );
+                return;
+            }
+            // Validate the filter is still registered with the same
+            // revision (removed or updated filters must not mint blocks).
+            if crate::filters::filter_revision(m.filter_id) != Some(m.revision) {
+                metrics::THRESHOLD_BLOCK_REJECTS.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            let until = (now + u64::from(threshold.block_secs)) as i64;
+            // Bounded retry: one attempt after a short backoff, then drop
+            // with a counter (degradation, never ingestion failure).
+            let ip_str = remote_ip.to_string();
+            let mut result = db
+                .insert_active_block(m.filter_id as i64, ctx.agent_id, &ip_str, until)
+                .await;
+            if result.is_err() {
+                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                result = db
+                    .insert_active_block(m.filter_id as i64, ctx.agent_id, &ip_str, until)
+                    .await;
+            }
+            if let Err(e) = result {
+                metrics::THRESHOLD_BLOCK_REJECTS.fetch_add(1, Ordering::Relaxed);
+                metrics::rate_limited_log(
+                    "threshold-block-write",
+                    metrics::THRESHOLD_BLOCK_REJECTS.load(Ordering::Relaxed),
+                    || format!("filter {} active_block insert failed: {:?}", m.filter_id, e),
+                );
+                return;
+            }
+            debug!(
+                "Filter {} threshold block: {} banned on agent {} for {}s",
+                m.filter_id, remote_ip, ctx.agent_id, threshold.block_secs
+            );
+            ("block", Some(until))
+        }
+        // Tag and flag filters cannot carry thresholds (validated at the
+        // backend); a mismatch here is inert.
+        _ => return,
+    };
+
+    crate::filter_events::queue_event(crate::filter_events::FilterEventRow {
+        filter_id: m.filter_id as i64,
+        agent_id: ctx.agent_id.to_string(),
+        service_id: Some(ctx.service_id as i64),
+        stream_id: Some(stream_id as i64),
+        remote_ip: Some(remote_ip.to_string()),
+        kind: kind.to_string(),
+        window_secs: Some(threshold.window_secs as i32),
+        match_count: Some(threshold.count as i32),
+    });
+    // block_until is recorded in active_block; the event row keeps the
+    // audit trail.
+    let _ = block_until;
 }
 
 #[cfg(test)]

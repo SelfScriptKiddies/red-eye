@@ -402,6 +402,9 @@ impl ControlPlane {
                 machine_ip: network.machine_ip.unwrap_or_default(),
             }),
             services,
+            // Filter projection arrives with the unified control plane.
+            filters: Vec::new(),
+            blocks: Vec::new(),
         })
     }
 

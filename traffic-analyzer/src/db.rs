@@ -295,6 +295,78 @@ impl DB {
         q.execute(&self.pgpool).await.map(|_| ())
     }
 
+    /// Batch insert threshold alert/block events. remote_ip travels as
+    /// text with an INET cast (no IpNetwork dependency here).
+    pub async fn insert_filter_events_batch(
+        &self,
+        rows: &[crate::filter_events::FilterEventRow],
+    ) -> Result<(), Error> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut query = String::from(
+            "INSERT INTO filter_event (filter_id, agent_id, service_id, stream_id, remote_ip, \
+             kind, window_secs, match_count) VALUES ",
+        );
+        const COLS: usize = 8;
+        for i in 0..rows.len() {
+            if i > 0 {
+                query.push_str(", ");
+            }
+            let base = i * COLS;
+            query.push_str(&format!(
+                "(${}, ${}, ${}, ${}, ${}::INET, ${}, ${}, ${})",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+                base + 7,
+                base + 8
+            ));
+        }
+        let mut q = sqlx::query(&query);
+        for row in rows {
+            q = q
+                .bind(row.filter_id)
+                .bind(&row.agent_id)
+                .bind(row.service_id)
+                .bind(row.stream_id)
+                .bind(row.remote_ip.clone())
+                .bind(&row.kind)
+                .bind(row.window_secs)
+                .bind(row.match_count);
+        }
+        q.execute(&self.pgpool).await.map(|_| ())
+    }
+
+    /// Persist a temporary active block. A repeated block for the same
+    /// (filter, agent, ip) extends the expiry only forward: an analyzer
+    /// restart never shortens, and nothing ever extends, beyond the
+    /// newest legitimate block request.
+    pub async fn insert_active_block(
+        &self,
+        filter_id: i64,
+        agent_id: &str,
+        remote_ip: &str,
+        blocked_until_epoch_secs: i64,
+    ) -> Result<(), Error> {
+        sqlx::query(
+            "INSERT INTO active_block (filter_id, agent_id, remote_ip, blocked_until)
+             VALUES ($1, $2, $3::INET, to_timestamp($4))
+             ON CONFLICT (filter_id, agent_id, remote_ip) DO UPDATE SET
+                blocked_until = GREATEST(active_block.blocked_until, to_timestamp($4))",
+        )
+        .bind(filter_id)
+        .bind(agent_id)
+        .bind(remote_ip)
+        .bind(blocked_until_epoch_secs)
+        .execute(&self.pgpool)
+        .await
+        .map(|_| ())
+    }
+
     /// Update stream's L7 protocol (upgrades: unknown→http1→grpc)
     pub async fn update_stream_l7_protocol(
         &self,
