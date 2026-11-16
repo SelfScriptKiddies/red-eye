@@ -3,6 +3,9 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AgentContainerInfo, AgentListItem, apiFetch, fetchAgentContainers, fetchFavoriteUsage, FavoriteUsage } from '../../lib/api';
 import { capacityPercent, formatBytes } from '../../lib/favoriteRetention';
+import { usePages } from '../../PagesProvider';
+import { UserAgentsDrawer } from '../../components/UserAgentsDrawer';
+import { buildUaDrilldownUrl } from '../../lib/userAgents';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -227,6 +230,7 @@ interface Filter {
 }
 
 export function SettingsPage() {
+    const { navigate } = usePages();
     // Settings state
     const [farmUrl, setFarmUrl] = useState('');
     const [farmEnabled, setFarmEnabled] = useState(false);
@@ -255,6 +259,8 @@ export function SettingsPage() {
     const [agentsForAssignment, setAgentsForAssignment] = useState<AgentForAssignment[]>([]);
     // "pending sync" notice from the last save (publication failure)
     const [serviceSyncNotice, setServiceSyncNotice] = useState<string | null>(null);
+    // Open User-Agent listing drawer (one HTTP service at a time).
+    const [uaService, setUaService] = useState<Service | null>(null);
     
     // Filters state
     const [filters, setFilters] = useState<Filter[]>([]);
@@ -753,6 +759,9 @@ export function SettingsPage() {
                                 </div>
                                 <div className="card-actions">
                                     <button onClick={() => openServiceModal(service)}>✎ Изменить</button>
+                                    {service.http_parse && (
+                                        <button onClick={() => setUaService(service)}>UA</button>
+                                    )}
                                     <button onClick={() => deleteService(service.id!)}>✕ Удалить</button>
                                 </div>
                             </div>
@@ -1234,6 +1243,25 @@ export function SettingsPage() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* User-Agent listing drawer for one HTTP service */}
+            {uaService && uaService.id != null && (
+                <UserAgentsDrawer
+                    serviceId={uaService.id}
+                    serviceName={uaService.name}
+                    agents={agentsForAssignment}
+                    onClose={() => setUaService(null)}
+                    onDrillDown={(value, agentId) => {
+                        setUaService(null);
+                        navigate(buildUaDrilldownUrl({
+                            name: 'User-Agent',
+                            value,
+                            serviceId: uaService.id!,
+                            agentId,
+                        }));
+                    }}
+                />
             )}
         </div>
     );

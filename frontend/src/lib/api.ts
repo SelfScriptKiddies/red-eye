@@ -132,3 +132,53 @@ export async function setStreamFavorite(
 export function fetchFavoriteUsage(signal?: AbortSignal): Promise<FavoriteUsage> {
     return apiFetch<FavoriteUsage>('/api/favorite/usage', signal);
 }
+
+// HTTP User-Agent listing (bounded aggregate buckets)
+
+/** Mirrors UserAgentItem in backend/src/api/l7/user_agent_dto.rs */
+export interface UserAgentItem {
+    /** Exact value; null for the overflow summary entry. */
+    user_agent: string | null;
+    message_count: number;
+    first_seen: number;
+    last_seen: number;
+    agent_ids: string[];
+    is_overflow: boolean;
+}
+
+/** Mirrors UserAgentsResponse in backend/src/api/l7/user_agent_dto.rs */
+export interface UserAgentsResponse {
+    items: UserAgentItem[];
+    next_cursor: string | null;
+    has_overflow: boolean;
+    /** Unix seconds of the first aggregate write; null before it started. */
+    aggregation_started: number | null;
+}
+
+export type UserAgentsSort = 'count' | 'last_seen';
+export type UserAgentsOrder = 'desc' | 'asc';
+
+export interface UserAgentsQuery {
+    agentId?: string;
+    limit?: number;
+    cursor?: string | null;
+    sort?: UserAgentsSort;
+    order?: UserAgentsOrder;
+}
+
+export function fetchUserAgents(
+    serviceId: number,
+    params: UserAgentsQuery,
+    signal?: AbortSignal
+): Promise<UserAgentsResponse> {
+    const q = new URLSearchParams();
+    if (params.agentId) q.set('agent_id', params.agentId);
+    q.set('limit', String(params.limit ?? 100));
+    if (params.cursor) q.set('cursor', params.cursor);
+    if (params.sort) q.set('sort', params.sort);
+    if (params.order) q.set('order', params.order);
+    return apiFetch<UserAgentsResponse>(
+        `/api/http/service/${serviceId}/user-agents?${q.toString()}`,
+        signal
+    );
+}
