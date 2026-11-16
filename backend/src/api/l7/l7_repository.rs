@@ -11,14 +11,33 @@ impl L7Repository {
         Self { pgpool }
     }
 
+    /// HTTP messages of a stream from live AND saved storage, deduplicated
+    /// by original id, preserving the (timestamp, id) ordering.
     pub async fn get_messages_by_stream(&self, stream_id: i64) -> Result<Vec<HttpMessage>, Error> {
         sqlx::query_as::<_, HttpMessage>(
-            "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
+            r#"
+            SELECT id, stream_id, packet_id, is_request, method, path, status_code,
                     http_version, content_type, content_length, body_offset, body_length,
                     header_set_id, timestamp
-             FROM http_message
-             WHERE stream_id = $1
-             ORDER BY timestamp ASC, id ASC",
+            FROM (
+                SELECT DISTINCT ON (id) id, stream_id, packet_id, is_request, method, path,
+                       status_code, http_version, content_type, content_length, body_offset,
+                       body_length, header_set_id, timestamp
+                FROM (
+                    SELECT id, stream_id, packet_id, is_request, method, path, status_code,
+                           http_version, content_type, content_length, body_offset, body_length,
+                           header_set_id, timestamp, 0 AS src
+                    FROM http_message WHERE stream_id = $1
+                    UNION ALL
+                    SELECT id, stream_id, packet_id, is_request, method, path, status_code,
+                           http_version, content_type, content_length, body_offset, body_length,
+                           header_set_id, timestamp, 1 AS src
+                    FROM saved_http_message WHERE stream_id = $1
+                ) u
+                ORDER BY id, src
+            ) d
+            ORDER BY timestamp ASC, id ASC
+            "#,
         )
         .bind(stream_id)
         .fetch_all(&self.pgpool)
@@ -27,11 +46,28 @@ impl L7Repository {
 
     pub async fn get_message_by_id(&self, id: i64) -> Result<HttpMessage, Error> {
         sqlx::query_as::<_, HttpMessage>(
-            "SELECT id, stream_id, packet_id, is_request, method, path, status_code,
+            r#"
+            SELECT id, stream_id, packet_id, is_request, method, path, status_code,
                     http_version, content_type, content_length, body_offset, body_length,
                     header_set_id, timestamp
-             FROM http_message
-             WHERE id = $1",
+            FROM (
+                SELECT DISTINCT ON (id) id, stream_id, packet_id, is_request, method, path,
+                       status_code, http_version, content_type, content_length, body_offset,
+                       body_length, header_set_id, timestamp
+                FROM (
+                    SELECT id, stream_id, packet_id, is_request, method, path, status_code,
+                           http_version, content_type, content_length, body_offset, body_length,
+                           header_set_id, timestamp, 0 AS src
+                    FROM http_message WHERE id = $1
+                    UNION ALL
+                    SELECT id, stream_id, packet_id, is_request, method, path, status_code,
+                           http_version, content_type, content_length, body_offset, body_length,
+                           header_set_id, timestamp, 1 AS src
+                    FROM saved_http_message WHERE id = $1
+                ) u
+                ORDER BY id, src
+            ) d
+            "#,
         )
         .bind(id)
         .fetch_one(&self.pgpool)
@@ -39,15 +75,22 @@ impl L7Repository {
     }
 
     /// Get headers JSONB from header_set by message's header_set_id
+    /// (message looked up across live and saved storage).
     pub async fn get_headers_by_message(
         &self,
         message_id: i64,
     ) -> Result<serde_json::Value, Error> {
         let result = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT hs.headers
-             FROM http_message m
-             JOIN header_set hs ON hs.id = m.header_set_id
-             WHERE m.id = $1",
+            r#"
+            SELECT hs.headers
+            FROM (
+                SELECT header_set_id FROM http_message WHERE id = $1
+                UNION ALL
+                SELECT header_set_id FROM saved_http_message WHERE id = $1
+            ) m
+            JOIN header_set hs ON hs.id = m.header_set_id
+            LIMIT 1
+            "#,
         )
         .bind(message_id)
         .fetch_optional(&self.pgpool)
@@ -213,21 +256,49 @@ impl L7Repository {
 
     // ── gRPC ──
 
+    /// gRPC messages of a stream from live AND saved storage, deduplicated
+    /// by original id, preserving the (timestamp, id) ordering. Body sets
+    /// stay shared; packet_id comes from the http_message parent (live or
+    /// saved twin of it).
     pub async fn get_grpc_messages_by_stream(
         &self,
         stream_id: i64,
     ) -> Result<Vec<super::l7_dto::GrpcMessage>, Error> {
         sqlx::query_as::<_, super::l7_dto::GrpcMessage>(
-            "SELECT g.id, g.stream_id, g.http_message_id, g.service_name, g.method_name,
-                    g.is_request, g.body_set_id, g.timestamp,
-                    COALESCE(b.decoded_json, '{}') as decoded_json,
-                    hm.packet_id
-             FROM grpc_message g
-             LEFT JOIN grpc_body_set b ON b.id = g.body_set_id
-             LEFT JOIN http_message hm ON hm.id = g.http_message_id
-                AND hm.timestamp = g.timestamp
-             WHERE g.stream_id = $1
-             ORDER BY g.timestamp ASC, g.id ASC",
+            r#"
+            SELECT id, stream_id, http_message_id, service_name, method_name,
+                    is_request, body_set_id, timestamp,
+                    COALESCE(decoded_json, '{}') as decoded_json,
+                    packet_id
+            FROM (
+                SELECT DISTINCT ON (id) id, stream_id, http_message_id, service_name,
+                       method_name, is_request, body_set_id, timestamp,
+                       decoded_json, packet_id
+                FROM (
+                    SELECT g.id, g.stream_id, g.http_message_id, g.service_name, g.method_name,
+                           g.is_request, g.body_set_id, g.timestamp,
+                           COALESCE(b.decoded_json, '{}') as decoded_json,
+                           hm.packet_id, 0 AS src
+                    FROM grpc_message g
+                    LEFT JOIN grpc_body_set b ON b.id = g.body_set_id
+                    LEFT JOIN http_message hm ON hm.id = g.http_message_id
+                        AND hm.timestamp = g.timestamp
+                    WHERE g.stream_id = $1
+                    UNION ALL
+                    SELECT g.id, g.stream_id, g.http_message_id, g.service_name, g.method_name,
+                           g.is_request, g.body_set_id, g.timestamp,
+                           COALESCE(b.decoded_json, '{}') as decoded_json,
+                           shm.packet_id, 1 AS src
+                    FROM saved_grpc_message g
+                    LEFT JOIN grpc_body_set b ON b.id = g.body_set_id
+                    LEFT JOIN saved_http_message shm ON shm.id = g.http_message_id
+                        AND shm.timestamp = g.timestamp
+                    WHERE g.stream_id = $1
+                ) u
+                ORDER BY id, src
+            ) d
+            ORDER BY timestamp ASC, id ASC
+            "#,
         )
         .bind(stream_id)
         .fetch_all(&self.pgpool)

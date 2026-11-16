@@ -70,6 +70,7 @@ pub async fn consume_raw_packets(
     config: Arc<ApplicationConfig>,
     db: DB,
     batch_tx: Arc<ShardedBatchSender>,
+    retention: Arc<crate::retention::RetentionTracker>,
 ) -> Result<()> {
     let subject = config.nats_raw_packets_topic.clone();
 
@@ -77,7 +78,13 @@ pub async fn consume_raw_packets(
     info!("Starting to consume packets from topic {}", &subject);
 
     let concurrency = config.analyzer_concurrency;
-    let packet_processor = Arc::new(PacketProcessor::new(cache.clone(), config, db, batch_tx));
+    let packet_processor = Arc::new(PacketProcessor::new(
+        cache.clone(),
+        config,
+        db,
+        batch_tx,
+        retention,
+    ));
     let semaphore = Arc::new(Semaphore::new(concurrency));
 
     while let Some(message) = subscriber.next().await {

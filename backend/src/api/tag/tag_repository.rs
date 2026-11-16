@@ -85,12 +85,30 @@ impl TagRepository {
     }
 
     pub async fn get_tags_by_stream_id(&self, stream_id: i64) -> Result<Vec<Tag>, sqlx::Error> {
+        // Live + saved union deduplicated by original tag id (saved copies
+        // exist while a starred stream is being archived or after its live
+        // partition dropped).
         sqlx::query_as::<_, Tag>(
-            "SELECT t.id, tn.name, tn.color, t.packet_id, t.tag_id, t.start_index, t.end_index
-             FROM tag t
-             JOIN packets p ON t.packet_id = p.id
-             JOIN tag_name tn ON t.tag_id = tn.id
-             WHERE p.stream_id = $1",
+            r#"
+            SELECT id, name, color, packet_id, tag_id, start_index, end_index
+            FROM (
+                SELECT DISTINCT ON (id) id, name, color, packet_id, tag_id, start_index, end_index
+                FROM (
+                    SELECT t.id, tn.name, tn.color, t.packet_id, t.tag_id, t.start_index, t.end_index, 0 AS src
+                    FROM tag t
+                    JOIN packets p ON t.packet_id = p.id
+                    JOIN tag_name tn ON t.tag_id = tn.id
+                    WHERE p.stream_id = $1
+                    UNION ALL
+                    SELECT st.id, tn.name, tn.color, st.packet_id, st.tag_id, st.start_index, st.end_index, 1 AS src
+                    FROM saved_tag st
+                    JOIN tag_name tn ON st.tag_id = tn.id
+                    WHERE st.stream_id = $1
+                ) u
+                ORDER BY id, src
+            ) d
+            ORDER BY packet_id, id
+            "#,
         )
         .bind(stream_id)
         .fetch_all(&self.pool)

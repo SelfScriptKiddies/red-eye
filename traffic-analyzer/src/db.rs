@@ -696,34 +696,38 @@ impl DB {
         q.execute(&self.pgpool).await.map(|_| ())
     }
 
-    /// Batch update stream last_packet_time (max) and increment packet_count.
-    /// `rows` is (stream_id, max_timestamp, packet_count_delta). Single set-based UPDATE.
+    /// Batch update stream last_packet_time (max), increment packet_count
+    /// and accumulate the payload-byte estimate (retention_bytes feeds
+    /// segment rotation and star-time capacity measurement).
+    /// `rows` is (stream_id, max_timestamp, packet_count_delta, bytes_delta).
+    /// Single set-based UPDATE.
     pub async fn update_streams_stats_batch(
         &self,
-        rows: &[(usize, i64, i64)],
+        rows: &[(usize, i64, i64, i64)],
     ) -> Result<(), Error> {
         if rows.is_empty() {
             return Ok(());
         }
         let mut query = String::from(
-            "UPDATE stream s SET last_packet_time = GREATEST(COALESCE(s.last_packet_time, 0), v.ts), packet_count = s.packet_count + v.cnt FROM (VALUES "
+            "UPDATE stream s SET last_packet_time = GREATEST(COALESCE(s.last_packet_time, 0), v.ts), packet_count = s.packet_count + v.cnt, retention_bytes = s.retention_bytes + v.bytes FROM (VALUES "
         );
         for (i, _) in rows.iter().enumerate() {
             if i > 0 {
                 query.push_str(", ");
             }
-            let base = i * 3;
+            let base = i * 4;
             query.push_str(&format!(
-                "(${}::bigint, ${}::bigint, ${}::bigint)",
+                "(${}::bigint, ${}::bigint, ${}::bigint, ${}::bigint)",
                 base + 1,
                 base + 2,
-                base + 3
+                base + 3,
+                base + 4
             ));
         }
-        query.push_str(") AS v(stream_id, ts, cnt) WHERE s.id = v.stream_id");
+        query.push_str(") AS v(stream_id, ts, cnt, bytes) WHERE s.id = v.stream_id");
         let mut q = sqlx::query(&query);
-        for (sid, ts, cnt) in rows {
-            q = q.bind(*sid as i64).bind(*ts).bind(*cnt);
+        for (sid, ts, cnt, bytes) in rows {
+            q = q.bind(*sid as i64).bind(*ts).bind(*cnt).bind(*bytes);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }
@@ -789,6 +793,98 @@ impl DB {
             result.entry(svc_id).or_default().push((filename, content));
         }
         result
+    }
+
+    /// favorite_segment_bytes from app_settings; None when unset/invalid so
+    /// the caller applies its default. Rotation keeps working with a stale
+    /// value between polls.
+    pub async fn favorite_segment_limit(&self) -> Result<Option<i64>, Error> {
+        let raw: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM app_settings WHERE key = 'favorite_segment_bytes'",
+        )
+        .fetch_optional(&self.pgpool)
+        .await?;
+        Ok(raw
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|v| *v > 0))
+    }
+
+    /// Starred segments for the retention tracker: (id, retention_bytes,
+    /// segment_index). The partial favorite index keeps this cheap even
+    /// with the full stream table loaded.
+    pub async fn starred_streams_snapshot(&self) -> Result<Vec<(i64, i64, i32)>, Error> {
+        sqlx::query_as::<_, (i64, i64, i32)>(
+            "SELECT id, retention_bytes, segment_index FROM stream WHERE favorite = true",
+        )
+        .fetch_all(&self.pgpool)
+        .await
+    }
+
+    /// Segment rotation for an over-limit starred segment, atomically:
+    /// close the starred segment for packet assignment and open an unstarred
+    /// continuation with the same tuple, service, protocol and agent.
+    /// Returns the new segment id, or None when the stream was unstarred
+    /// concurrently (the old segment stays the assignment target).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rotate_star_segment(
+        &self,
+        old_stream_id: usize,
+        src_ip: &str,
+        src_port: u16,
+        dst_ip: &str,
+        dst_port: u16,
+        protocol: &Protocol,
+        service_id: usize,
+        first_packet_time: i64,
+        agent_id: Option<&str>,
+    ) -> Result<Option<usize>, Error> {
+        let protocol_str: &'static str = protocol.into();
+        let src_ip_addr: IpAddr = src_ip
+            .parse()
+            .map_err(|e| std::io::Error::other(format!("invalid src_ip '{}': {}", src_ip, e)))?;
+        let dst_ip_addr: IpAddr = dst_ip
+            .parse()
+            .map_err(|e| std::io::Error::other(format!("invalid dst_ip '{}': {}", dst_ip, e)))?;
+
+        let mut tx = self.pgpool.begin().await?;
+        // Guarded close: only a still-starred segment is finalized. The
+        // archive worker finishes its saved copy; retention_state stays
+        // 'archiving' until the drain completes.
+        let closed = sqlx::query_scalar::<_, (i64, i32)>(
+            "UPDATE stream SET active = false WHERE id = $1 AND favorite = true
+             RETURNING id, segment_index",
+        )
+        .bind(old_stream_id as i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((old_id, segment_index)) = closed else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let new_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active,
+                                service_id, first_packet_time, agent_id,
+                                continuation_of, segment_index)
+            VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10)
+            RETURNING id
+            "#,
+        )
+        .bind(src_ip_addr)
+        .bind(src_port as i32)
+        .bind(dst_ip_addr)
+        .bind(dst_port as i32)
+        .bind(protocol_str)
+        .bind(service_id as i64)
+        .bind(first_packet_time)
+        .bind(agent_id)
+        .bind(old_id)
+        .bind(segment_index + 1)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(new_id as usize))
     }
 }
 

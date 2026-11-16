@@ -493,7 +493,10 @@ pub async fn run() -> std::io::Result<()> {
 
     // Favorite retention workers: bounded archive batches (live + saved
     // unions) and bounded post-unstar saved cleanup. Failures back off
-    // without touching ingestion or the star state.
+    // without touching ingestion or the star state. Pre-feature favorite
+    // rows migrate first: with content -> archiving, empty closed rows ->
+    // incomplete shells (never synthetic saved data).
+    api::favorite::favorite_service::migrate_legacy_favorites(&pool).await;
     api::favorite::favorite_service::spawn_retention_workers(pool.clone());
 
     // Subscribe to NATS per-packet events and broadcast ONE aggregated
