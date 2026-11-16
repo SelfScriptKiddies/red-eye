@@ -31,7 +31,7 @@ interface Agent {
   agent_id: string;
   uptime_secs: number;
   sniffer_active: boolean;
-  /** "8080/tcp" entries — protocol-aware since the v4 control plane */
+  /** "8080/tcp" entries - protocol-aware since the v4 control plane */
   sniffer_ports: string[];
   sniffer_idle?: boolean | null;
   applied_revision?: number | null;
@@ -171,7 +171,7 @@ export default function AgentsPage() {
       }
       const body = await r.json().catch(() => null);
       if (body?.sync === 'pending') {
-        alert('Сохранено, но доставка агенту не удалась — снапшот будет повторён при следующем heartbeat');
+        alert('Сохранено, но доставка агенту не удалась - снапшот будет повторён при следующем heartbeat');
       }
       setNetEditing(false);
       setTimeout(fetchAgents, 1000);
@@ -528,7 +528,7 @@ export default function AgentsPage() {
                     {selectedAgent.sniffer_ports.length === 0 && (
                       <span className="text-muted">
                         {selectedAgent.sniffer_idle
-                          ? 'Нет назначенных сервисов — ожидание (здоров)'
+                          ? 'Нет назначенных сервисов - ожидание (здоров)'
                           : 'Нет портов'}
                       </span>
                     )}
@@ -551,7 +551,7 @@ export default function AgentsPage() {
                         onChange={e => setNetInterface(e.target.value)}
                       />
                       <input
-                        placeholder="Machine IP (IP или 0.0.0.0/:: — wildcard)"
+                        placeholder="Machine IP (IP или 0.0.0.0/:: - wildcard)"
                         value={netMachineIp}
                         onChange={e => setNetMachineIp(e.target.value)}
                       />

@@ -25,7 +25,7 @@ use crate::updates::{PortsCache, SharedConfig, TransportProto};
 pub struct SnifferHealth {
     /// Whether the sniffer capture thread is currently running.
     active: AtomicBool,
-    /// True when capture is idle because no services are assigned — a
+    /// True when capture is idle because no services are assigned: a
     /// healthy waiting state, not an error.
     idle_no_services: AtomicBool,
     /// Packets dropped because the capture -> NATS queue was full.
@@ -280,7 +280,7 @@ impl SnifferEngine {
 type PortSet = Vec<(TransportProto, u16)>;
 
 /// Match TCP/UDP packets against a (protocol, port) filter. An empty
-/// filter matches nothing: callers disable the sniffer on an empty set —
+/// filter matches nothing: callers disable the sniffer on an empty set:
 /// empty must never mean "capture everything", or the agent's own NATS
 /// traffic would be fed back into the analyzer.
 fn packet_matches_filter(frame: &[u8], ports: &HashSet<(TransportProto, u16)>) -> bool {

@@ -317,7 +317,7 @@ impl ControlPlane {
 
     /// Build the complete snapshot for one agent: its effective network
     /// settings plus its service set (global services plus explicit
-    /// agent_service assignments). None when the DB read fails — callers
+    /// agent_service assignments). None when the DB read fails - callers
     /// treat that as pending sync, never as an empty assignment.
     pub async fn snapshot_for(&self, agent_id: &str) -> Option<WireAgentConfigSnapshot> {
         let revision = match self.current_revision().await {
@@ -355,7 +355,7 @@ impl ControlPlane {
             Ok(rows) => rows,
             Err(e) => {
                 error!(
-                    "Failed to read service set for agent '{}': {} — snapshot withheld",
+                    "Failed to read service set for agent '{}': {} - snapshot withheld",
                     agent_id, e
                 );
                 return None;
