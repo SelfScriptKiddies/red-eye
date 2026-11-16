@@ -197,7 +197,7 @@ async fn get_agent_containers(
     HttpResponse::Ok().json(agent_service.get_containers(&agent_id).await)
 }
 
-// ── Agent network settings ──
+// Agent network settings
 
 #[get("/agent/{id}/network-settings")]
 async fn get_network_settings(
@@ -294,7 +294,7 @@ async fn reset_network_settings(
     }
 }
 
-// ── Agent-Service bindings (explicit assignment editing) ──
+// Agent-Service bindings (explicit assignment editing)
 
 #[get("/agent/{id}/services")]
 async fn get_agent_services(

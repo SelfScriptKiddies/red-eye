@@ -254,7 +254,7 @@ impl L7Repository {
         }
     }
 
-    // ── gRPC ──
+    // gRPC
 
     /// gRPC messages of a stream from live AND saved storage, deduplicated
     /// by original id, preserving the (timestamp, id) ordering. Body sets

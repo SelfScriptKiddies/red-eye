@@ -21,7 +21,7 @@
 -- Idempotent: safe to re-run (IF EXISTS / IF NOT EXISTS / pg_constraint
 -- guards).
 
--- ── Stream retention metadata ───────────────────────────────────────────
+-- Stream retention metadata
 
 ALTER TABLE stream ADD COLUMN IF NOT EXISTS favorite_since TIMESTAMPTZ;
 -- Monotonic per-stream token: a late archive/cleanup worker from an older
@@ -68,7 +68,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_stream_favorite_state
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_stream_continuation
     ON stream (continuation_of) WHERE continuation_of IS NOT NULL;
 
--- ── Saved tables (non-partitioned, PK = original id) ────────────────────
+-- Saved tables (non-partitioned, PK = original id)
 -- Mirror the source row identity: the archive worker copies rows verbatim
 -- (ON CONFLICT (id) DO NOTHING keeps retries idempotent), and read paths
 -- union live + saved deduplicating by the original id. Timestamps stay
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS saved_grpc_message (
 CREATE INDEX IF NOT EXISTS idx_saved_grpc_stream_ts ON saved_grpc_message (stream_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_saved_grpc_http ON saved_grpc_message (http_message_id);
 
--- ── Capacity settings ───────────────────────────────────────────────────
+-- Capacity settings
 -- Env (FAVORITE_MAX_TOTAL_BYTES / FAVORITE_SEGMENT_BYTES /
 -- FAVORITE_DISK_RESERVE_BYTES) seeds the initial values at backend startup;
 -- these rows are the runtime overrides. DO NOTHING keeps operator values.
@@ -152,7 +152,7 @@ INSERT INTO app_settings (key, value) VALUES
     ('favorite_disk_reserve_bytes', '2147483648')
 ON CONFLICT (key) DO NOTHING;
 
--- ── Cleanup guard functions ─────────────────────────────────────────────
+-- Cleanup guard functions
 -- These REPLACE the versions from database/init/06_partitions.sql so a live
 -- database picks up favorite-safe cleanup together with the schema. The
 -- 5-minute partition interval (300s) must stay in sync with the Rust
