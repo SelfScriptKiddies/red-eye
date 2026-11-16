@@ -403,29 +403,34 @@ async fn flush_batch(
     }
 
     // 4. Single set-based UPDATE stream: last_packet_time (max),
-    //    packet_count (+= delta) and retention_bytes (+= payload bytes;
+    //    packet_count (+= delta), retention_bytes (+= payload bytes;
     //    the segment-rotation estimate and star-time measurement feed on
-    //    it). Local tracker deltas apply for starred segments only.
-    let mut stream_stats: HashMap<usize, (i64, i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count, bytes)
-    for pkt in buffer.iter() {
+    //    it) and last_packet_id (max; the JEV scheduler's revision
+    //    boundary). Local tracker deltas apply for starred segments only.
+    let mut stream_stats: HashMap<usize, (i64, i64, i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count, bytes, max_packet_id)
+    for (idx, pkt) in buffer.iter().enumerate() {
         let ts = pkt.timestamp_seconds as i64;
-        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0, 0));
+        let packet_id = packet_ids[idx];
+        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0, 0, packet_id));
         if ts > entry.0 {
             entry.0 = ts;
+        }
+        if packet_id > entry.3 {
+            entry.3 = packet_id;
         }
         entry.1 += 1;
         entry.2 += pkt.payload.len() as i64;
     }
-    let stats_rows: Vec<(usize, i64, i64, i64)> = stream_stats
+    let stats_rows: Vec<(usize, i64, i64, i64, i64)> = stream_stats
         .iter()
-        .map(|(s, (ts, c, b))| (*s, *ts, *c, *b))
+        .map(|(s, (ts, c, b, max_id))| (*s, *ts, *c, *b, *max_id))
         .collect();
     if let Err(e) = db.update_streams_stats_batch(&stats_rows).await {
         error!("Failed to update stream stats: {:?}", e);
     } else {
         // Only on commit: a failed stats update leaves the tracker ahead of
         // the DB and could trigger rotation on phantom bytes.
-        for (sid, _, _, bytes) in &stats_rows {
+        for (sid, _, _, bytes, _) in &stats_rows {
             retention.add_bytes(*sid, *bytes);
         }
     }
