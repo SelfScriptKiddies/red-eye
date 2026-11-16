@@ -48,7 +48,7 @@ export default function AlertToast() {
                 if (alert && alert.type === 'alert') {
                     pushToast(
                         alert.tag_name,
-                        `стрим #${alert.stream_id} — пакет #${alert.packet_id}`,
+                        `стрим #${alert.stream_id}: пакет #${alert.packet_id}`,
                         `/packets?stream=${alert.stream_id}`
                     );
                     return;
@@ -59,7 +59,7 @@ export default function AlertToast() {
                 if (isAiVerdictEvent(data) && data.is_attack) {
                     pushToast(
                         data.attack_class,
-                        `JEV: стрим #${data.stream_id} — ревизия до пакета #${data.last_packet_id}`,
+                        `JEV: стрим #${data.stream_id}: ревизия до пакета #${data.last_packet_id}`,
                         `/packets?stream=${data.stream_id}&verdict=${data.verdict_id}`
                     );
                 }
