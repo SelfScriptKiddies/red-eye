@@ -419,7 +419,12 @@ export function PacketsPage() {
                     template_type: isHex ? 'bsubstr' : 'substr',
                     template: pattern,
                     direction: 'both',
-                    special_type: 'block'
+                    action: 'block',
+                    enabled: true,
+                    service_targets_global: true,
+                    agent_targets_global: true,
+                    service_ids: [],
+                    agent_ids: []
                 })
             });
             if (!response.ok) {
