@@ -18,6 +18,12 @@
 -- retro-enqueued, and MCP tokens must be created explicitly by an
 -- operator after deploy.
 
+-- Filter toggle target for the MCP set_filter_enabled tool: a disabled
+-- filter stops being pushed to agents by the block-filter sync.
+-- Constant-default ADD COLUMN: brief lock, no rewrite, existing rows
+-- stay enabled.
+ALTER TABLE tag_name ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;
+
 -- MCP harness tokens. Only the SHA-256 hash is persisted; the plaintext
 -- is shown once at creation. Capability is enforced server-side on every
 -- call (revocation and expiry take effect immediately).

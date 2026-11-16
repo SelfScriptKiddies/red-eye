@@ -132,6 +132,56 @@ lazy_static::lazy_static! {
             "Decisions API call latency"
         ).buckets(vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0])
     ).unwrap();
+
+    // LLM-SOC (triage queue). No labels except the bounded verdict class;
+    // stream ids, prompts, payloads and remote IPs never become
+    // dimensions.
+    pub static ref SOC_QUEUE_DEPTH: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_soc_queue_depth", "Nonterminal triage jobs (queued plus running)")
+    ).unwrap();
+    pub static ref SOC_OLDEST_WAIT_SECS: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_soc_oldest_wait_secs", "Age of the oldest queued triage job")
+    ).unwrap();
+    pub static ref SOC_ACTIVE_LEASES: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_soc_active_leases", "Held worker leases")
+    ).unwrap();
+    pub static ref SOC_DAILY_JOBS_USED: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_soc_daily_jobs_used", "Jobs counted against today's UTC limit")
+    ).unwrap();
+    pub static ref SOC_DAILY_JOB_LIMIT: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_soc_daily_job_limit", "Configured daily job limit")
+    ).unwrap();
+    pub static ref SOC_QUEUE_CAPACITY: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_soc_queue_capacity", "Nonterminal queue cap")
+    ).unwrap();
+    pub static ref SOC_JOBS_ENQUEUED: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_jobs_enqueued_total", "Jobs created (manual plus automatic)")
+    ).unwrap();
+    pub static ref SOC_AUTO_DROPPED_QUEUE_FULL: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_auto_dropped_queue_full_total", "Automatic jobs dropped at queue saturation")
+    ).unwrap();
+    pub static ref SOC_CLAIMS_REJECTED: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_claims_rejected_total", "Claims refused (disabled or daily limit)")
+    ).unwrap();
+    pub static ref SOC_JOBS_RETRIED: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_jobs_retried_total", "Transient failures requeued with backoff")
+    ).unwrap();
+    pub static ref SOC_JOBS_FAILED_TOTAL: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_jobs_failed_total", "Jobs exhausted as failed (never benign)")
+    ).unwrap();
+    pub static ref SOC_RESULT_REJECTIONS: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_result_rejections_total", "Submitted results rejected by validation")
+    ).unwrap();
+    pub static ref SOC_EVIDENCE_REJECTIONS: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_evidence_rejections_total", "Evidence ids outside the job's fetched set")
+    ).unwrap();
+    pub static ref SOC_RESULTS_TOTAL: prometheus::IntCounterVec = prometheus::IntCounterVec::new(
+        Opts::new("red_eye_soc_results_total", "Validated triage results by verdict class"),
+        &["verdict"]
+    ).unwrap();
+    pub static ref SOC_ALERTS_TOTAL: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_soc_alerts_total", "Alert-threshold soc_triage broadcasts")
+    ).unwrap();
 }
 
 pub fn register_metrics() {
@@ -174,6 +224,21 @@ pub fn register_metrics() {
     let _ = r.register(Box::new(AI_COST_SPENT.clone()));
     let _ = r.register(Box::new(AI_LAST_SUCCESS_UNIX.clone()));
     let _ = r.register(Box::new(AI_PROVIDER_LATENCY.clone()));
+    let _ = r.register(Box::new(SOC_QUEUE_DEPTH.clone()));
+    let _ = r.register(Box::new(SOC_OLDEST_WAIT_SECS.clone()));
+    let _ = r.register(Box::new(SOC_ACTIVE_LEASES.clone()));
+    let _ = r.register(Box::new(SOC_DAILY_JOBS_USED.clone()));
+    let _ = r.register(Box::new(SOC_DAILY_JOB_LIMIT.clone()));
+    let _ = r.register(Box::new(SOC_QUEUE_CAPACITY.clone()));
+    let _ = r.register(Box::new(SOC_JOBS_ENQUEUED.clone()));
+    let _ = r.register(Box::new(SOC_AUTO_DROPPED_QUEUE_FULL.clone()));
+    let _ = r.register(Box::new(SOC_CLAIMS_REJECTED.clone()));
+    let _ = r.register(Box::new(SOC_JOBS_RETRIED.clone()));
+    let _ = r.register(Box::new(SOC_JOBS_FAILED_TOTAL.clone()));
+    let _ = r.register(Box::new(SOC_RESULT_REJECTIONS.clone()));
+    let _ = r.register(Box::new(SOC_EVIDENCE_REJECTIONS.clone()));
+    let _ = r.register(Box::new(SOC_RESULTS_TOTAL.clone()));
+    let _ = r.register(Box::new(SOC_ALERTS_TOTAL.clone()));
 }
 
 /// Refresh gauge metrics from DB and agent state.

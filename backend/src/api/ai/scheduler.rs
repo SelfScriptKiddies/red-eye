@@ -720,6 +720,18 @@ async fn run_analysis(
     };
     // WebSocket lag drops notifications without dropping stored verdicts.
     let _ = broadcaster.send(verdict_event(&outcome));
+    // SOC auto-enqueue: fires only on this fresh insert, so enabling SOC
+    // later never retro-enqueues old verdicts; gates and dedup live in
+    // the soc module. JEV failures never propagate from here.
+    crate::api::soc::maybe_enqueue_automatic(
+        pool,
+        verdict_id,
+        outcome.stream_id,
+        outcome.last_packet_id,
+        outcome.is_attack,
+        outcome.severity,
+    )
+    .await;
     Ok(outcome)
 }
 
