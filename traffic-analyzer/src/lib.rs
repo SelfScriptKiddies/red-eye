@@ -265,7 +265,7 @@ fn build_spec_from_row(
 ///   acked) -> `add_filter` replaces by id and rejects older revisions.
 ///
 /// Degradation, not crash: on DB failure we log and continue with empty
-/// filters — the periodic reconciliation and ConfigSync recover.
+/// filters - the periodic reconciliation and ConfigSync recover.
 async fn warm_filters_from_db(db: &db::DB) {
     let specs = load_filter_specs_from_db(db).await;
     let total = specs.len();
