@@ -190,9 +190,11 @@ sudo /home/tonysd/programming/traffic-analyzer-stack/red-eye/agent/target/releas
   --nats-login red-eye-client \
   --nats-password <NATS_PASSWORD> \
   --interface eth1 \
-  --ports 31337,31338 \
   --data-dir /tmp/red-eye-agent
 ```
+
+The agent starts with no service ports: create the two services in the
+UI (Settings) and the agent picks them up via snapshots, no restart.
 
 Verify it works:
 ```bash
