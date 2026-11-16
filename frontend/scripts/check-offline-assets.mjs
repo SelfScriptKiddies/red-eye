@@ -1,7 +1,6 @@
 // Build-time regression check: the production dist tree must be fully
 // self-hosted. Run as `node scripts/check-offline-assets.mjs [distDir]`
-// after `vite build`; every exported helper is unit-testable (see
-// scripts/check-offline-assets.test.mjs).
+// after `vite build`; every exported helper is unit-testable.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -49,6 +48,20 @@ export function isExternalRef(url) {
 
 // Structural HTML scan: only asset-bearing attributes of asset-bearing tags
 // are collected, so URLs inside text content stay data and never fail.
+const TAG_ATTRS = {
+    script: ['src'],
+    link: ['href'],
+    img: ['src', 'srcset'],
+    source: ['src', 'srcset'],
+    iframe: ['src'],
+    video: ['src'],
+    audio: ['src'],
+    track: ['src'],
+    embed: ['src'],
+    object: ['data'],
+    use: ['href'],
+};
+
 export function findHtmlRefs(html) {
     const refs = [];
     const tagRe = /<(script|link|img|source|iframe|video|audio|track|embed|object|use)\b([^>]*)>/gi;
@@ -57,10 +70,8 @@ export function findHtmlRefs(html) {
         const name = tag[1].toLowerCase();
         for (const attr of tag[2].matchAll(attrRe)) {
             const attrName = attr[1].toLowerCase();
+            if (!TAG_ATTRS[name].includes(attrName)) continue;
             const value = attr[3] ?? attr[4] ?? attr[5] ?? '';
-            if (name === 'link' && attrName !== 'href') continue;
-            if (name === 'object' && attrName !== 'data') continue;
-            if (name === 'use' && attrName !== 'href') continue;
             if (attrName === 'srcset') {
                 for (const part of value.split(',')) {
                     const candidate = part.trim().split(/\s+/)[0];
@@ -81,20 +92,23 @@ export function findCssRefs(css) {
     for (const m of clean.matchAll(importRe)) {
         refs.push({ kind: 'import', url: m[1] });
     }
-    // url() only, not url( in a selector or string content: the token must
-    // terminate, and quotes/backslashes cannot appear in a real CSS url token.
+    // url() tokens are matched only when the construct terminates, so a
+    // bare "url(" inside example text is not an asset reference.
     const urlRe = /url\s*\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"][^);]*))\s*\)/gi;
     for (const m of clean.matchAll(urlRe)) {
         refs.push({ kind: 'url', url: (m[1] ?? m[2] ?? m[3] ?? '').trim() });
     }
-    return refs;
+    const importUrls = new Set(refs.filter((r) => r.kind === 'import').map((r) => r.url));
+    return refs.filter((r) => r.kind !== 'url' || !importUrls.has(r.url));
 }
 
 // JS scan: a CDN host only counts when it sits in a loader position (assigned
 // to src/href/url, or passed to import/fetch/Worker). URLs inside example
 // code strings (curl, pwntools, farm configs) are data and are ignored.
 const LOADER_TAILS = [
-    /(?:^|[^\w.])(?:src|href|action|data|url)\s*[:=]\s*["'`][^"'`]*$/i,
+    // Non-word boundary keeps config keys like farm_url out; property access
+    // (script.src=) still matches because the dot is not a word character.
+    /(?:^|[^\w])(?:src|href|action|data|url)\s*[:=]\s*["'`][^"'`]*$/i,
     /\bimport\s*\(\s*["'`][^"'`]*$/i,
     /\bfrom\s+["'`][^"'`]*$/i,
     /\bfetch\s*\(\s*["'`][^"'`]*$/i,
