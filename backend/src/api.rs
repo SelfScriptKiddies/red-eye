@@ -2,6 +2,7 @@ pub mod agent;
 pub mod auth;
 pub mod block_sync;
 pub mod download;
+pub mod favorite;
 pub mod l7;
 pub mod metrics;
 pub(crate) mod packet;
@@ -65,6 +66,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
             web::scope("/api")
                 .configure(packet::packet_config)
                 .configure(stream::stream_config)
+                .configure(favorite::favorite_config)
                 .configure(tag::tag_config)
                 .configure(service::config)
                 .configure(realtime::config)
@@ -99,8 +101,11 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
 
         stream::get_all_streams,
         stream::get_stream_by_id,
-        stream::update_stream_favorite,
         stream::get_stream_histogram,
+        favorite::star_stream,
+        favorite::unstar_stream,
+        favorite::update_stream_favorite,
+        favorite::favorite_usage,
 
         tag::get_tags_by_stream_id,
         tag::get_all_tag_names,
@@ -135,7 +140,9 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
         l7::search_by_headers
     ),
     components(
-        schemas(auth::LoginData, packet::GetPacketsQuery)
+        schemas(auth::LoginData, packet::GetPacketsQuery,
+                favorite::favorite_dto::FavoriteStateResponse,
+                favorite::favorite_dto::FavoriteUsageResponse)
     ),
     tags(
         (name = "auth", description = "Authentication endpoints"),

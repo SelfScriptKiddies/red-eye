@@ -126,6 +126,9 @@ pub async fn run() -> std::io::Result<()> {
     let config = init();
     let configuration_data = web::Data::new(config.clone());
     let pool = establish_connection(&config).await;
+    // Favorite retention limits: env values seed app_settings once; the
+    // settings API owns runtime changes from here on.
+    api::favorite::favorite_service::seed_favorite_settings(&pool, &config).await;
     let packet_service = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
@@ -392,6 +395,11 @@ pub async fn run() -> std::io::Result<()> {
 
     // Spawn special trigger handler (flag farm + alert notifications)
     api::special_triggers::spawn_special_trigger_handler(pool.clone(), broadcaster_tx.clone());
+
+    // Favorite retention workers: bounded archive batches (live + saved
+    // unions) and bounded post-unstar saved cleanup. Failures back off
+    // without touching ingestion or the star state.
+    api::favorite::favorite_service::spawn_retention_workers(pool.clone());
 
     // Subscribe to NATS per-packet events and broadcast ONE aggregated
     // "activity" frame per second to WebSocket clients (see ws_activity.rs
