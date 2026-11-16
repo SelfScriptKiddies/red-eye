@@ -2,6 +2,7 @@ mod audit;
 mod auth;
 mod backend;
 mod config;
+mod fetch;
 mod handler;
 mod state;
 mod tools;
@@ -33,8 +34,8 @@ async fn main() {
         }
     };
     info!(
-        "red-eye-mcp starting: mode={:?} backend={} bind={}",
-        config.mode, config.backend_url, config.bind
+        "red-eye-mcp starting: mode={:?} backend={} bind={} fetch_url={}",
+        config.mode, config.backend_url, config.bind, config.fetch_url_enabled
     );
 
     let backend = match backend::BackendClient::new(&config) {
@@ -61,6 +62,8 @@ async fn main() {
         backend: backend.clone(),
         dryruns: Arc::new(state::DryRunStore::new()),
         mode_read_only: config.mode == config::Mode::ReadOnly,
+        fetch_url_enabled: config.fetch_url_enabled,
+        fetch_limit: Arc::new(state::RateLimiter::fetch()),
     };
 
     let service: StreamableHttpService<handler::SocMcpServer, LocalSessionManager> =

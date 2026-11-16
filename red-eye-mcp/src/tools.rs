@@ -16,8 +16,12 @@ fn limit_schema_value() -> serde_json::Value {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolClass {
+    /// Always listed: bounded backend reads, no process opt-in needed.
     ReadOnly,
     Mutation,
+    /// Listed and callable only when the process opted in via config
+    /// (fetch_url): network egress is not part of the default surface.
+    Fetch,
 }
 
 pub struct ToolDef {
@@ -170,6 +174,25 @@ pub fn catalog() -> Vec<ToolDef> {
             description: "Operator-safe backend component status without secrets.",
             class: ToolClass::ReadOnly,
             schema: json!({"type": "object", "properties": {}}),
+        },
+        // ----- Fetch: exists only when the deployment set
+        // MCP_ENABLE_FETCH_URL; the handler treats it as unknown otherwise.
+        ToolDef {
+            name: "fetch_url",
+            description: "Fetch a public http(s) URL and return extracted readable text \
+                          (title, description, body with inline links). Private networks, \
+                          link-local and other special-purpose addresses are blocked; \
+                          redirects are validated hop by hop; output and download sizes \
+                          are capped. This tool causes network egress and exists only if \
+                          the deployment opted in via MCP_ENABLE_FETCH_URL (disabled by default).",
+            class: ToolClass::Fetch,
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "maxLength": 2048, "description": "absolute http(s) URL of a public host"}
+                },
+                "required": ["url"]
+            }),
         },
         // ----- Full-control mutations: listed only for full_control
         // tokens in a full_control process; the backend re-checks the
@@ -493,6 +516,16 @@ pub fn needs_dryrun(tool: &str) -> bool {
             | "set_filter_enabled"
             | "remove_active_block"
     )
+}
+
+/// Opt-in dimension of the listing/dispatch gate: Fetch tools are unknown
+/// unless the process opted in; every other class passes this check and
+/// remains subject to its own capability rules in the handler.
+pub fn opt_in_allowed(class: ToolClass, fetch_url_enabled: bool) -> bool {
+    match class {
+        ToolClass::ReadOnly | ToolClass::Mutation => true,
+        ToolClass::Fetch => fetch_url_enabled,
+    }
 }
 
 /// Argument sanity shared by the dispatcher: depth-bounded object, string
@@ -829,6 +862,27 @@ mod tests {
             "remove_active_block",
         ];
         assert_eq!(mutation, expected);
+    }
+
+    #[test]
+    fn fetch_url_is_the_only_opt_in_tool_and_gates_fail_closed() {
+        let fetch: Vec<&str> = catalog()
+            .iter()
+            .filter(|t| t.class == ToolClass::Fetch)
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(fetch, ["fetch_url"]);
+        let def = catalog()
+            .into_iter()
+            .find(|t| t.name == "fetch_url")
+            .unwrap();
+        assert!(def.description.contains("MCP_ENABLE_FETCH_URL"));
+        assert!(def.description.contains("disabled by default"));
+        assert!(opt_in_allowed(ToolClass::Fetch, true));
+        assert!(!opt_in_allowed(ToolClass::Fetch, false));
+        // Every other class survives the gate regardless of the flag.
+        assert!(opt_in_allowed(ToolClass::ReadOnly, false));
+        assert!(opt_in_allowed(ToolClass::Mutation, false));
     }
 
     #[test]

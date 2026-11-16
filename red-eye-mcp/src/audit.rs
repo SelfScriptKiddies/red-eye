@@ -5,7 +5,15 @@ use crate::auth::AuthContext;
 // Audit records: token id, session id, tool, target ids, expected
 // revision, dry-run/mutation status, result, sanitized error. Payload
 // contents and bearer tokens are never audit fields - arguments are
-// summarized to integer targets only.
+// summarized to integer targets only. fetch_url records the final URL
+// after redirects, never any fetched body content.
+
+fn sanitize(text: &str, max_chars: usize) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(max_chars)
+        .collect()
+}
 
 fn summarize_args(args: &serde_json::Value) -> String {
     let mut parts = Vec::new();
@@ -42,15 +50,35 @@ pub fn mutation_attempt(auth: &AuthContext, tool: &str, args: &serde_json::Value
 }
 
 pub fn mutation_result(auth: &AuthContext, tool: &str, result: &str, error: &str) {
-    let sanitized: String = error
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .take(200)
-        .collect();
     log::info!(
         target: "mcp_audit",
         "MCP_AUDIT tool={} token_id={} session={} result={} error={}",
-        tool, auth.token_id, auth.session_id, result, sanitized
+        tool,
+        auth.token_id,
+        auth.session_id,
+        result,
+        sanitize(error, 200)
+    );
+}
+
+pub fn fetch_result(
+    auth: &AuthContext,
+    tool: &str,
+    target: &str,
+    result: &str,
+    bytes: u64,
+    error: &str,
+) {
+    log::info!(
+        target: "mcp_audit",
+        "MCP_AUDIT tool={} token_id={} session={} target={} result={} bytes={} error={}",
+        tool,
+        auth.token_id,
+        auth.session_id,
+        sanitize(target, crate::config::MAX_URL_LEN),
+        result,
+        bytes,
+        sanitize(error, 200)
     );
 }
 
