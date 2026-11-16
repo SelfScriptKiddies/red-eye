@@ -381,6 +381,16 @@ async fn unbind_agent_service(
     }
 }
 
+/// Bound agent-reported proxy error strings before they enter the
+/// database: fixed-size diagnostics, never payload data.
+fn sanitize_diag(error: &str) -> String {
+    let mut out: String = error.chars().take(300).collect();
+    if error.len() > 300 {
+        out.push_str("...");
+    }
+    out
+}
+
 /// Spawn NATS subscriber for agent heartbeats
 pub fn spawn_heartbeat_listener(
     nats_client: async_nats::Client,
@@ -429,6 +439,60 @@ pub fn spawn_heartbeat_listener(
                         tokio::spawn(async move {
                             control.send_snapshot(&agent_id, reason).await;
                         });
+                    }
+
+                    // Proxy diagnostics: store the agent-reported capture
+                    // phase per (agent, service). Rows the backend does not
+                    // know are ignored - reported state can never create or
+                    // alter operator desired state.
+                    for report in &status.proxies {
+                        let service_id = match i64::try_from(report.service_id) {
+                            Ok(id) => id,
+                            Err(_) => continue,
+                        };
+                        match crate::api::protect::protect_repository::ProtectRepository::new(
+                            control.pool().clone(),
+                        )
+                        .record_effective_diag(
+                            &agent_id,
+                            service_id,
+                            report.state == "effective",
+                            report
+                                .effective_revision
+                                .and_then(|r| i64::try_from(r).ok())
+                                .unwrap_or(0),
+                            &report.state,
+                            report.last_error.as_deref().map(sanitize_diag).as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(0) => {
+                                log::debug!(
+                                    "Proxy report for unknown desired row {} on agent '{}' ignored",
+                                    service_id,
+                                    agent_id
+                                );
+                            }
+                            Ok(_) => {
+                                if report.state == "failed" || report.state == "capture_unavailable"
+                                {
+                                    crate::api::metrics::PROXY_TRANSITION_FAILURES.inc();
+                                }
+                            }
+                            Err(e) => {
+                                log::debug!(
+                                    "Failed to store proxy diagnostics for agent '{}': {}",
+                                    agent_id,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    if let Some(conflicts) = status.capture_source_conflicts {
+                        agent_service.set_capture_conflicts(&agent_id, conflicts);
+                    }
+                    if let Some(drops) = status.forwarder_drops {
+                        agent_service.set_forwarder_drops(&agent_id, drops);
                     }
 
                     // Freshly seen agent (backend restart or first contact):

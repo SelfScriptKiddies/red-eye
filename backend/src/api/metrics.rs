@@ -53,6 +53,18 @@ lazy_static::lazy_static! {
     pub static ref AGENTS_SYNC_ERROR: IntGauge = IntGauge::with_opts(
         Opts::new("red_eye_agents_sync_error", "Agents reporting a snapshot application error")
     ).unwrap();
+    pub static ref PROXY_TRANSITION_FAILURES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_proxy_transition_failures_total", "Proxy enable/disable transition failures reported by agents")
+    ).unwrap();
+    pub static ref CAPTURE_SOURCE_CONFLICTS: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_capture_source_conflicts", "Frames captured passively for keys that are effectively proxied (capture-source state bug)")
+    ).unwrap();
+    pub static ref FORWARDER_DROPS: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_proxy_forwarder_drops", "Captured proxy packets dropped by the capture forwarder (lag)")
+    ).unwrap();
+    pub static ref PROXY_REVISION_LAG: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_proxy_effective_revision_lag", "Max gap between desired and agent-effective proxy revision across enabled rules")
+    ).unwrap();
 }
 
 pub fn register_metrics() {
@@ -71,6 +83,10 @@ pub fn register_metrics() {
     let _ = r.register(Box::new(CONTROL_PLANE_REVISION.clone()));
     let _ = r.register(Box::new(AGENTS_SYNC_PENDING.clone()));
     let _ = r.register(Box::new(AGENTS_SYNC_ERROR.clone()));
+    let _ = r.register(Box::new(PROXY_TRANSITION_FAILURES.clone()));
+    let _ = r.register(Box::new(CAPTURE_SOURCE_CONFLICTS.clone()));
+    let _ = r.register(Box::new(FORWARDER_DROPS.clone()));
+    let _ = r.register(Box::new(PROXY_REVISION_LAG.clone()));
 }
 
 /// Refresh gauge metrics from DB and agent state.
@@ -174,6 +190,20 @@ async fn refresh_gauges(
     }
     AGENTS_SYNC_PENDING.set(pending);
     AGENTS_SYNC_ERROR.set(errored);
+
+    // Proxy diagnostics: conflicts + forwarder drops come from the last
+    // heartbeats; the revision lag from desired vs agent-effective rows.
+    CAPTURE_SOURCE_CONFLICTS.set(agent_service.capture_conflicts_total() as i64);
+    FORWARDER_DROPS.set(agent_service.forwarder_drops_total() as i64);
+    if let Ok(lag) = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(revision - COALESCE(effective_revision, 0)), 0)
+         FROM proxy_protection WHERE enabled",
+    )
+    .fetch_one(pool)
+    .await
+    {
+        PROXY_REVISION_LAG.set(lag);
+    }
 }
 
 /// GET /metrics — Prometheus scrape endpoint (no auth required)
