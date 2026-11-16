@@ -9,7 +9,7 @@ use actix_identity::Identity;
 use actix_web::{HttpResponse, Responder, get, post, web};
 use serde::Deserialize;
 
-use self::l7_dto::{HeaderSearchQuery, HeaderSearchResult};
+use self::l7_dto::{HeaderMatchMode, HeaderSearchQuery, HeaderSearchResult, HeaderSearchScope};
 use self::l7_service::L7Service;
 use self::user_agent_dto::UserAgentsQuery;
 use self::user_agent_service::{UaError, UserAgentService};
@@ -98,6 +98,7 @@ async fn get_http_headers(
     params(HeaderSearchQuery),
     responses(
         (status = 200, description = "Streams matching header criteria"),
+        (status = 400, description = "Invalid match_mode"),
         (status = 401, description = "Unauthorized")
     ),
     tag = "l7"
@@ -109,8 +110,19 @@ async fn search_by_header(
     query: web::Query<HeaderSearchQuery>,
 ) -> impl Responder {
     let limit = query.limit.min(500);
+    let match_mode = match HeaderMatchMode::parse(query.match_mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(msg) => return HttpResponse::BadRequest().json(serde_json::json!({"error": msg})),
+    };
     match l7_service
-        .search_by_header(&query.name, query.value.as_deref(), limit)
+        .search_by_header(
+            &query.name,
+            query.value.as_deref(),
+            limit,
+            query.service_id,
+            query.agent_id.as_deref(),
+            match_mode,
+        )
         .await
     {
         Ok((stream_ids, total)) => {
@@ -122,6 +134,7 @@ async fn search_by_header(
 
 /// Search by multiple headers (AND logic)
 /// Body: [{"name": "Host", "value": "example.com"}, {"name": "Cookie"}]
+/// Query params: service_id, agent_id, match_mode (scope every header filter).
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct MultiHeaderFilter {
     name: String,
@@ -131,8 +144,10 @@ struct MultiHeaderFilter {
 #[utoipa::path(
     post,
     path = "/api/http/search/multi",
+    params(HeaderSearchScope),
     responses(
         (status = 200, description = "Streams matching all header criteria (AND)"),
+        (status = 400, description = "Invalid match_mode"),
         (status = 401, description = "Unauthorized")
     ),
     tag = "l7"
@@ -142,14 +157,28 @@ async fn search_by_headers(
     _identity: Identity,
     l7_service: web::Data<L7Service>,
     body: web::Json<Vec<MultiHeaderFilter>>,
+    scope: web::Query<HeaderSearchScope>,
 ) -> impl Responder {
+    let match_mode = match HeaderMatchMode::parse(scope.match_mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(msg) => return HttpResponse::BadRequest().json(serde_json::json!({"error": msg})),
+    };
     let filters: Vec<(String, Option<String>)> = body
         .into_inner()
         .into_iter()
         .map(|f| (f.name, f.value))
         .collect();
 
-    match l7_service.search_by_headers(&filters, 100).await {
+    match l7_service
+        .search_by_headers(
+            &filters,
+            100,
+            scope.service_id,
+            scope.agent_id.as_deref(),
+            match_mode,
+        )
+        .await
+    {
         Ok(stream_ids) => {
             let total = stream_ids.len() as i64;
             HttpResponse::Ok().json(HeaderSearchResult { stream_ids, total })
