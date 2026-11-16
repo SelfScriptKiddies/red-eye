@@ -1,0 +1,7 @@
+[package]
+name = "filter-dsl"
+version = "0.1.0"
+edition = "2021"
+description = "Bounded CEL-style expression DSL shared by the red-eye analyzer and agent"
+
+[dependencies]
