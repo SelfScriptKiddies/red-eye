@@ -44,7 +44,7 @@ impl UserAgentService {
     ) -> Result<UserAgentsResponse, UaError> {
         let sort = UaSort::parse(sort).map_err(UaError::BadRequest)?;
         let order = UaOrder::parse(order).map_err(UaError::BadRequest)?;
-        if limit < 1 || limit > UA_LIMIT_MAX {
+        if !(1..=UA_LIMIT_MAX).contains(&limit) {
             return Err(UaError::BadRequest(format!(
                 "limit must be between 1 and {}",
                 UA_LIMIT_MAX
@@ -99,10 +99,8 @@ impl UserAgentService {
         let has_overflow = overflow.is_some();
         // The overflow summary is a fixed tail item: it appears once the
         // ordinary pages run out, never as a clickable exact value.
-        if next_cursor.is_none() {
-            if let Some(overflow_item) = overflow {
-                items.push(overflow_item);
-            }
+        if let (None, Some(overflow_item)) = (&next_cursor, overflow) {
+            items.push(overflow_item);
         }
 
         let aggregation_started = self.repository.aggregation_started().await?;
