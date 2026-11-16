@@ -145,6 +145,9 @@ pub async fn run() -> std::io::Result<()> {
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
+    let ua_service = web::Data::new(
+        api::l7::user_agent_service::UserAgentService::new_from_pgpool(pool.clone()),
+    );
     let pg_pool = web::Data::new(pool.clone());
 
     health::init_start_time();
@@ -528,6 +531,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
             .app_data(l7_service.clone())
+            .app_data(ua_service.clone())
             .app_data(updater.clone())
             .app_data(control_data.clone())
             .app_data(broadcaster.clone())

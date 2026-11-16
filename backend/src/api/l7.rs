@@ -1,6 +1,9 @@
 pub mod l7_dto;
 pub mod l7_repository;
 pub mod l7_service;
+pub mod user_agent_dto;
+pub mod user_agent_repository;
+pub mod user_agent_service;
 
 use actix_identity::Identity;
 use actix_web::{HttpResponse, Responder, get, post, web};
@@ -8,6 +11,8 @@ use serde::Deserialize;
 
 use self::l7_dto::{HeaderSearchQuery, HeaderSearchResult};
 use self::l7_service::L7Service;
+use self::user_agent_dto::UserAgentsQuery;
+use self::user_agent_service::{UaError, UserAgentService};
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_http_messages)
@@ -15,7 +20,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .service(get_http_headers)
         .service(search_by_header)
         .service(search_by_headers)
-        .service(get_grpc_messages);
+        .service(get_grpc_messages)
+        .service(get_service_user_agents);
 }
 
 #[utoipa::path(
@@ -163,5 +169,47 @@ async fn get_grpc_messages(
     match l7_service.get_grpc_messages(stream_id.into_inner()).await {
         Ok(messages) => HttpResponse::Ok().json(messages),
         Err(e) => crate::api::sqlx_error_response(&e),
+    }
+}
+
+/// Distinct observed User-Agent values of one HTTP service, served from
+/// the bounded aggregate buckets (never a scan of HTTP partitions).
+#[utoipa::path(
+    get,
+    path = "/api/http/service/{service_id}/user-agents",
+    params(UserAgentsQuery),
+    responses(
+        (status = 200, description = "User-Agent listing page"),
+        (status = 400, description = "Invalid limit, sort, order or cursor"),
+        (status = 404, description = "Unknown service"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "l7"
+)]
+#[get("/http/service/{service_id}/user-agents")]
+async fn get_service_user_agents(
+    _identity: Identity,
+    ua_service: web::Data<UserAgentService>,
+    service_id: web::Path<i64>,
+    query: web::Query<UserAgentsQuery>,
+) -> impl Responder {
+    match ua_service
+        .list(
+            service_id.into_inner(),
+            query.agent_id.as_deref(),
+            query.limit,
+            query.cursor.as_deref(),
+            query.sort.as_deref(),
+            query.order.as_deref(),
+        )
+        .await
+    {
+        Ok(response) => HttpResponse::Ok().json(response),
+        Err(UaError::BadRequest(msg)) => {
+            HttpResponse::BadRequest().json(serde_json::json!({"error": msg}))
+        }
+        Err(UaError::ServiceNotFound(id)) => HttpResponse::NotFound()
+            .json(serde_json::json!({"error": format!("service {} not found", id)})),
+        Err(UaError::Database(e)) => crate::api::sqlx_error_response(&e),
     }
 }
