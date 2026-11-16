@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use crate::api::agent::agent_service::AgentService;
 
-/// Sync all block-type tags as drop filters to all agents.
-/// Called when a tag with special_type=block/block_conn is created/updated/deleted.
+/// Sync all block-family filters as drop filters to all agents.
+/// Called when a filter with action=block/block_connection is created/updated/deleted.
 pub async fn sync_block_filters(pool: &PgPool, agent_service: &Arc<AgentService>) {
-    // Fetch all block tags (both block and block_conn)
     let block_tags = match sqlx::query_as::<_, (String, String, String, String, String)>(
-        "SELECT template_type, template, direction, name, special_type
+        "SELECT template_type, template, direction, name, action
          FROM tag_name
-         WHERE special_type IN ('block', 'block_conn')",
+         WHERE action IN ('block', 'block_connection')",
     )
     .fetch_all(pool)
     .await
@@ -26,7 +25,7 @@ pub async fn sync_block_filters(pool: &PgPool, agent_service: &Arc<AgentService>
     // Convert to agent FilterSync format
     let filters: Vec<serde_json::Value> = block_tags
         .iter()
-        .map(|(ttype, template, direction, name, special_type)| {
+        .map(|(ttype, template, direction, name, action)| {
             let dir = match direction.as_str() {
                 "in" => "c2s",
                 "out" => "s2c",
@@ -38,7 +37,7 @@ pub async fn sync_block_filters(pool: &PgPool, agent_service: &Arc<AgentService>
                 "bsubstr" => "bsubstr",
                 _ => "substr",
             };
-            let action = if special_type == "block_conn" {
+            let filter_action = if action == "block_connection" {
                 "drop_connection"
             } else {
                 "drop"
@@ -48,7 +47,7 @@ pub async fn sync_block_filters(pool: &PgPool, agent_service: &Arc<AgentService>
                 "kind": kind,
                 "pattern": template,
                 "direction": dir,
-                "action": action
+                "action": filter_action
             })
         })
         .collect();

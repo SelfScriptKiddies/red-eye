@@ -347,6 +347,22 @@ mod tests {
             template: "flag{{".into(),
             direction: direction.into(),
             special_type: None,
+            action: "tag".into(),
+            enabled: true,
+            ip_network: None,
+            ip_endpoint: None,
+            expression_source: None,
+            service_targets_global: true,
+            agent_targets_global: true,
+            service_ids: vec![],
+            agent_ids: vec![],
+            threshold_count: None,
+            threshold_window_secs: None,
+            threshold_group_by: None,
+            threshold_cooldown_secs: None,
+            threshold_block_secs: None,
+            expires_at: None,
+            revision: 0,
         };
 
         assert_eq!(

@@ -156,7 +156,7 @@ fn match_team(
         .map(|(_, name)| name.clone())
 }
 
-/// Background task: polls for new triggers with special_type (flag, alert).
+/// Background task: polls for new flag/alert triggers (tag_name.action).
 /// Runs every 3 seconds.
 pub fn spawn_special_trigger_handler(pool: PgPool, broadcaster: Arc<broadcast::Sender<String>>) {
     let team_cache = Arc::new(RwLock::new(TeamCache::new()));
@@ -170,7 +170,7 @@ pub fn spawn_special_trigger_handler(pool: PgPool, broadcaster: Arc<broadcast::S
         loop {
             ticker.tick().await;
 
-            // Find triggers with special_type since last check. One row per
+            // Find flag/alert triggers since last check. One row per
             // tag match (the analyzer inserts one tag row per regex match):
             // a packet with N flag matches yields N submissions — identical
             // flag STRINGS are still deduplicated by FlagQueue::is_known.
@@ -180,25 +180,24 @@ pub fn spawn_special_trigger_handler(pool: PgPool, broadcaster: Arc<broadcast::S
             // (database/init/03_tag_table.sql), so t.id fully orders rows;
             // within one packet rows come out in match (insertion) order.
             //
-            // Direction guard (flags only): a flag tag configured 'in'/'out'
+            // Direction guard (flags only): a flag filter configured 'in'/'out'
             // must only be submitted when the packet actually flowed that way
             // (packets.direction: 'dest' = inbound to the machine, 'orig' =
             // outbound). Defense-in-depth against analyzers that predate
             // direction-aware filtering. Alerts stay direction-agnostic —
             // they are informational (WebSocket) and useful in both
-            // directions. Unknown/NULL/'both' direction values are treated
+            // directions. Unknown/'both' direction values are treated
             // as Both (mirrors the analyzer DTO mapping).
             let triggers = match sqlx::query_as::<_, (i64, i32, i32, i64, String, String, i64)>(
                 "SELECT t.packet_id, t.start_index, t.end_index, tn.id as tag_id,
-                        tn.name as tag_name, tn.special_type, p.stream_id
+                        tn.name as tag_name, tn.action, p.stream_id
                  FROM tag t
                  JOIN tag_name tn ON tn.id = t.tag_id
                  JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
-                 WHERE tn.special_type IS NOT NULL
+                 WHERE tn.action IN ('flag', 'alert')
                    AND t.packet_id > $1
                    AND (
-                        tn.special_type <> 'flag'
-                        OR tn.direction IS NULL
+                        tn.action <> 'flag'
                         OR tn.direction NOT IN ('in', 'out')
                         OR (tn.direction = 'in'  AND p.direction = 'dest')
                         OR (tn.direction = 'out' AND p.direction = 'orig')
@@ -227,10 +226,10 @@ pub fn spawn_special_trigger_handler(pool: PgPool, broadcaster: Arc<broadcast::S
                 // broadcasts for extra matches carry no extra info.
                 let mut alerted: HashSet<(i64, i64)> = HashSet::new();
 
-                for (packet_id, start_idx, end_idx, tag_id, tag_name, special_type, stream_id) in
+                for (packet_id, start_idx, end_idx, tag_id, tag_name, action, stream_id) in
                     &triggers
                 {
-                    match special_type.as_str() {
+                    match action.as_str() {
                         "flag" => {
                             handle_flag(
                                 &pool,
