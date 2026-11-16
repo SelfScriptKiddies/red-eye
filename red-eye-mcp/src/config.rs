@@ -45,10 +45,12 @@ impl Config {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_BACKEND_URL.to_string());
+        // An empty token is allowed at boot: the service starts fail-closed
+        // (every request rejected) so the compose stack comes up before an
+        // operator generates the credential in Settings.
         let service_token = std::env::var("MCP_SERVICE_TOKEN")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .ok_or("MCP_SERVICE_TOKEN is required (generate it in Red Eye Settings)")?;
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
         let mode = match std::env::var("MCP_MODE").unwrap_or_default().trim() {
             "" | "read_only" => Mode::ReadOnly,
             "full_control" => Mode::FullControl,

@@ -46,6 +46,12 @@ impl BackendClient {
         })
     }
 
+    /// No credential configured: the whole service is disabled. Authz
+    /// fails closed for every presented token.
+    pub fn is_disabled(&self) -> bool {
+        self.service_token.trim().is_empty()
+    }
+
     async fn get(&self, path: &str) -> Result<Value, BackendError> {
         let resp = self
             .http
@@ -112,6 +118,11 @@ impl BackendClient {
     /// Validate a presented MCP bearer token. Any backend failure fails
     /// closed: no identity, no fallback.
     pub async fn authorize(&self, presented_token: &str) -> Result<TokenIdentity, BackendError> {
+        if self.is_disabled() {
+            return Err(BackendError::Unavailable(
+                "service credential not configured".into(),
+            ));
+        }
         match self
             .post(
                 "/api/mcp/tokens/authz",
