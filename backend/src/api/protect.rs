@@ -24,9 +24,11 @@ fn proxy_name(service_name: &str) -> String {
 
 /// Default proxy port — tries port+10000, falls back to +10001..+10099 if taken.
 fn default_proxy_port(service_port: i32, used_ports: &[u16]) -> u16 {
-    let base = (service_port + 10000) as u16;
+    // Keep the +10000 offset inside valid port range instead of wrapping
+    // (a wrapped port would collide with real service ports).
+    let base = (service_port + 10000).clamp(1024, 65535) as u16;
     for offset in 0..100 {
-        let candidate = base + offset;
+        let candidate = base.saturating_add(offset);
         if !used_ports.contains(&candidate) {
             return candidate;
         }
@@ -80,14 +82,16 @@ async fn toggle_protection(
     };
 
     if body.enable {
+        // Protocol comes from the service row: a UDP service is proxied
+        // and redirected with nftables over udp, never hardcoded to tcp.
         let mut command = serde_json::json!({
             "type": "ProxyAdd",
             "name": rule_name,
             "listen": format!("0.0.0.0:{}", harpoon_port),
             "target": format!("127.0.0.1:{}", service.port),
-            "protocol": "tcp",
+            "protocol": service.protocol.to_lowercase(),
             "nft_redirect_port": service.port,
-            "http2": service.http2_parse
+            "http2": service.http2_parse && service.protocol.eq_ignore_ascii_case("tcp")
         });
 
         if body.tls_mitm {

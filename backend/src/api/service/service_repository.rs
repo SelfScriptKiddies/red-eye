@@ -1,5 +1,5 @@
 use crate::api::service::service_dto::Service;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 pub struct ServiceRepository {
     pgpool: PgPool,
@@ -10,7 +10,14 @@ impl ServiceRepository {
         ServiceRepository { pgpool }
     }
 
-    pub async fn get_service_by_id(&self, id: i64) -> Result<Service, sqlx::Error> {
+    pub fn pool(&self) -> &PgPool {
+        &self.pgpool
+    }
+
+    pub async fn get_service_by_id(
+        conn: &mut PgConnection,
+        id: i64,
+    ) -> Result<Service, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
@@ -21,7 +28,7 @@ impl ServiceRepository {
             "#,
         )
         .bind(id)
-        .fetch_one(&self.pgpool)
+        .fetch_one(conn)
         .await
     }
 
@@ -38,8 +45,20 @@ impl ServiceRepository {
         .await
     }
 
-    /// Explicit agent ids per service id (empty for global services).
-    pub async fn get_agent_ids_by_service(&self, service_id: i64) -> Result<Vec<String>, sqlx::Error> {
+    /// Explicit agent ids per service id, keyed by service id (empty when
+    /// every service is global).
+    pub async fn get_all_agent_bindings(&self) -> Result<Vec<(i64, String)>, sqlx::Error> {
+        sqlx::query_as::<_, (i64, String)>(
+            "SELECT service_id, agent_id FROM agent_service ORDER BY service_id, agent_id",
+        )
+        .fetch_all(&self.pgpool)
+        .await
+    }
+
+    pub async fn get_agent_ids_by_service(
+        &self,
+        service_id: i64,
+    ) -> Result<Vec<String>, sqlx::Error> {
         sqlx::query_scalar(
             "SELECT agent_id FROM agent_service WHERE service_id = $1 ORDER BY agent_id",
         )
@@ -48,7 +67,10 @@ impl ServiceRepository {
         .await
     }
 
-    pub async fn create_service(&self, service: &Service) -> Result<Service, sqlx::Error> {
+    pub async fn insert_service(
+        conn: &mut PgConnection,
+        service: &Service,
+    ) -> Result<Service, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
             INSERT INTO service (name, port, chunked_transfer_encoding, urldecode,
@@ -58,24 +80,28 @@ impl ServiceRepository {
             RETURNING id, name, port, chunked_transfer_encoding, urldecode,
                       merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
                       alert_flag_leak, protocol, is_global
-            "#)
-            .bind(&service.name)
-            .bind(service.port)
-            .bind(service.chunked_transfer_encoding)
-            .bind(service.urldecode)
-            .bind(service.merge_adjacent_packets)
-            .bind(service.inflate_websockets)
-            .bind(service.decrypt_tls)
-            .bind(service.http_parse)
-            .bind(service.http2_parse)
-            .bind(service.alert_flag_leak)
-            .bind(&service.protocol)
-            .bind(service.is_global)
-            .fetch_one(&self.pgpool)
-            .await
+            "#,
+        )
+        .bind(&service.name)
+        .bind(service.port)
+        .bind(service.chunked_transfer_encoding)
+        .bind(service.urldecode)
+        .bind(service.merge_adjacent_packets)
+        .bind(service.inflate_websockets)
+        .bind(service.decrypt_tls)
+        .bind(service.http_parse)
+        .bind(service.http2_parse)
+        .bind(service.alert_flag_leak)
+        .bind(&service.protocol)
+        .bind(service.is_global)
+        .fetch_one(conn)
+        .await
     }
 
-    pub async fn update_service(&self, service: &Service) -> Result<Service, sqlx::Error> {
+    pub async fn update_service_row(
+        conn: &mut PgConnection,
+        service: &Service,
+    ) -> Result<Service, sqlx::Error> {
         sqlx::query_as::<_, Service>(
             r#"
             UPDATE service
@@ -86,33 +112,90 @@ impl ServiceRepository {
             RETURNING id, name, port, chunked_transfer_encoding, urldecode,
                       merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
                       alert_flag_leak, protocol, is_global
-            "#)
-            .bind(service.id)
-            .bind(&service.name)
-            .bind(service.port)
-            .bind(service.chunked_transfer_encoding)
-            .bind(service.urldecode)
-            .bind(service.merge_adjacent_packets)
-            .bind(service.inflate_websockets)
-            .bind(service.decrypt_tls)
-            .bind(service.http_parse)
-            .bind(service.http2_parse)
-            .bind(service.alert_flag_leak)
-            .bind(&service.protocol)
-            .bind(service.is_global)
-            .fetch_one(&self.pgpool)
-            .await
-    }
-
-    pub async fn delete_service(&self, id: i64) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            DELETE FROM service WHERE id = $1
             "#,
         )
-        .bind(id)
-        .execute(&self.pgpool)
-        .await?;
+        .bind(service.id)
+        .bind(&service.name)
+        .bind(service.port)
+        .bind(service.chunked_transfer_encoding)
+        .bind(service.urldecode)
+        .bind(service.merge_adjacent_packets)
+        .bind(service.inflate_websockets)
+        .bind(service.decrypt_tls)
+        .bind(service.http_parse)
+        .bind(service.http2_parse)
+        .bind(service.alert_flag_leak)
+        .bind(&service.protocol)
+        .bind(service.is_global)
+        .fetch_one(conn)
+        .await
+    }
+
+    pub async fn delete_service_row(conn: &mut PgConnection, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM service WHERE id = $1")
+            .bind(id)
+            .execute(conn)
+            .await?;
         Ok(())
+    }
+
+    /// Replace the explicit assignment set: agent_service rows become the
+    /// complete agent set whenever a service is not global.
+    pub async fn replace_assignments(
+        conn: &mut PgConnection,
+        service_id: i64,
+        agent_ids: &[String],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM agent_service WHERE service_id = $1")
+            .bind(service_id)
+            .execute(&mut *conn)
+            .await?;
+        for agent_id in agent_ids {
+            sqlx::query(
+                "INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(agent_id)
+            .bind(service_id)
+            .execute(&mut *conn)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn clear_assignments(
+        conn: &mut PgConnection,
+        service_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM agent_service WHERE service_id = $1")
+            .bind(service_id)
+            .execute(conn)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn bind_agent(
+        conn: &mut PgConnection,
+        agent_id: &str,
+        service_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT INTO agent_service (agent_id, service_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(agent_id)
+            .bind(service_id)
+            .execute(conn)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn unbind_agent(
+        conn: &mut PgConnection,
+        agent_id: &str,
+        service_id: i64,
+    ) -> Result<u64, sqlx::Error> {
+        let res = sqlx::query("DELETE FROM agent_service WHERE agent_id = $1 AND service_id = $2")
+            .bind(agent_id)
+            .bind(service_id)
+            .execute(conn)
+            .await?;
+        Ok(res.rows_affected())
     }
 }

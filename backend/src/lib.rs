@@ -1,6 +1,7 @@
 use crate::api::{
-    agent::agent_service::{
-        AgentService, spawn_docker_containers_listener, spawn_heartbeat_listener,
+    agent::agent_service::AgentService,
+    agent::{
+        agent_config::ControlPlane, spawn_docker_containers_listener, spawn_heartbeat_listener,
     },
     l7::l7_service::L7Service,
     packet::packet_service::PacketService,
@@ -128,7 +129,6 @@ pub async fn run() -> std::io::Result<()> {
     let packet_service = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
-    let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
     let pg_pool = web::Data::new(pool.clone());
 
@@ -147,15 +147,18 @@ pub async fn run() -> std::io::Result<()> {
     let updater_arc = Arc::new(UpdateAgent::new(&config).await);
     let updater = web::Data::from(updater_arc.clone());
 
+    // Control plane: owns the revision counter, per-agent configuration
+    // state and snapshot publication (see api/agent/agent_config.rs).
+    let control_plane = Arc::new(ControlPlane::new(pool.clone(), updater_arc.clone()));
+    let control_data = web::Data::new(control_plane.clone());
+
+    // Service CRUD commits its revision bump in the same transaction.
+    let service_service = web::Data::new(ServiceService::new_from_pgpool(
+        pool.clone(),
+        control_plane.clone(),
+    ));
+
     debug!("{:?}", &config);
-
-    // Запускаем периодическую синхронизацию конфигурации каждые 5 минут
-    let service_service_arc = Arc::new(ServiceService::new_from_pgpool(pool.clone()));
-    let tag_service_arc = Arc::new(TagService::new_from_pgpool(pool.clone()));
-
-    tokio::spawn(async move {
-        start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
-    });
 
     // Partition management + cleanup via partition drops
     {
@@ -348,12 +351,36 @@ pub async fn run() -> std::io::Result<()> {
     let agent_service = Arc::new(AgentService::new(agent_nats_client.clone()));
     let agent_service_data = web::Data::new(agent_service.clone());
 
-    // Subscribe to agent heartbeats (syncs block filters on new agent connect)
+    // Subscribe to agent heartbeats: persist reported network state and
+    // boot ids, publish snapshots on new boot / stale revision; block
+    // filters are pushed on first contact.
     spawn_heartbeat_listener(
         agent_nats_client.clone(),
         agent_service.clone(),
-        pool.clone(),
+        control_plane.clone(),
     );
+
+    // Periodic config sync (analyzers) + agent snapshot reconciliation
+    {
+        let updater_arc = updater_arc.clone();
+        let control_plane = control_plane.clone();
+        let agent_service = agent_service.clone();
+        let service_service_arc = Arc::new(ServiceService::new_from_pgpool(
+            pool.clone(),
+            control_plane.clone(),
+        ));
+        let tag_service_arc = Arc::new(TagService::new_from_pgpool(pool.clone()));
+        tokio::spawn(async move {
+            start_config_sync_scheduler(
+                updater_arc,
+                service_service_arc,
+                tag_service_arc,
+                control_plane,
+                agent_service,
+            )
+            .await;
+        });
+    }
 
     // Subscribe to agent Docker container listings (UI "add by container")
     spawn_docker_containers_listener(agent_nats_client.clone(), agent_service.clone());
@@ -396,6 +423,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(service_service.clone())
             .app_data(l7_service.clone())
             .app_data(updater.clone())
+            .app_data(control_data.clone())
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
             .app_data(version_service_data.clone())

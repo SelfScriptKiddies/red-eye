@@ -25,6 +25,33 @@ pub struct AgentInfo {
     /// report it yet.
     #[serde(default)]
     pub version: Option<String>,
+    /// Boot identifier: fresh UUID per agent process start. The backend
+    /// publishes a full snapshot whenever it changes (agent restarted).
+    /// None = older agent binary.
+    #[serde(default)]
+    pub boot_id: Option<String>,
+    /// Bootstrap capture interface (env/CLI value the agent runs with)
+    #[serde(default)]
+    pub interface: Option<String>,
+    /// Bootstrap machine IP (env/CLI value)
+    #[serde(default)]
+    pub machine_ip: Option<String>,
+    /// Configuration revision the agent last applied from a snapshot
+    #[serde(default)]
+    pub applied_revision: Option<u64>,
+    /// Effective interface in use (override applied or bootstrap)
+    #[serde(default)]
+    pub effective_interface: Option<String>,
+    /// Effective machine IP in use
+    #[serde(default)]
+    pub effective_machine_ip: Option<String>,
+    /// Sanitized snapshot application error (no payload or credentials)
+    #[serde(default)]
+    pub last_sync_error: Option<String>,
+    /// True when capture is idle because no services are assigned
+    /// (healthy, waiting for control-plane updates)
+    #[serde(default)]
+    pub sniffer_idle: Option<bool>,
     pub timestamp_ms: u64,
     /// Computed by the backend: is the agent currently reachable
     #[serde(default)]

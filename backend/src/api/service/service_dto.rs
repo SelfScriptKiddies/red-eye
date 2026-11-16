@@ -76,7 +76,9 @@ pub struct MutationResult {
 
 impl From<ServiceTransfer> for Service {
     fn from(transfer: ServiceTransfer) -> Self {
-        let protocol = transfer.normalized_protocol().unwrap_or_else(|| "TCP".into());
+        let protocol = transfer
+            .normalized_protocol()
+            .unwrap_or_else(|| "TCP".into());
         Service {
             id: 0,
             name: transfer.name,

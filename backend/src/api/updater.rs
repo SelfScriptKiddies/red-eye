@@ -208,6 +208,8 @@ pub async fn start_config_sync_scheduler(
     updater: std::sync::Arc<UpdateAgent>,
     service_service: std::sync::Arc<crate::api::service::service_service::ServiceService>,
     tag_service: std::sync::Arc<crate::api::tag::tag_service::TagService>,
+    control: std::sync::Arc<crate::api::agent::agent_config::ControlPlane>,
+    agent_service: std::sync::Arc<crate::api::agent::agent_service::AgentService>,
 ) {
     use tokio::time::{Duration, interval};
 
@@ -251,6 +253,10 @@ pub async fn start_config_sync_scheduler(
         if let Err(e) = updater.sync_config(services_data, filters_data).await {
             error!("Failed to send config sync: {}", e);
         }
+
+        // Re-send snapshots to agents whose acknowledged revision lags the
+        // current control-plane revision (bounded: one attempt per tick).
+        control.reconcile_stale_agents(&agent_service).await;
     }
 }
 
