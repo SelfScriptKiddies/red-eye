@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { AgentContainerInfo, AgentListItem, apiFetch, fetchAgentContainers, fetchFavoriteUsage, FavoriteUsage } from '../../lib/api';
 import { capacityPercent, formatBytes } from '../../lib/favoriteRetention';
 import { AI_SETTING_ROWS, fetchAiStatus, putAiSetting, type AiStatus } from '../../lib/aiVerdict';
+import { McpTokensBlock } from './McpTokensBlock';
+import { SocAnalysisBlock } from './SocAnalysisBlock';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -1023,6 +1025,20 @@ export function SettingsPage() {
                             <div className="card-content">
                                 <h4>AI-анализ стримов (JEV)</h4>
                                 <AiAnalysisBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>LLM-SOC триаж</h4>
+                                <SocAnalysisBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>MCP токены</h4>
+                                <McpTokensBlock />
                             </div>
                         </div>
 

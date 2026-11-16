@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { subscribeWs } from '../../lib/wsBus';
 import { isAiVerdictEvent } from '../../lib/aiVerdict';
+import { isSocTriageEvent } from '../../lib/socTriage';
 import './AlertToast.css';
 
 interface AlertEvent {
@@ -61,6 +62,17 @@ export default function AlertToast() {
                         data.attack_class,
                         `JEV: стрим #${data.stream_id}: ревизия до пакета #${data.last_packet_id}`,
                         `/packets?stream=${data.stream_id}&verdict=${data.verdict_id}`
+                    );
+                    return;
+                }
+                // SOC likely_attack above the operator threshold. The toast
+                // links to the exact stream revision; the recommendation is
+                // informational and nothing is executed automatically.
+                if (isSocTriageEvent(data)) {
+                    pushToast(
+                        `SOC: ${data.verdict}`,
+                        `стрим #${data.stream_id}: ревизия #${data.stream_revision}, conf ${Math.round(data.confidence * 100)}%`,
+                        `/packets?stream=${data.stream_id}&result=${data.result_id}`
                     );
                 }
             },

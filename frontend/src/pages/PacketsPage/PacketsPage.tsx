@@ -10,6 +10,7 @@ import { DiffView } from '../../components/DiffView';
 
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
 import { AiVerdictPanel } from '../../components/AiVerdict';
+import { SocTriagePanel } from '../../components/SocTriage';
 import { apiFetch, copyText, setStreamFavorite, FavoriteCapacityError } from '../../lib/api';
 import { formatBytes } from '../../lib/favoriteRetention';
 import { shq, pyStr } from '../../lib/exportEscaping';
@@ -892,6 +893,9 @@ export function PacketsPage() {
                         <div className="toolbar-left">
                             {selectedStreamIds.length === 1 && (
                                 <AiVerdictPanel streamId={selectedStreamIds[0]} />
+                            )}
+                            {selectedStreamIds.length === 1 && (
+                                <SocTriagePanel streamId={selectedStreamIds[0]} />
                             )}
                             <div className="stream-info-wrap">
                                 <button

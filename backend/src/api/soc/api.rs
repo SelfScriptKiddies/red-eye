@@ -529,6 +529,9 @@ async fn submit_result(
 
 fn rejection_response(rej: ResultRejection) -> HttpResponse {
     crate::api::metrics::SOC_RESULT_REJECTIONS.inc();
+    if rej.message().contains("was not fetched") {
+        crate::api::metrics::SOC_EVIDENCE_REJECTIONS.inc();
+    }
     HttpResponse::UnprocessableEntity().json(json!({
         "error": {"code": rej.code(), "message": rej.message()}
     }))
