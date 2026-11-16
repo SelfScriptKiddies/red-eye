@@ -181,6 +181,7 @@ async fn toggle_protection(
         &control,
         &body,
         &rule_name,
+        revision,
         proxy_port,
         service.port,
         protocol,
@@ -215,6 +216,7 @@ async fn publish_desired(
     control: &Arc<ControlPlane>,
     body: &ProtectRequest,
     rule_name: &str,
+    revision: i64,
     proxy_port: Option<u16>,
     service_port: i32,
     protocol: &str,
@@ -226,6 +228,7 @@ async fn publish_desired(
         let mut command = serde_json::json!({
             "type": "ProxyAdd",
             "service_id": body.service_id,
+            "revision": u64::try_from(revision).unwrap_or_default(),
             "name": rule_name,
             "listen": format!("0.0.0.0:{}", proxy_port.unwrap_or_default()),
             "target": format!("127.0.0.1:{}", service_port),
