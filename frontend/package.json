@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/write-version.mjs",
+    "build": "vite build && node scripts/write-version.mjs && node scripts/check-offline-assets.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview"
