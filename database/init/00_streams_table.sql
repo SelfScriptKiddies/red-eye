@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS stream (
     service_id BIGINT NOT NULL,
     l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown',
     first_packet_time BIGINT,
-    last_packet_time BIGINT
+    last_packet_time BIGINT,
+    -- Capturing agent (per-agent attribution); NULL for legacy rows and
+    -- batches without a known agent.
+    agent_id VARCHAR(255)
 );
 
 -- Streams list keyset pagination: the list orders by
