@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS proxy_protection (
     -- Agent-reported diagnostics (never operator inputs).
     effective BOOLEAN NOT NULL DEFAULT FALSE,
     effective_revision BIGINT,
+    -- Agent-reported capture phase: "effective" | "transitioning" |
+    -- "capture_unavailable" | "failed"; NULL = nothing reported yet.
+    reported_state TEXT,
     last_error TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT unique_proxy_agent_service UNIQUE (agent_id, service_id)

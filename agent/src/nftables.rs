@@ -76,17 +76,17 @@ impl NftablesManager {
     }
 
     /// Add a single redirect rule (for auto-management by harpoon proxy).
-    /// Skips if a redirect for this original_port already exists.
+    /// Identity is (protocol, original_port): TCP and UDP redirects on the
+    /// same numeric port are independent rules.
     pub fn add_redirect(&mut self, rule: RedirectRule) -> Result<()> {
-        // Deduplicate: if a rule for this port exists, update it
+        // Deduplicate: if the same rule exists, skip; a different target
+        // for the same (protocol, port) replaces it.
         if let Some(existing) = self
             .rules
             .iter()
-            .position(|r| r.original_port == rule.original_port)
+            .position(|r| r.original_port == rule.original_port && r.protocol == rule.protocol)
         {
-            if self.rules[existing].redirect_port == rule.redirect_port
-                && self.rules[existing].protocol == rule.protocol
-            {
+            if self.rules[existing].redirect_port == rule.redirect_port {
                 debug!(
                     "nftables redirect {} {} -> {} already exists, skipping",
                     rule.protocol, rule.original_port, rule.redirect_port
@@ -118,10 +118,12 @@ impl NftablesManager {
         Ok(())
     }
 
-    /// Remove redirect rules for a specific original port.
-    pub fn remove_redirect(&mut self, original_port: u16) -> Result<()> {
+    /// Remove redirect rules for a specific (protocol, original port)
+    /// pair. A TCP removal must never drop a UDP rule on the same port.
+    pub fn remove_redirect(&mut self, protocol: &str, original_port: u16) -> Result<()> {
         let had_rules = self.rules.len();
-        self.rules.retain(|r| r.original_port != original_port);
+        self.rules
+            .retain(|r| !(r.original_port == original_port && r.protocol == protocol));
 
         if self.rules.len() < had_rules {
             // Re-apply all remaining rules (flush + re-add)
@@ -129,7 +131,10 @@ impl NftablesManager {
             for rule in &self.rules.clone() {
                 self.add_redirect_rule(rule)?;
             }
-            info!("Removed nftables redirect for port {}", original_port);
+            info!(
+                "Removed nftables redirect for {} port {}",
+                protocol, original_port
+            );
         }
         Ok(())
     }

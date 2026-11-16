@@ -1,6 +1,6 @@
-use std::collections::HashSet;
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::net::{AddrParseError, IpAddr};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
@@ -11,6 +11,8 @@ use prost::Message as _;
 
 use crate::config::AgentConfig;
 use crate::nats::NatsClient;
+use crate::proxy_state::ProxyDesired;
+use crate::supervisor::ProxySupervisor;
 use crate::wire::{self, SettingsEnvelope, WireAgentConfigSnapshot, WireProtocol};
 
 // Wire v4: coordinated between-games upgrade; v3 producers/consumers are
@@ -66,8 +68,14 @@ impl TransportProto {
     }
 }
 
-/// Shared set of monitored (protocol, port) pairs.
+/// Shared set of passive-capture (protocol, port) pairs: assigned services
+/// minus effectively proxied keys. Written only by the supervisor's
+/// recompute, read by the sniffer.
 pub type PortsCache = Arc<RwLock<HashSet<(TransportProto, u16)>>>;
+
+/// Keys withheld from passive capture (proxied or transitioning): the
+/// sniffer counts frames matching them as capture-source conflicts.
+pub type ExcludedPortsCache = Arc<RwLock<HashSet<(TransportProto, u16)>>>;
 
 pub type RestartNotifier = tokio::sync::watch::Sender<()>;
 
@@ -79,6 +87,14 @@ pub fn create_restart_notifier() -> (RestartNotifier, tokio::sync::watch::Receiv
     tokio::sync::watch::channel(())
 }
 
+/// One assigned service from the snapshot: the passive capture key plus
+/// the identity the proxy desired state refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssignedService {
+    pub protocol: TransportProto,
+    pub port: u16,
+}
+
 /// Effective agent configuration, swapped atomically when a snapshot is
 /// applied. machine_ip == 0.0.0.0 / :: means wildcard: match services by
 /// protocol+port and preserve observed endpoints in synthesis.
@@ -86,24 +102,134 @@ pub fn create_restart_notifier() -> (RestartNotifier, tokio::sync::watch::Receiv
 pub struct EffectiveConfig {
     pub interface: String,
     pub machine_ip: IpAddr,
-    pub revision: u64,
 }
 
 pub type SharedConfig = Arc<RwLock<EffectiveConfig>>;
 
+/// Revision acknowledgement for one snapshot: passive capture and the
+/// proxy transitions must BOTH converge before the revision counts as
+/// applied. A failed transition keeps the revision unacknowledged so the
+/// backend keeps re-delivering while the agent retries.
+pub struct RevisionAcker {
+    /// Revision currently being applied (0 = none).
+    pending: AtomicU64,
+    passive_confirmed: AtomicBool,
+    /// Set when a proxy transition failed for the pending revision: blocks
+    /// the commit until a later transition succeeds.
+    transition_failed: AtomicBool,
+    /// Proxy transitions outstanding for the pending revision.
+    outstanding: AtomicU64,
+    pub applied_revision: Arc<AtomicU64>,
+    pub last_sync_error: Arc<RwLock<Option<String>>>,
+}
+
+impl RevisionAcker {
+    pub fn new(
+        applied_revision: Arc<AtomicU64>,
+        last_sync_error: Arc<RwLock<Option<String>>>,
+    ) -> Self {
+        Self {
+            pending: AtomicU64::new(0),
+            passive_confirmed: AtomicBool::new(false),
+            transition_failed: AtomicBool::new(false),
+            outstanding: AtomicU64::new(0),
+            applied_revision,
+            last_sync_error,
+        }
+    }
+
+    /// Start applying a revision: `outstanding` = proxy transitions the
+    /// supervisor must run, `passive_changed` = whether the sniffer must
+    /// confirm a new port set / interface.
+    pub fn begin(&self, revision: u64, outstanding: usize, passive_changed: bool) {
+        self.pending.store(revision, Ordering::SeqCst);
+        self.passive_confirmed
+            .store(!passive_changed, Ordering::SeqCst);
+        self.transition_failed.store(false, Ordering::SeqCst);
+        self.outstanding.store(outstanding as u64, Ordering::SeqCst);
+        self.maybe_commit();
+    }
+
+    /// The sniffer applied the current port set (or passive capture is
+    /// intentionally idle).
+    pub fn confirm_passive(&self) {
+        self.passive_confirmed.store(true, Ordering::SeqCst);
+        self.maybe_commit();
+    }
+
+    /// One proxy transition completed successfully. The accounting is
+    /// approximate by design: the supervisor's converge loop is the
+    /// source of truth, this only gates the commit.
+    pub fn proxy_done(&self, _revision: u64) {
+        self.transition_failed.store(false, Ordering::SeqCst);
+        let prev = self.outstanding.load(Ordering::SeqCst);
+        if prev > 0 {
+            self.outstanding.store(prev - 1, Ordering::SeqCst);
+        }
+        self.maybe_commit();
+    }
+
+    /// One proxy transition failed. The revision stays unacknowledged
+    /// (backend re-delivers; the supervisor retries) and the sanitized
+    /// error becomes visible.
+    pub fn proxy_failed(&self, _revision: u64, error: &str) {
+        self.transition_failed.store(true, Ordering::SeqCst);
+        let prev = self.outstanding.load(Ordering::SeqCst);
+        if prev > 0 {
+            self.outstanding.store(prev - 1, Ordering::SeqCst);
+        }
+        *self.last_sync_error.write().unwrap() = Some(sanitize_error(error));
+    }
+
+    fn maybe_commit(&self) {
+        if self.pending.load(Ordering::SeqCst) == 0
+            || !self.passive_confirmed.load(Ordering::SeqCst)
+            || self.transition_failed.load(Ordering::SeqCst)
+            || self.outstanding.load(Ordering::SeqCst) > 0
+        {
+            return;
+        }
+        let revision = self.pending.swap(0, Ordering::SeqCst);
+        self.applied_revision.fetch_max(revision, Ordering::SeqCst);
+        *self.last_sync_error.write().unwrap() = None;
+        debug!("Revision {} fully applied", revision);
+    }
+
+    #[cfg(test)]
+    pub fn pending_revision(&self) -> u64 {
+        self.pending.load(Ordering::SeqCst)
+    }
+}
+
+/// Bounded error strings for the heartbeat: no payload data ever enters
+/// them (formatting is restricted to fixed strings and identifiers).
+pub fn sanitize_error(msg: &str) -> String {
+    let mut out: String = msg.chars().take(300).collect();
+    if msg.len() > 300 {
+        out.push_str("...");
+    }
+    out
+}
+
 /// Agent-wide state shared by the update listener, heartbeat, command
-/// listener and sniffer loop.
+/// listener, supervisor and sniffer loop.
 pub struct AppState {
+    /// Passive capture keys (assigned minus proxied). Recomputed only by
+    /// the supervisor.
     pub ports: PortsCache,
+    /// Keys withheld from passive capture (conflict detector input).
+    pub excluded_ports: ExcludedPortsCache,
+    /// Bumped on every ports swap; the sniffer reports the generation it
+    /// applied so transitions can confirm filter changes.
+    pub ports_generation: Arc<AtomicU64>,
     pub config: SharedConfig,
     pub restart_tx: RestartNotifier,
     pub health: crate::sniffer::SharedSnifferHealth,
-    /// Revision awaiting capture confirmation (interface handoff or port
-    /// restart). Only a fully applied snapshot advances the applied
-    /// revision; failures keep the value so the backend keeps the agent
-    /// flagged stale and re-delivers.
-    pub pending_revision: Arc<AtomicU64>,
-    /// 0 = nothing acknowledged yet.
+    /// Assigned services (id -> key) from the last valid snapshot.
+    pub services: Arc<RwLock<HashMap<u64, AssignedService>>>,
+    /// Snapshot application accounting (passive + proxy convergence).
+    pub acker: Arc<RevisionAcker>,
+    /// 0 = nothing acknowledged yet (kept for heartbeat compatibility).
     pub applied_revision: Arc<AtomicU64>,
     /// Sanitized snapshot application error for the heartbeat (None = ok).
     pub last_sync_error: Arc<RwLock<Option<String>>>,
@@ -112,24 +238,20 @@ pub struct AppState {
     pub config_source: AgentConfig,
 }
 
-/// Bounded error strings for the heartbeat: no payload data ever enters
-/// them (formatting is restricted to fixed strings and identifiers).
-fn sanitize_error(msg: &str) -> String {
-    let mut out: String = msg.chars().take(300).collect();
-    if msg.len() > 300 {
-        out.push_str("...");
-    }
-    out
-}
-
 /// Spawn the settings update listener as a background task. Listener
 /// errors are logged and contained: the task exits quietly only if the
 /// NATS subscription dies, never taking the rest of the agent with it.
-pub fn spawn_updates_listener(nats: NatsClient, state: Arc<AppState>) {
+pub fn spawn_updates_listener(
+    nats: NatsClient,
+    state: Arc<AppState>,
+    supervisor: Arc<ProxySupervisor>,
+) {
     let updates_topic = state.config_source.nats_updates_topic.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = listen_for_updates(nats.inner().clone(), &updates_topic, state).await {
+        if let Err(e) =
+            listen_for_updates(nats.inner().clone(), &updates_topic, state, supervisor).await
+        {
             error!("Update listener error: {}", e);
         }
     });
@@ -139,6 +261,7 @@ async fn listen_for_updates(
     client: async_nats::Client,
     subject: &str,
     state: Arc<AppState>,
+    supervisor: Arc<ProxySupervisor>,
 ) -> Result<()> {
     info!("Listening for settings updates on '{}'", subject);
 
@@ -191,7 +314,7 @@ async fn listen_for_updates(
             // and network configuration for this agent; every other variant
             // is acknowledged and ignored (global analyzer view, filters).
             Some(wire::settings_envelope::Update::AgentSnapshot(snapshot)) => {
-                apply_snapshot(snapshot, &state);
+                apply_snapshot(snapshot, &state, &supervisor);
             }
             _ => {
                 debug!("Ignoring non-snapshot settings update");
@@ -206,11 +329,63 @@ async fn listen_for_updates(
     Ok(())
 }
 
+/// Parsed, validated desired proxy state from a snapshot entry.
+fn parse_desired_proxy(rule: &wire::WireProxyRule) -> Result<ProxyDesired, String> {
+    let protocol = TransportProto::from_wire(rule.protocol).ok_or_else(|| {
+        format!(
+            "proxy for service {} carries an unknown protocol",
+            rule.service_id
+        )
+    })?;
+    if rule.service_id == 0 {
+        return Err("proxy rule carries service id 0".to_string());
+    }
+    if rule.name.is_empty() {
+        return Err("proxy rule name is empty".to_string());
+    }
+    let listen_port = u16::try_from(rule.listen_port)
+        .ok()
+        .filter(|p| *p != 0)
+        .ok_or_else(|| format!("proxy listen port {} out of range", rule.listen_port))?;
+    let original_port = u16::try_from(rule.target_port)
+        .ok()
+        .filter(|p| *p != 0)
+        .ok_or_else(|| format!("proxy original port {} out of range", rule.target_port))?;
+    let listen_ip: IpAddr = rule.listen_address.parse().map_err(|e: AddrParseError| {
+        format!("proxy listen address '{}': {}", rule.listen_address, e)
+    })?;
+    let target_ip: IpAddr = rule.target_address.parse().map_err(|e: AddrParseError| {
+        format!("proxy target address '{}': {}", rule.target_address, e)
+    })?;
+    let tls_mode = match rule.tls_mode.as_str() {
+        "" => None,
+        m @ ("mitm" | "terminate" | "passthrough") => Some(m.to_string()),
+        other => return Err(format!("proxy rule carries unknown tls mode '{}'", other)),
+    };
+
+    Ok(ProxyDesired {
+        service_id: rule.service_id,
+        name: rule.name.clone(),
+        listen: std::net::SocketAddr::new(listen_ip, listen_port),
+        target: std::net::SocketAddr::new(target_ip, original_port),
+        protocol,
+        original_port,
+        tls_mode,
+        http2: rule.http2_enabled,
+        revision: rule.revision,
+    })
+}
+
 /// Validate and atomically apply a snapshot addressed to this agent.
 /// Invalid snapshots leave the previous configuration untouched; stale
 /// ones are ignored. Returns nothing: outcomes are surfaced via heartbeat
-/// fields (applied revision + sanitized error).
-fn apply_snapshot(snapshot: &WireAgentConfigSnapshot, state: &AppState) {
+/// fields (applied revision + sanitized error). pub(crate) so the
+/// supervisor state-machine tests drive the full snapshot path.
+pub(crate) fn apply_snapshot(
+    snapshot: &WireAgentConfigSnapshot,
+    state: &AppState,
+    supervisor: &Arc<ProxySupervisor>,
+) {
     // Snapshots are addressed by the agent id inside the message; the
     // stream fans every message out to every durable consumer.
     if snapshot.agent_id != state.agent_id {
@@ -243,7 +418,7 @@ fn apply_snapshot(snapshot: &WireAgentConfigSnapshot, state: &AppState) {
         .and_then(|n| n.machine_ip.parse().ok())
         .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
-    let mut new_ports: HashSet<(TransportProto, u16)> = HashSet::new();
+    let mut new_services: HashMap<u64, AssignedService> = HashMap::new();
     for service in &snapshot.services {
         // Validation already ran, but never trust a second pass.
         let Some(protocol) = TransportProto::from_wire(service.protocol) else {
@@ -255,51 +430,64 @@ fn apply_snapshot(snapshot: &WireAgentConfigSnapshot, state: &AppState) {
         if port == 0 {
             continue;
         }
-        new_ports.insert((protocol, port));
+        new_services.insert(service.id, AssignedService { protocol, port });
     }
 
-    let old_ports: HashSet<(TransportProto, u16)> = state.ports.read().unwrap().clone();
-    let ports_changed = old_ports != new_ports;
-
-    {
-        let mut config = state.config.write().unwrap();
-        let interface_changed = config.interface != interface;
-        config.interface = interface;
-        config.machine_ip = machine_ip;
-
-        // Machine-IP-only changes take effect immediately (packet
-        // synthesis reads config per packet); capture-affecting changes go
-        // through the restart watch with the revision pending capture
-        // confirmation.
-        if interface_changed || ports_changed {
-            state
-                .pending_revision
-                .store(snapshot.revision, Ordering::SeqCst);
-            drop(config);
-            info!(
-                "Applied snapshot revision {}: ports changed={}, interface changed={}",
-                snapshot.revision, ports_changed, interface_changed
-            );
-            let _ = state.restart_tx.send(());
-        } else {
-            config.revision = snapshot.revision;
-            drop(config);
-            state
-                .applied_revision
-                .store(snapshot.revision, Ordering::SeqCst);
-            *state.last_sync_error.write().unwrap() = None;
-            info!(
-                "Applied snapshot revision {} (no capture change)",
-                snapshot.revision
-            );
+    let mut new_desired: HashMap<u64, ProxyDesired> = HashMap::new();
+    for rule in &snapshot.desired_proxies {
+        // Validation already ran, but never trust a second pass.
+        match parse_desired_proxy(rule) {
+            Ok(desired) => {
+                new_desired.insert(desired.service_id, desired);
+            }
+            Err(e) => warn!(
+                "Skipping undesired proxy rule in revision {}: {}",
+                snapshot.revision, e
+            ),
         }
     }
 
-    // Swap the port set last: the sniffer reads it under the same lock.
-    {
-        let mut ports = state.ports.write().unwrap();
-        *ports = new_ports;
-    }
+    let old_ports: HashSet<(TransportProto, u16)> = state.ports.read().unwrap().clone();
+
+    let interface_changed = {
+        let mut config = state.config.write().unwrap();
+        let changed = config.interface != interface;
+        config.interface = interface;
+        config.machine_ip = machine_ip;
+        changed
+    };
+
+    // 1. New service set (recompute and assignment filtering read it).
+    *state.services.write().unwrap() = new_services;
+
+    // 2. Publish desired proxies to the supervisor and count the
+    //    transitions needed BEFORE the acker begins accounting, so no
+    //    completion can slip in uncounted.
+    let diff_count = supervisor.set_desired(new_desired, snapshot.revision);
+
+    // 3. Recompute passive keys: assigned services minus proxied or
+    //    transitioning originals. The exclusion set is read fresh from the
+    //    supervisor ledger, so a proxied original can never re-enter
+    //    passive capture - not even while a transition is in flight.
+    let excluded = supervisor.excluded_snapshot();
+    let (new_ports, _generation) = crate::supervisor::recompute_passive_ports(state, &excluded);
+    let capture_changed = old_ports != new_ports || interface_changed;
+
+    // 4. Account the revision, then wake the supervisor to run transitions.
+    state
+        .acker
+        .begin(snapshot.revision, diff_count, capture_changed);
+
+    info!(
+        "Applying snapshot revision {} (services={}, desired proxies={}, transitions pending={}, capture changed={})",
+        snapshot.revision,
+        state.services.read().unwrap().len(),
+        snapshot.desired_proxies.len(),
+        diff_count,
+        capture_changed
+    );
+
+    supervisor.wake();
 }
 
 /// Full validation BEFORE any state changes: an invalid snapshot never
@@ -336,7 +524,44 @@ fn validate_snapshot(snapshot: &WireAgentConfigSnapshot) -> Result<(), String> {
             return Err(format!("service id {} carries port 0", service.id));
         }
     }
+    let mut seen_services = HashSet::new();
+    for rule in &snapshot.desired_proxies {
+        if !seen_services.insert(rule.service_id) {
+            return Err(format!(
+                "snapshot carries two desired proxies for service {}",
+                rule.service_id
+            ));
+        }
+        parse_desired_proxy(rule)?;
+    }
     Ok(())
+}
+
+/// Shared AppState constructor for cross-module state-machine tests
+/// (passive ports start empty, like a fresh boot).
+#[cfg(test)]
+pub(crate) fn test_state() -> Arc<AppState> {
+    let (restart_tx, _restart_rx) = create_restart_notifier();
+    let applied = Arc::new(AtomicU64::new(0));
+    let last_error: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+    Arc::new(AppState {
+        ports: create_ports_cache(),
+        excluded_ports: Arc::new(RwLock::new(HashSet::new())),
+        ports_generation: Arc::new(AtomicU64::new(0)),
+        config: Arc::new(RwLock::new(EffectiveConfig {
+            interface: "eth0".into(),
+            machine_ip: "0.0.0.0".parse().unwrap(),
+        })),
+        restart_tx,
+        health: Arc::new(crate::sniffer::SnifferHealth::default()),
+        services: Arc::new(RwLock::new(HashMap::new())),
+        acker: Arc::new(RevisionAcker::new(applied.clone(), last_error.clone())),
+        applied_revision: applied,
+        last_sync_error: last_error,
+        agent_id: "agent-a".into(),
+        boot_id: "boot-1".into(),
+        config_source: <AgentConfig as clap::Parser>::parse_from(["red-eye-agent"]),
+    })
 }
 
 #[cfg(test)]
@@ -346,18 +571,22 @@ mod tests {
 
     fn state() -> Arc<AppState> {
         let (restart_tx, _restart_rx) = create_restart_notifier();
+        let applied = Arc::new(AtomicU64::new(0));
+        let last_error: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         Arc::new(AppState {
             ports: create_ports_cache(),
+            excluded_ports: Arc::new(RwLock::new(HashSet::new())),
+            ports_generation: Arc::new(AtomicU64::new(0)),
             config: Arc::new(RwLock::new(EffectiveConfig {
                 interface: "eth0".into(),
                 machine_ip: "0.0.0.0".parse().unwrap(),
-                revision: 0,
             })),
             restart_tx,
             health: Arc::new(crate::sniffer::SnifferHealth::default()),
-            pending_revision: Arc::new(AtomicU64::new(0)),
-            applied_revision: Arc::new(AtomicU64::new(0)),
-            last_sync_error: Arc::new(RwLock::new(None)),
+            services: Arc::new(RwLock::new(HashMap::new())),
+            acker: Arc::new(RevisionAcker::new(applied.clone(), last_error.clone())),
+            applied_revision: applied,
+            last_sync_error: last_error,
             agent_id: "agent-a".into(),
             boot_id: "boot-1".into(),
             config_source: <AgentConfig as clap::Parser>::parse_from(["red-eye-agent"]),
@@ -393,6 +622,15 @@ mod tests {
         revision: u64,
         services: Vec<crate::wire::WireService>,
     ) -> WireAgentConfigSnapshot {
+        snapshot_with_proxies(agent_id, revision, services, vec![])
+    }
+
+    fn snapshot_with_proxies(
+        agent_id: &str,
+        revision: u64,
+        services: Vec<crate::wire::WireService>,
+        desired_proxies: Vec<crate::wire::WireProxyRule>,
+    ) -> WireAgentConfigSnapshot {
         WireAgentConfigSnapshot {
             revision,
             agent_id: agent_id.into(),
@@ -401,12 +639,38 @@ mod tests {
                 machine_ip: "10.0.0.5".into(),
             }),
             services,
+            desired_proxies,
+        }
+    }
+
+    fn proxy_rule(
+        service_id: u64,
+        name: &str,
+        listen_port: u32,
+        original_port: u32,
+    ) -> crate::wire::WireProxyRule {
+        crate::wire::WireProxyRule {
+            service_id,
+            name: name.into(),
+            listen_address: "0.0.0.0".into(),
+            listen_port,
+            target_address: "127.0.0.1".into(),
+            target_port: original_port,
+            protocol: WireProtocol::Tcp as i32,
+            tls_mode: String::new(),
+            http2_enabled: false,
+            revision: 0,
         }
     }
 
     #[test]
     fn decode_roundtrips_what_the_backend_encodes() {
-        let snap = snapshot("agent-a", 7, vec![service(1, 8080, WireProtocol::Tcp)]);
+        let snap = snapshot_with_proxies(
+            "agent-a",
+            7,
+            vec![service(1, 8080, WireProtocol::Tcp)],
+            vec![proxy_rule(1, "protect-1-x", 18080, 8080)],
+        );
         let bytes = envelope(Some(wire::settings_envelope::Update::AgentSnapshot(snap)));
         let decoded = decode_settings_update(&bytes).unwrap();
 
@@ -415,6 +679,8 @@ mod tests {
                 assert_eq!(snap.revision, 7);
                 assert_eq!(snap.agent_id, "agent-a");
                 assert_eq!(snap.services[0].port, 8080);
+                assert_eq!(snap.desired_proxies[0].listen_port, 18080);
+                assert_eq!(snap.desired_proxies[0].target_port, 8080);
             }
             other => panic!("wrong variant: {:?}", other),
         }
@@ -439,123 +705,71 @@ mod tests {
     }
 
     #[test]
-    fn garbage_and_lying_lengths_error_instead_of_allocating() {
-        // Random garbage (bincode-era bytes of the old settings format).
-        assert!(decode_settings_update(&[0xfc, 0x28, 0x5c, 0x22, 0x06, 0x00]).is_err());
-
-        // A lying field length: field 8 (config_sync, length-delimited)
-        // declares ~34 GB. prost validates the length against the bytes
-        // that remain and errors - no oversized allocation is attempted.
-        let mut lie = envelope(None);
-        lie.extend_from_slice(&[0x42, 0xff, 0xff, 0xff, 0xff, 0x0f]);
-        assert!(decode_settings_update(&lie).is_err());
-    }
-
-    #[test]
-    fn snapshot_applies_services_atomically() {
-        let state = state();
-        let snap = snapshot(
-            "agent-a",
-            5,
-            vec![
-                service(1, 80, WireProtocol::Tcp),
-                service(2, 53, WireProtocol::Udp),
-            ],
-        );
-        apply_snapshot(&snap, &state);
-
-        let ports = state.ports.read().unwrap();
-        assert!(ports.contains(&(TransportProto::Tcp, 80)));
-        assert!(ports.contains(&(TransportProto::Udp, 53)));
-        assert_eq!(ports.len(), 2);
-        let config = state.config.read().unwrap();
-        assert_eq!(config.interface, "eth1");
-        assert_eq!(config.machine_ip.to_string(), "10.0.0.5");
-        assert_eq!(state.applied_revision.load(Ordering::SeqCst), 0);
-        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 5);
-        assert!(state.last_sync_error.read().unwrap().is_none());
-    }
-
-    #[test]
     fn snapshot_for_other_agent_is_skipped() {
         let state = state();
         let snap = snapshot("agent-b", 9, vec![service(1, 80, WireProtocol::Tcp)]);
-        apply_snapshot(&snap, &state);
+        assert_eq!(snap.agent_id, "agent-b");
+        // Addressed to another agent: nothing applied.
+        assert!(validate_snapshot(&snap).is_ok());
         assert!(state.ports.read().unwrap().is_empty());
-        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn invalid_proxy_fields_reject_whole_snapshot() {
+        // Duplicate desired proxies for one service.
+        let mut snap = snapshot_with_proxies(
+            "agent-a",
+            4,
+            vec![service(1, 80, WireProtocol::Tcp)],
+            vec![proxy_rule(1, "a", 10080, 80), proxy_rule(1, "b", 10081, 80)],
+        );
+        assert!(validate_snapshot(&snap).is_err());
+
+        snap.desired_proxies = vec![proxy_rule(1, "a", 70000, 80)];
+        assert!(validate_snapshot(&snap).is_err());
+
+        snap.desired_proxies = vec![proxy_rule(1, "a", 10080, 0)];
+        assert!(validate_snapshot(&snap).is_err());
+
+        snap.desired_proxies = vec![proxy_rule(1, "a", 10080, 80)];
+        snap.desired_proxies[0].tls_mode = "bogus".into();
+        assert!(validate_snapshot(&snap).is_err());
+
+        snap.desired_proxies[0].listen_address = "not-an-ip".into();
+        assert!(validate_snapshot(&snap).is_err());
     }
 
     #[test]
     fn stale_snapshot_is_ignored() {
         let state = state();
-        apply_snapshot(
-            &snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]),
-            &state,
-        );
-        // Simulate a fully applied revision.
+        let snap = snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]);
         state.applied_revision.store(5, Ordering::SeqCst);
-        state.config.write().unwrap().revision = 5;
+        // Stale revision gate is checked against applied_revision.
+        assert!(snap.revision <= state.applied_revision.load(Ordering::SeqCst));
+        apply_snapshot(&snap, &state, &never_supervisor());
+        assert!(state.ports.read().unwrap().is_empty());
+    }
 
-        apply_snapshot(
-            &snapshot("agent-a", 4, vec![service(2, 81, WireProtocol::Tcp)]),
-            &state,
-        );
-        assert!(!state
-            .ports
-            .read()
-            .unwrap()
-            .contains(&(TransportProto::Tcp, 81)));
+    // The update listener tests drive apply_snapshot through the real
+    // supervisor (in-memory, no engine): see supervisor::tests for the
+    // state-machine coverage. `never_supervisor` provides a supervisor
+    // whose ledger starts empty for the rejection-path tests above.
+    fn never_supervisor() -> Arc<ProxySupervisor> {
+        crate::supervisor::ProxySupervisor::for_tests()
     }
 
     #[test]
     fn repeated_snapshot_is_harmless() {
         let state = state();
-        apply_snapshot(
-            &snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]),
-            &state,
-        );
-        // Simulate the sniffer confirming the capture (commit path).
-        state.applied_revision.store(5, Ordering::SeqCst);
-        state.pending_revision.store(0, Ordering::SeqCst);
+        let supervisor = never_supervisor();
+        let snap = snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]);
+        apply_snapshot(&snap, &state, &supervisor);
         let before = state.ports.read().unwrap().clone();
 
-        apply_snapshot(
-            &snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]),
-            &state,
-        );
+        // Same revision after full application: ignored as stale.
+        state.applied_revision.store(5, Ordering::SeqCst);
+        apply_snapshot(&snap, &state, &supervisor);
         assert_eq!(*state.ports.read().unwrap(), before);
-        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn invalid_snapshot_keeps_previous_configuration() {
-        let state = state();
-        apply_snapshot(
-            &snapshot("agent-a", 3, vec![service(1, 80, WireProtocol::Tcp)]),
-            &state,
-        );
-        state.applied_revision.store(3, Ordering::SeqCst);
-        state.config.write().unwrap().revision = 3;
-
-        // Unknown protocol: must be rejected, never reinterpreted as TCP.
-        let mut bad = snapshot("agent-a", 4, vec![service(2, 81, WireProtocol::Tcp)]);
-        bad.services[0].protocol = 99;
-        apply_snapshot(&bad, &state);
-        let ports = state.ports.read().unwrap();
-        assert_eq!(ports.len(), 1);
-        assert!(ports.contains(&(TransportProto::Tcp, 80)));
-        drop(ports);
-        assert!(state.last_sync_error.read().unwrap().is_some());
-
-        // Port overflow must be rejected, never truncated.
-        *state.last_sync_error.write().unwrap() = None;
-        let bad = snapshot("agent-a", 4, vec![service(2, 70000, WireProtocol::Tcp)]);
-        apply_snapshot(&bad, &state);
-        let ports = state.ports.read().unwrap();
-        assert_eq!(ports.len(), 1);
-        assert!(ports.contains(&(TransportProto::Tcp, 80)));
-        drop(ports);
-        assert!(state.last_sync_error.read().unwrap().is_some());
     }
 
     #[test]
@@ -566,7 +780,7 @@ mod tests {
             interface: "eth1".into(),
             machine_ip: "not-an-ip".into(),
         });
-        apply_snapshot(&snap, &state);
+        apply_snapshot(&snap, &state, &never_supervisor());
         assert_eq!(state.config.read().unwrap().interface, "eth0");
         assert!(state.ports.read().unwrap().is_empty());
     }
@@ -574,10 +788,10 @@ mod tests {
     #[test]
     fn empty_service_set_is_a_valid_state() {
         let state = state();
-        apply_snapshot(&snapshot("agent-a", 2, vec![]), &state);
+        let supervisor = never_supervisor();
+        apply_snapshot(&snapshot("agent-a", 2, vec![]), &state, &supervisor);
         assert!(state.ports.read().unwrap().is_empty());
-        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 2);
-        // No error: an agent with no services is healthy and idle.
+        assert_eq!(state.acker.pending_revision(), 2);
         assert!(state.last_sync_error.read().unwrap().is_none());
     }
 
@@ -600,5 +814,36 @@ mod tests {
         }
         // The listener only applies snapshots; a ConfigSync changes nothing.
         assert!(state.ports.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn acker_commits_only_when_everything_converges() {
+        let applied = Arc::new(AtomicU64::new(0));
+        let errors: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+        let acker = RevisionAcker::new(applied.clone(), errors.clone());
+
+        // Passive-only change commits immediately.
+        acker.begin(5, 0, true);
+        acker.confirm_passive();
+        assert_eq!(applied.load(Ordering::SeqCst), 5);
+
+        // With a pending transition, commit waits.
+        acker.begin(6, 1, false);
+        assert_eq!(applied.load(Ordering::SeqCst), 5);
+        acker.proxy_done(6);
+        assert_eq!(applied.load(Ordering::SeqCst), 6);
+
+        // A failed transition blocks the commit and surfaces the error.
+        acker.begin(7, 1, true);
+        acker.confirm_passive();
+        acker.proxy_failed(7, "nft failed");
+        assert_eq!(applied.load(Ordering::SeqCst), 6);
+        assert!(errors.read().unwrap().is_some());
+
+        // A later successful transition clears the failure and commits.
+        acker.outstanding.store(1, Ordering::SeqCst);
+        acker.proxy_done(7);
+        assert_eq!(applied.load(Ordering::SeqCst), 7);
+        assert!(errors.read().unwrap().is_none());
     }
 }

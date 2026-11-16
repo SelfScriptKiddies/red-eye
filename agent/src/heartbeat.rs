@@ -6,8 +6,9 @@ use log::{debug, error};
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-use crate::harpoon::HarpoonEngine;
+use crate::harpoon::{ForwarderCounters, HarpoonEngine};
 use crate::nats::NatsClient;
+use crate::supervisor::ProxySupervisor;
 use crate::updates::AppState;
 
 #[derive(Serialize)]
@@ -15,7 +16,8 @@ pub struct AgentStatus {
     pub agent_id: String,
     pub uptime_secs: u64,
     pub sniffer_active: bool,
-    /// Monitored (protocol, port) pairs, e.g. "8080/tcp"
+    /// Passive (protocol, port) pairs, e.g. "8080/tcp": assigned services
+    /// minus effectively proxied keys.
     pub sniffer_ports: Vec<String>,
     pub harpoon_rules: Vec<String>,
     pub active_filters: usize,
@@ -46,8 +48,16 @@ pub struct AgentStatus {
     /// Sanitized snapshot application error (absent = ok)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync_error: Option<String>,
-    /// Capture is idle because no services are assigned (healthy)
+    /// Passive capture is idle because the passive set is empty (healthy)
     pub sniffer_idle: bool,
+    /// Per-proxy effective state (desired revision applied, capture
+    /// phase). Diagnostics only: the backend stores them without letting
+    /// them overwrite operator desired state.
+    pub proxies: Vec<ProxyStatus>,
+    /// Frames captured for effectively proxied keys (capture-source bug).
+    pub capture_source_conflicts: u64,
+    /// Harpoon forwarder drops: broadcast pressure + lagged events.
+    pub forwarder_drops: u64,
     pub timestamp_ms: u64,
 }
 
@@ -58,10 +68,28 @@ pub struct NftRedirectStatus {
     pub to_port: u16,
 }
 
+#[derive(Serialize)]
+pub struct ProxyStatus {
+    pub service_id: u64,
+    pub rule_name: String,
+    pub desired_revision: u64,
+    pub effective_revision: Option<u64>,
+    /// "effective" | "transitioning" | "capture_unavailable" | "failed"
+    pub state: String,
+    pub protocol: String,
+    pub original_port: u16,
+    pub listen_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_heartbeat(
     nats: NatsClient,
     harpoon: Arc<Mutex<HarpoonEngine>>,
     state: Arc<AppState>,
+    supervisor: Arc<ProxySupervisor>,
+    forwarder_counters: Arc<ForwarderCounters>,
     tls_available: bool,
 ) {
     let interval_secs = state.config_source.heartbeat_interval_secs;
@@ -99,6 +127,22 @@ pub fn spawn_heartbeat(
                 .collect();
             drop(harpoon_guard);
 
+            let proxies: Vec<ProxyStatus> = supervisor
+                .status_reports()
+                .into_iter()
+                .map(|r| ProxyStatus {
+                    service_id: r.service_id,
+                    rule_name: r.rule_name,
+                    desired_revision: r.desired_revision,
+                    effective_revision: r.effective_revision,
+                    state: r.state.to_string(),
+                    protocol: r.protocol.to_string(),
+                    original_port: r.original_port,
+                    listen_port: r.listen_port,
+                    last_error: r.last_error,
+                })
+                .collect();
+
             let (effective_interface, effective_machine_ip) = {
                 let config = state.config.read().unwrap();
                 (config.interface.clone(), config.machine_ip.to_string())
@@ -126,10 +170,14 @@ pub fn spawn_heartbeat(
                 effective_interface,
                 effective_machine_ip,
                 last_sync_error,
+                proxies,
+                capture_source_conflicts: state.health.capture_source_conflicts(),
+                forwarder_drops: broadcast_drops
+                    + forwarder_counters.lag_events.load(Ordering::Relaxed),
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
             };
 
             match serde_json::to_vec(&status) {

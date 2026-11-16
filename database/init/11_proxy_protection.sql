@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS proxy_protection (
     revision BIGINT NOT NULL,
     effective BOOLEAN NOT NULL DEFAULT FALSE,
     effective_revision BIGINT,
+    reported_state TEXT,
     last_error TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT unique_proxy_agent_service UNIQUE (agent_id, service_id)
