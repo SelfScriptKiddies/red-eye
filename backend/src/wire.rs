@@ -9,5 +9,6 @@ pub use red_eye::wire::{
     AgentConfigSnapshot as WireAgentConfigSnapshot,
     AgentNetworkSettings as WireAgentNetworkSettings, ConfigSync as WireConfigSync,
     Filter as WireFilter, FilterDirection as WireFilterDirection, FilterOp as WireFilterOp,
-    Protocol as WireProtocol, Service as WireService, ServiceOp as WireServiceOp, SettingsEnvelope,
+    Protocol as WireProtocol, ProxyRule as WireProxyRule, Service as WireService,
+    ServiceOp as WireServiceOp, SettingsEnvelope,
 };

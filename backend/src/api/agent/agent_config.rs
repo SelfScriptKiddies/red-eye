@@ -45,6 +45,9 @@ pub enum SnapshotReason {
     NewBoot,
     StaleRevision,
     Uncertain,
+    /// Direct operator action (protection toggle): bypasses the
+    /// unsolicited-snapshot rate limit so the transition starts now.
+    Operator,
     NotNeeded,
 }
 
@@ -394,6 +397,75 @@ impl ControlPlane {
             });
         }
 
+        // Desired proxy state rides the snapshot: a same-ID restarted
+        // agent reconstructs its proxy rules and passive exclusions from
+        // it without another operator command.
+        let protect =
+            crate::api::protect::protect_repository::ProtectRepository::new(self.pool.clone());
+        let desired_proxies = match protect.enabled_desired(agent_id).await {
+            Ok(rows) => {
+                let mut rules = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let wire_protocol = match row.protocol.as_str() {
+                        "TCP" => WireProtocol::Tcp,
+                        "UDP" => WireProtocol::Udp,
+                        other => {
+                            warn!(
+                                "Proxy rule for service id {} has unknown protocol '{}', skipped",
+                                row.service_id, other
+                            );
+                            continue;
+                        }
+                    };
+                    let Some(listen_port) = row.listen_port.and_then(|p| u16::try_from(p).ok())
+                    else {
+                        warn!(
+                            "Proxy rule for service id {} has no usable listen port, skipped",
+                            row.service_id
+                        );
+                        continue;
+                    };
+                    let Some(target_port) = row.target_port.and_then(|p| u16::try_from(p).ok())
+                    else {
+                        warn!(
+                            "Proxy rule for service id {} has no usable target port, skipped",
+                            row.service_id
+                        );
+                        continue;
+                    };
+                    rules.push(crate::wire::WireProxyRule {
+                        service_id: u64::try_from(row.service_id).unwrap_or_default(),
+                        name: crate::api::protect::proxy_rule_name(
+                            row.service_id,
+                            &row.service_name,
+                        ),
+                        listen_address: row
+                            .listen_address
+                            .clone()
+                            .unwrap_or_else(|| "0.0.0.0".into()),
+                        listen_port: listen_port as u32,
+                        target_address: row
+                            .target_address
+                            .clone()
+                            .unwrap_or_else(|| "127.0.0.1".into()),
+                        target_port: target_port as u32,
+                        protocol: wire_protocol as i32,
+                        tls_mode: row.tls_mode.clone().unwrap_or_default(),
+                        http2_enabled: row.http2_enabled,
+                        revision: u64::try_from(row.revision).unwrap_or_default(),
+                    });
+                }
+                rules
+            }
+            Err(e) => {
+                error!(
+                    "Failed to read desired proxies for agent '{}': {} - snapshot withheld",
+                    agent_id, e
+                );
+                return None;
+            }
+        };
+
         Some(WireAgentConfigSnapshot {
             revision: u64::try_from(revision).unwrap_or_default(),
             agent_id: agent_id.to_string(),
@@ -402,6 +474,7 @@ impl ControlPlane {
                 machine_ip: network.machine_ip.unwrap_or_default(),
             }),
             services,
+            desired_proxies,
         })
     }
 
@@ -470,7 +543,10 @@ impl ControlPlane {
             return true;
         }
 
-        if reason != SnapshotReason::NewBoot && reason != SnapshotReason::Uncertain {
+        if reason != SnapshotReason::NewBoot
+            && reason != SnapshotReason::Uncertain
+            && reason != SnapshotReason::Operator
+        {
             let now = now_ms();
             let mut last = self.last_snapshot_ms.write().await;
             let last_sent = last.get(agent_id).copied().unwrap_or(0);
