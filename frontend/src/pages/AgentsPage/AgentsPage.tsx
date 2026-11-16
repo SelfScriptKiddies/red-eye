@@ -16,11 +16,28 @@ interface Service {
   decrypt_tls: boolean;
 }
 
+interface NetworkSettings {
+  interface: string | null;
+  interface_source: string;
+  machine_ip: string | null;
+  machine_ip_source: string;
+  last_acked_revision: number;
+  current_revision: number;
+  sync_state: string;
+  last_sync_error?: string | null;
+}
+
 interface Agent {
   agent_id: string;
   uptime_secs: number;
   sniffer_active: boolean;
-  sniffer_ports: number[];
+  /** "8080/tcp" entries — protocol-aware since the v4 control plane */
+  sniffer_ports: string[];
+  sniffer_idle?: boolean | null;
+  applied_revision?: number | null;
+  effective_interface?: string | null;
+  effective_machine_ip?: string | null;
+  last_sync_error?: string | null;
   harpoon_rules: string[];
   active_filters: number;
   nft_redirects: NftRedirect[];
@@ -29,6 +46,8 @@ interface Agent {
   nft_available?: boolean | null;
   timestamp_ms: number;
   online: boolean;
+  /** Persistent per-agent settings from /api/agent (may be absent) */
+  network?: NetworkSettings | null;
 }
 
 interface ProxyForm {
@@ -104,6 +123,83 @@ export default function AgentsPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [boundServices, setBoundServices] = useState<number[]>([]);
 
+  // Per-agent network settings (interface / machine IP) editing
+  const [netEditing, setNetEditing] = useState(false);
+  const [netInterface, setNetInterface] = useState('');
+  const [netMachineIp, setNetMachineIp] = useState('');
+  const [netBusy, setNetBusy] = useState(false);
+
+  const openNetEditor = () => {
+    const net = selectedAgent?.network;
+    setNetInterface(net?.interface ?? '');
+    setNetMachineIp(net?.machine_ip ?? '');
+    setNetEditing(true);
+  };
+
+  const sourceBadge = (source: string) =>
+    source === 'override' ? 'option-badge' : 'info-badge';
+
+  const sourceLabel = (source: string) =>
+    source === 'override' ? 'override' : source === 'bootstrap' ? 'bootstrap' : source;
+
+  const syncStateLabel = (state: string) =>
+    state === 'ok' ? 'synced' : state === 'pending' ? 'pending sync' : 'error';
+
+  const syncStateBadge = (state: string) =>
+    state === 'ok' ? 'info-badge' : state === 'pending' ? 'badge info-badge' : 'option-badge';
+
+  const saveNetworkSettings = async () => {
+    if (!selected) return;
+    if (netInterface.trim() === '' && netMachineIp.trim() === '') {
+      // Both empty = reset to bootstrap values
+      await resetNetworkSettings();
+      return;
+    }
+    setNetBusy(true);
+    try {
+      const r = await fetch(`/api/agent/${selected}/network-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          interface: netInterface.trim() === '' ? null : netInterface.trim(),
+          machine_ip: netMachineIp.trim() === '' ? null : netMachineIp.trim(),
+        }),
+      });
+      if (!r.ok) {
+        alert(`Не сохранено (${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      const body = await r.json().catch(() => null);
+      if (body?.sync === 'pending') {
+        alert('Сохранено, но доставка агенту не удалась — снапшот будет повторён при следующем heartbeat');
+      }
+      setNetEditing(false);
+      setTimeout(fetchAgents, 1000);
+    } catch (e) {
+      alert(`Не сохранено: ${e}`);
+    } finally {
+      setNetBusy(false);
+    }
+  };
+
+  const resetNetworkSettings = async () => {
+    if (!selected) return;
+    setNetBusy(true);
+    try {
+      const r = await fetch(`/api/agent/${selected}/network-settings/reset`, { method: 'POST' });
+      if (!r.ok) {
+        alert(`Не сброшено (${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      setNetEditing(false);
+      setTimeout(fetchAgents, 1000);
+    } catch (e) {
+      alert(`Не сброшено: ${e}`);
+    } finally {
+      setNetBusy(false);
+    }
+  };
+
   const fetchAgents = async (): Promise<Agent[]> => {
     try {
       const r = await fetch('/api/agent');
@@ -161,7 +257,7 @@ export default function AgentsPage() {
     const ruleName = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
     const hasProxy = selectedAgent.harpoon_rules.includes(ruleName);
     const hasNft = selectedAgent.nft_redirects.some(r => r.from_port === service.port);
-    const isSniffed = selectedAgent.sniffer_ports.includes(service.port);
+    const isSniffed = selectedAgent.sniffer_ports.some(p => p.startsWith(`${service.port}/`));
 
     if (hasProxy && hasNft) return 'proxy-nft';
     if (hasProxy) return 'proxy';
@@ -429,8 +525,85 @@ export default function AgentsPage() {
                     {selectedAgent.sniffer_ports.map(p => (
                       <span key={p} className="badge info-badge">:{p}</span>
                     ))}
-                    {selectedAgent.sniffer_ports.length === 0 && <span className="text-muted">Нет портов</span>}
+                    {selectedAgent.sniffer_ports.length === 0 && (
+                      <span className="text-muted">
+                        {selectedAgent.sniffer_idle
+                          ? 'Нет назначенных сервисов — ожидание (здоров)'
+                          : 'Нет портов'}
+                      </span>
+                    )}
                   </div>
+                </div>
+
+                {/* Network settings (per-agent interface / machine IP) */}
+                <div className="detail-section">
+                  <div className="section-header">
+                    <h3>Сеть</h3>
+                    {!netEditing && (
+                      <button className="small-btn" onClick={openNetEditor}>Настроить</button>
+                    )}
+                  </div>
+                  {netEditing ? (
+                    <div>
+                      <input
+                        placeholder="Интерфейс (например eth0)"
+                        value={netInterface}
+                        onChange={e => setNetInterface(e.target.value)}
+                      />
+                      <input
+                        placeholder="Machine IP (IP или 0.0.0.0/:: — wildcard)"
+                        value={netMachineIp}
+                        onChange={e => setNetMachineIp(e.target.value)}
+                      />
+                      <div className="card-buttons">
+                        <button className="small-btn" disabled={netBusy} onClick={saveNetworkSettings}>Сохранить</button>
+                        <button className="small-btn btn-danger" disabled={netBusy} onClick={resetNetworkSettings}>Сбросить</button>
+                        <button className="small-btn" disabled={netBusy} onClick={() => setNetEditing(false)}>Отмена</button>
+                      </div>
+                      <span className="text-muted" style={{ fontSize: '11px' }}>
+                        Пустое поле = сброс к bootstrap-значению. Интерфейс проверяется на агенте.
+                      </span>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="card-row">
+                        <span className="rule-name">Интерфейс</span>
+                        <div className="card-right">
+                          <span className="port-label">{selectedAgent.network?.interface || selectedAgent.effective_interface || '—'}</span>
+                          <span className={`badge ${sourceBadge(selectedAgent.network?.interface_source || 'unknown')}`}>
+                            {sourceLabel(selectedAgent.network?.interface_source || 'unknown')}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="card-row">
+                        <span className="rule-name">Machine IP</span>
+                        <div className="card-right">
+                          <span className="port-label">{selectedAgent.network?.machine_ip || selectedAgent.effective_machine_ip || '—'}</span>
+                          <span className={`badge ${sourceBadge(selectedAgent.network?.machine_ip_source || 'unknown')}`}>
+                            {sourceLabel(selectedAgent.network?.machine_ip_source || 'unknown')}
+                          </span>
+                        </div>
+                      </div>
+                      {selectedAgent.network && (
+                        <div className="card-row">
+                          <span className="rule-name">Ревизия</span>
+                          <div className="card-right">
+                            <span className="port-label">
+                              {selectedAgent.network.last_acked_revision}/{selectedAgent.network.current_revision}
+                            </span>
+                            <span className={`badge ${syncStateBadge(selectedAgent.network.sync_state)}`}>
+                              {syncStateLabel(selectedAgent.network.sync_state)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {(selectedAgent.network?.last_sync_error || selectedAgent.last_sync_error) && (
+                        <span className="text-muted" style={{ fontSize: '11px', color: '#e8a33d' }}>
+                          Ошибка синхронизации: {selectedAgent.network?.last_sync_error || selectedAgent.last_sync_error}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Proxy Rules */}
