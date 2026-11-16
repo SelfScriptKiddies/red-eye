@@ -8,8 +8,13 @@ pub mod red_eye {
 }
 
 pub use red_eye::wire::settings_envelope;
+pub use red_eye::wire::PacketBatch;
 pub use red_eye::wire::{
-    AgentConfigSnapshot as WireAgentConfigSnapshot,
-    AgentNetworkSettings as WireAgentNetworkSettings, Service as WireService, SettingsEnvelope,
+    ActiveBlock as WireActiveBlock, AgentConfigSnapshot as WireAgentConfigSnapshot,
+    Filter as WireFilter, Protocol as WireProtocol, RawPacket as WireRawPacket, SettingsEnvelope,
 };
-pub use red_eye::wire::{PacketBatch, Protocol as WireProtocol, RawPacket as WireRawPacket};
+// Snapshot-test-only shapes (validation helpers build wire values).
+#[cfg(test)]
+pub use red_eye::wire::{
+    AgentNetworkSettings as WireAgentNetworkSettings, IpEndpoint, Service as WireService,
+};

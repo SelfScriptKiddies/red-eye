@@ -8,8 +8,10 @@ use async_nats::jetstream::{self, consumer::pull, stream};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
 use prost::Message as _;
+use tokio::sync::mpsc;
 
 use crate::config::AgentConfig;
+use crate::enforce::{self, EnforcePlan};
 use crate::nats::NatsClient;
 use crate::wire::{self, SettingsEnvelope, WireAgentConfigSnapshot, WireProtocol};
 
@@ -107,6 +109,13 @@ pub struct AppState {
     pub applied_revision: Arc<AtomicU64>,
     /// Sanitized snapshot application error for the heartbeat (None = ok).
     pub last_sync_error: Arc<RwLock<Option<String>>>,
+    /// Enforcement plans flow here to the engine owner task (hot-swap +
+    /// nftables bans, no process restart).
+    pub enforce_tx: mpsc::Sender<EnforcePlan>,
+    /// Count of filters/blocks this agent could not enforce (heartbeat).
+    pub enforcement_failures: Arc<AtomicU64>,
+    /// Sanitized last enforcement failure (None = everything enforced).
+    pub last_enforcement_error: Arc<RwLock<Option<String>>>,
     pub agent_id: String,
     pub boot_id: String,
     pub config_source: AgentConfig,
@@ -261,6 +270,30 @@ fn apply_snapshot(snapshot: &WireAgentConfigSnapshot, state: &AppState) {
     let old_ports: HashSet<(TransportProto, u16)> = state.ports.read().unwrap().clone();
     let ports_changed = old_ports != new_ports;
 
+    // Enforcement plan from the snapshot's filter + block projection.
+    // Valid parts apply even when other parts fail; failures land on the
+    // shared state for the heartbeat (detection continues on the analyzer).
+    let plan = enforce::plan(&snapshot.filters, &snapshot.blocks);
+    if !plan.failures.is_empty() {
+        state
+            .enforcement_failures
+            .fetch_add(plan.failures.len() as u64, Ordering::Relaxed);
+        if let Some(first) = plan.failures.first() {
+            let mut bounded: String = first.chars().take(300).collect();
+            if first.len() > 300 {
+                bounded.push_str("...");
+            }
+            *state.last_enforcement_error.write().unwrap() = Some(bounded);
+        }
+    }
+    let enforce_sent = state.enforce_tx.try_send(plan).is_ok();
+    if !enforce_sent {
+        warn!(
+            "Enforcement plan for revision {} dropped (queue full), retrying on next snapshot",
+            snapshot.revision
+        );
+    }
+
     {
         let mut config = state.config.write().unwrap();
         let interface_changed = config.interface != interface;
@@ -336,6 +369,50 @@ fn validate_snapshot(snapshot: &WireAgentConfigSnapshot) -> Result<(), String> {
             return Err(format!("service id {} carries port 0", service.id));
         }
     }
+    const KNOWN_ACTIONS: [&str; 5] = ["tag", "flag", "alert", "block", "block_connection"];
+    const KNOWN_KINDS: [&str; 5] = ["regex", "substr", "bsubstr", "ip_cidr", "expression"];
+    for filter in &snapshot.filters {
+        if !KNOWN_ACTIONS.contains(&filter.action.as_str()) {
+            return Err(format!(
+                "filter '{}' carries an unknown action '{}'",
+                filter.pattern_name, filter.action
+            ));
+        }
+        if !KNOWN_KINDS.contains(&filter.filter_type.as_str()) {
+            return Err(format!(
+                "filter '{}' carries an unknown matcher kind '{}'",
+                filter.pattern_name, filter.filter_type
+            ));
+        }
+        if filter.filter_type == "expression" {
+            // The shared DSL must accept the source: a filter the analyzer
+            // could evaluate but this agent cannot compile would diverge.
+            let source = String::from_utf8_lossy(&filter.filter_payload);
+            if let Err(e) = filter_dsl::compile(&source) {
+                return Err(format!(
+                    "filter '{}' expression does not compile: {}",
+                    filter.pattern_name, e
+                ));
+            }
+        }
+        if filter.filter_type == "ip_cidr" {
+            let network = filter.ip_network.split('/').next().unwrap_or("");
+            if network.parse::<IpAddr>().is_err() {
+                return Err(format!(
+                    "filter '{}' carries an invalid ip_network '{}'",
+                    filter.pattern_name, filter.ip_network
+                ));
+            }
+        }
+    }
+    for block in &snapshot.blocks {
+        if block.remote_ip.parse::<IpAddr>().is_err() {
+            return Err(format!(
+                "block for filter {} carries an invalid remote ip '{}'",
+                block.filter_id, block.remote_ip
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -346,6 +423,7 @@ mod tests {
 
     fn state() -> Arc<AppState> {
         let (restart_tx, _restart_rx) = create_restart_notifier();
+        let (enforce_tx, _enforce_rx) = mpsc::channel(8);
         Arc::new(AppState {
             ports: create_ports_cache(),
             config: Arc::new(RwLock::new(EffectiveConfig {
@@ -358,6 +436,9 @@ mod tests {
             pending_revision: Arc::new(AtomicU64::new(0)),
             applied_revision: Arc::new(AtomicU64::new(0)),
             last_sync_error: Arc::new(RwLock::new(None)),
+            enforce_tx,
+            enforcement_failures: Arc::new(AtomicU64::new(0)),
+            last_enforcement_error: Arc::new(RwLock::new(None)),
             agent_id: "agent-a".into(),
             boot_id: "boot-1".into(),
             config_source: <AgentConfig as clap::Parser>::parse_from(["red-eye-agent"]),
@@ -401,6 +482,8 @@ mod tests {
                 machine_ip: "10.0.0.5".into(),
             }),
             services,
+            filters: vec![],
+            blocks: vec![],
         }
     }
 

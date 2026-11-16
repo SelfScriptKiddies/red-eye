@@ -421,6 +421,10 @@ pub fn spawn_heartbeat_listener(
                             status.machine_ip.as_deref(),
                             status.applied_revision.and_then(|r| i64::try_from(r).ok()),
                             status.last_sync_error.as_deref(),
+                            status
+                                .enforcement_failures
+                                .and_then(|f| i64::try_from(f).ok()),
+                            status.last_enforcement_error.as_deref(),
                         )
                         .await;
                     if reason != SnapshotReason::NotNeeded {

@@ -152,3 +152,10 @@ CREATE TABLE IF NOT EXISTS filter_event (
 );
 
 CREATE INDEX IF NOT EXISTS idx_filter_event_created ON filter_event (created_at DESC);
+
+-- 7. Per-agent enforcement-failure reporting: the agent heartbeat carries
+--    the count of filters/blocks it could not enforce and a sanitized
+--    last error, so the UI reports per-agent failures instead of global
+--    blocking success.
+ALTER TABLE agent_config ADD COLUMN IF NOT EXISTS enforcement_failures BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agent_config ADD COLUMN IF NOT EXISTS last_enforcement_error TEXT;

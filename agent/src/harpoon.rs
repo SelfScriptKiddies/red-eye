@@ -9,7 +9,9 @@ use harpoon_core::capture::CaptureManager;
 use harpoon_core::engine::filter::{CompiledFilter, SharedFilterSet};
 use harpoon_core::engine::run_with_capture;
 use harpoon_core::types::endpoint::{Endpoint, Protocol};
-use harpoon_core::types::filter::{Direction, Filter, FilterAction, FilterKind};
+use harpoon_core::types::filter::Filter;
+#[cfg(test)]
+use harpoon_core::types::filter::{Direction, FilterAction, FilterKind};
 use harpoon_core::types::rule::{DuplicateTarget, Rule, TlsConfig, TlsMode, UdpSourceMode};
 use harpoon_core::{CoreConfig, EngineHandle};
 
@@ -440,41 +442,6 @@ fn protocol_of(transport: TransportProto) -> Protocol {
         TransportProto::Tcp => Protocol::Tcp,
         TransportProto::Udp => Protocol::Udp,
     }
-}
-
-/// Parse a filter definition from JSON fields into a harpoon-core Filter.
-pub fn parse_filter(kind: &str, pattern: &str, direction: &str, action: &str) -> Result<Filter> {
-    let filter_kind = match kind {
-        "substr" => FilterKind::Substr(pattern.to_string()),
-        "bsubstr" => {
-            let bytes = hex::decode(pattern)
-                .or_else(|_| Ok::<Vec<u8>, anyhow::Error>(pattern.as_bytes().to_vec()))?;
-            FilterKind::BinarySubstr(bytes)
-        }
-        "regex" => FilterKind::Regex(pattern.to_string()),
-        other => anyhow::bail!("Unknown filter kind: {}", other),
-    };
-
-    let dir = match direction {
-        "c2s" | "inbound" | "in" => Direction::ClientToServer,
-        "s2c" | "outbound" | "out" => Direction::ServerToClient,
-        "both" | "" => Direction::Both,
-        other => anyhow::bail!("Unknown direction: {}", other),
-    };
-
-    let action = match action {
-        "drop" => FilterAction::Drop,
-        "drop_connection" => FilterAction::DropConnection,
-        "alert" | "tap" => FilterAction::TapOnly,
-        "pass" | "" => FilterAction::Pass,
-        other => anyhow::bail!("Unknown action: {}", other),
-    };
-
-    Ok(Filter {
-        kind: filter_kind,
-        direction: dir,
-        action_on_match: action,
-    })
 }
 
 /// Spawn a background task that forwards captured packets from harpoon to

@@ -10,6 +10,7 @@ mod commands;
 mod config;
 /// Public for the `list_containers` live-verification example.
 pub mod docker;
+mod enforce;
 mod harpoon;
 mod heartbeat;
 mod nats;
@@ -82,6 +83,9 @@ pub async fn run() {
     // start from the env/CLI bootstrap values.
     let (restart_tx, restart_rx) = create_restart_notifier();
     let sniffer_health = Arc::new(sniffer::SnifferHealth::default());
+    // Enforcement plans flow from the update listener to the engine owner.
+    let (enforce_tx, enforce_rx) = tokio::sync::mpsc::channel(8);
+
     let state = Arc::new(updates::AppState {
         ports: create_ports_cache(),
         config: Arc::new(std::sync::RwLock::new(updates::EffectiveConfig {
@@ -97,6 +101,9 @@ pub async fn run() {
         pending_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         applied_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         last_sync_error: Arc::new(std::sync::RwLock::new(None)),
+        enforce_tx: enforce_tx.clone(),
+        enforcement_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        last_enforcement_error: Arc::new(std::sync::RwLock::new(None)),
         agent_id: agent_id.clone(),
         boot_id: boot_id.clone(),
         config_source: config.clone(),
@@ -123,6 +130,10 @@ pub async fn run() {
     updates::spawn_updates_listener(nats.clone(), state.clone());
     heartbeat::spawn_heartbeat(nats.clone(), harpoon.clone(), state.clone(), tls_available);
     commands::spawn_command_listener(nats.clone(), state.clone(), harpoon.clone());
+
+    // Snapshot enforcement: filter hot-swaps + nftables bans with expiry,
+    // fed by the update listener through a bounded plan channel.
+    enforce::spawn_enforcement(harpoon.clone(), state.clone(), enforce_rx);
 
     // SIGTERM (systemctl restart/stop) and SIGINT must clean up nftables
     // before exit, otherwise the table keeps redirecting traffic to a dead

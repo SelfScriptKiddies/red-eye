@@ -46,6 +46,13 @@ pub struct AgentStatus {
     /// Sanitized snapshot application error (absent = ok)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync_error: Option<String>,
+    /// Filters/blocks this agent could not enforce (detection continues on
+    /// the analyzer; the backend reports per-agent failures instead of
+    /// claiming global blocking success)
+    pub enforcement_failures: u64,
+    /// Sanitized last enforcement failure (absent = everything enforced)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_enforcement_error: Option<String>,
     /// Capture is idle because no services are assigned (healthy)
     pub sniffer_idle: bool,
     pub timestamp_ms: u64,
@@ -104,6 +111,7 @@ pub fn spawn_heartbeat(
                 (config.interface.clone(), config.machine_ip.to_string())
             };
             let last_sync_error = state.last_sync_error.read().unwrap().clone();
+            let last_enforcement_error = state.last_enforcement_error.read().unwrap().clone();
             let status = AgentStatus {
                 agent_id: agent_id.clone(),
                 uptime_secs: started_at.elapsed().as_secs(),
@@ -126,6 +134,8 @@ pub fn spawn_heartbeat(
                 effective_interface,
                 effective_machine_ip,
                 last_sync_error,
+                enforcement_failures: state.enforcement_failures.load(Ordering::Relaxed),
+                last_enforcement_error,
                 timestamp_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
