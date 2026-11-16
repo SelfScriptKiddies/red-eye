@@ -12,6 +12,10 @@ interface UseStreamsOptions {
     services: string[];
     startTime?: number | null;
     endTime?: number | null;
+    /** Server-side favorites filter: composed with tags/services/time in
+     * SQL before keyset pagination (the old client-side toggle only
+     * filtered the already loaded page). */
+    favoritesOnly?: boolean;
     enabled?: boolean;
     refetchInterval?: number | false;
     /** Live mode: in-place count refresh for visible streams is allowed.
@@ -27,7 +31,7 @@ interface StreamItem {
     [key: string]: unknown;
 }
 
-function buildUrl(cursor: string | null, tags: string[], services: string[], startTime?: number | null, endTime?: number | null) {
+function buildUrl(cursor: string | null, tags: string[], services: string[], startTime?: number | null, endTime?: number | null, favoritesOnly?: boolean) {
     // Keyset pagination: page 1 has no cursor; loadMore continues strictly
     // older than the last visible row ("last_packet_time:id"), so a page
     // fetched while traffic flows never re-serves rows the list already has
@@ -37,12 +41,13 @@ function buildUrl(cursor: string | null, tags: string[], services: string[], sta
     if (services.length > 0) url += `&services=${services.join(',')}`;
     if (startTime != null) url += `&start_time=${startTime}`;
     if (endTime != null) url += `&end_time=${endTime}`;
+    if (favoritesOnly) url += `&favorite=true`;
     return url;
 }
 
 const cursorOf = (item: StreamItem): string => `${item.last_packet_time ?? 0}:${item.id}`;
 
-export function useStreams({ tags, services, startTime, endTime, enabled = true, refetchInterval = false, live = true }: UseStreamsOptions) {
+export function useStreams({ tags, services, startTime, endTime, favoritesOnly, enabled = true, refetchInterval = false, live = true }: UseStreamsOptions) {
     const queryClient = useQueryClient();
     const [freeze, dispatch] = useReducer(freezeReducer<StreamItem>, undefined, initialFreezeState<StreamItem>);
     const [hasMoreStreams, setHasMoreStreams] = useState(true);
@@ -54,11 +59,11 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
     // Identity of the filters the query runs under. The freeze reducer
     // applies data wholesale when this changes (filters switched) and
     // freezes the visible snapshot otherwise.
-    const queryKey = useMemo(() => JSON.stringify({ tags, services, startTime, endTime }), [tags, services, startTime, endTime]);
+    const queryKey = useMemo(() => JSON.stringify({ tags, services, startTime, endTime, favoritesOnly }), [tags, services, startTime, endTime, favoritesOnly]);
 
     const { data: queryData, isLoading: isLoadingMore } = useQuery({
-        queryKey: ['streams', { tags, services, startTime, endTime, offset: 0 }],
-        queryFn: ({ signal }) => apiFetch<StreamItem[]>(buildUrl(null, tags, services, startTime, endTime), signal),
+        queryKey: ['streams', { tags, services, startTime, endTime, favoritesOnly, offset: 0 }],
+        queryFn: ({ signal }) => apiFetch<StreamItem[]>(buildUrl(null, tags, services, startTime, endTime, favoritesOnly), signal),
         enabled,
         refetchInterval,
         // Window-focus refetches are deliberately kept: the frozen view
@@ -82,7 +87,7 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
         if (!last) return;
         loadingMoreRef.current = true;
         try {
-            const data = await apiFetch<StreamItem[]>(buildUrl(cursorOf(last), tags, services, startTime, endTime));
+            const data = await apiFetch<StreamItem[]>(buildUrl(cursorOf(last), tags, services, startTime, endTime, favoritesOnly));
             if (data) {
                 const items = (Array.isArray(data) ? data : Object.values(data)) as StreamItem[];
                 dispatch({ type: 'append', items, maxVisible: MAX_STREAMS });
@@ -91,7 +96,7 @@ export function useStreams({ tags, services, startTime, endTime, enabled = true,
         } finally {
             loadingMoreRef.current = false;
         }
-    }, [enabled, hasMoreStreams, freeze.visible, tags, services, startTime, endTime]);
+    }, [enabled, hasMoreStreams, freeze.visible, tags, services, startTime, endTime, favoritesOnly]);
 
     const refresh = useCallback(() => {
         queryClient.invalidateQueries({ queryKey: ['streams'] });
