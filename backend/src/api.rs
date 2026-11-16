@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod ai;
 pub mod auth;
 pub mod block_sync;
 pub mod download;
@@ -73,6 +74,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
                 .configure(agent::config)
                 .configure(l7::config)
                 .configure(settings::config)
+                .configure(ai::config)
                 .configure(protect::config)
                 .configure(proto::config)
                 .configure(stats::config)

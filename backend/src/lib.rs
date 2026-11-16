@@ -491,6 +491,21 @@ pub async fn run() -> std::io::Result<()> {
     // Spawn special trigger handler (flag farm + alert notifications)
     api::special_triggers::spawn_special_trigger_handler(pool.clone(), broadcaster_tx.clone());
 
+    // JEV scheduler: supervised poller, OFF by default (ai_enabled=false).
+    // Re-reads settings every tick; a transport that cannot initialize
+    // leaves the scheduler idle-rejecting instead of aborting the backend.
+    let jev_transport: Arc<dyn api::ai::openrouter::DecisionsTransport> =
+        match api::ai::openrouter::ReqwestTransport::new() {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                warn!("JEV transport unavailable ({}), analysis stays disabled", e);
+                Arc::new(api::ai::openrouter::UnavailableTransport)
+            }
+        };
+    let jev_scheduler =
+        api::ai::scheduler::spawn(pool.clone(), broadcaster_tx.clone(), jev_transport);
+    let jev_scheduler_data = web::Data::new(jev_scheduler.clone());
+
     // Favorite retention workers: bounded archive batches (live + saved
     // unions) and bounded post-unstar saved cleanup. Failures back off
     // without touching ingestion or the star state. Pre-feature favorite
@@ -533,6 +548,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
             .app_data(version_service_data.clone())
+            .app_data(jev_scheduler_data.clone())
             .app_data(health_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())

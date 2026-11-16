@@ -80,6 +80,58 @@ lazy_static::lazy_static! {
     pub static ref FAVORITE_CLEANUP_BACKLOG: IntGauge = IntGauge::with_opts(
         Opts::new("red_eye_favorite_cleanup_backlog", "Streams with saved content awaiting post-unstar deletion")
     ).unwrap();
+
+    // JEV (external stream analysis). No labels anywhere: stream ids,
+    // payload hashes, remote IPs and raw answers never become metric
+    // dimensions.
+    pub static ref AI_STATE: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_ai_state", "JEV run state: 0 disabled, 1 unconfigured, 2 active, 3 backoff, 4 cost limited")
+    ).unwrap();
+    pub static ref AI_BACKLOG: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_ai_backlog", "Candidate streams waiting for analysis")
+    ).unwrap();
+    pub static ref AI_INFLIGHT: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_ai_inflight", "External calls currently in flight")
+    ).unwrap();
+    pub static ref AI_CALLS_TOTAL: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_calls_total", "Decisions API calls started")
+    ).unwrap();
+    pub static ref AI_TRANSPORT_FAILURES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_transport_failures_total", "Network, timeout and 5xx provider failures")
+    ).unwrap();
+    pub static ref AI_RATE_LIMITS: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_rate_limits_total", "Provider 429 responses")
+    ).unwrap();
+    pub static ref AI_INVALID_RESPONSES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_invalid_responses_total", "Rejected requests and malformed provider answers")
+    ).unwrap();
+    pub static ref AI_RETRIES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_retries_total", "Candidates deferred by backoff")
+    ).unwrap();
+    pub static ref AI_VERDICTS_TOTAL: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_verdicts_total", "Stored verdicts (validated responses only)")
+    ).unwrap();
+    pub static ref AI_ATTACK_VERDICTS_TOTAL: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_attack_verdicts_total", "Stored attack verdicts")
+    ).unwrap();
+    pub static ref AI_SKIPPED_NO_CONTENT: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_skipped_no_content_total", "Analyses skipped: no new analyzable content (deleted or ACK-only)")
+    ).unwrap();
+    pub static ref AI_TRANSCRIPTS_TRUNCATED: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ai_transcripts_truncated_total", "Transcripts built with truncation")
+    ).unwrap();
+    pub static ref AI_COST_SPENT: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_ai_cost_spent_micro_usd", "Today's recorded plus conservatively estimated provider spend, micro-USD")
+    ).unwrap();
+    pub static ref AI_LAST_SUCCESS_UNIX: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_ai_last_success_unix", "Unix time of the last successful verdict insert")
+    ).unwrap();
+    pub static ref AI_PROVIDER_LATENCY: prometheus::Histogram = prometheus::Histogram::with_opts(
+        prometheus::HistogramOpts::new(
+            "red_eye_ai_provider_latency_seconds",
+            "Decisions API call latency"
+        ).buckets(vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0])
+    ).unwrap();
 }
 
 pub fn register_metrics() {
@@ -107,6 +159,21 @@ pub fn register_metrics() {
     let _ = r.register(Box::new(FAVORITE_CAPACITY_BYTES.clone()));
     let _ = r.register(Box::new(FAVORITE_ACTIVE_SEGMENTS.clone()));
     let _ = r.register(Box::new(FAVORITE_CLEANUP_BACKLOG.clone()));
+    let _ = r.register(Box::new(AI_STATE.clone()));
+    let _ = r.register(Box::new(AI_BACKLOG.clone()));
+    let _ = r.register(Box::new(AI_INFLIGHT.clone()));
+    let _ = r.register(Box::new(AI_CALLS_TOTAL.clone()));
+    let _ = r.register(Box::new(AI_TRANSPORT_FAILURES.clone()));
+    let _ = r.register(Box::new(AI_RATE_LIMITS.clone()));
+    let _ = r.register(Box::new(AI_INVALID_RESPONSES.clone()));
+    let _ = r.register(Box::new(AI_RETRIES.clone()));
+    let _ = r.register(Box::new(AI_VERDICTS_TOTAL.clone()));
+    let _ = r.register(Box::new(AI_ATTACK_VERDICTS_TOTAL.clone()));
+    let _ = r.register(Box::new(AI_SKIPPED_NO_CONTENT.clone()));
+    let _ = r.register(Box::new(AI_TRANSCRIPTS_TRUNCATED.clone()));
+    let _ = r.register(Box::new(AI_COST_SPENT.clone()));
+    let _ = r.register(Box::new(AI_LAST_SUCCESS_UNIX.clone()));
+    let _ = r.register(Box::new(AI_PROVIDER_LATENCY.clone()));
 }
 
 /// Refresh gauge metrics from DB and agent state.
