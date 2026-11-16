@@ -147,6 +147,37 @@ Full-control mutations additionally require `expected_revision`
 operations a prior `dry_run=true` call whose `operation_id` the mutation
 must reference. Every audit record carries ids and statuses only.
 
+#### fetch_url (opt-in network egress)
+
+The `fetch_url` MCP tool lets an MCP client hand the service a public
+http(s) URL (exported-stream links, advisory docs) and get back extracted
+readable text instead of raw HTML. It is the only network egress the
+service makes besides its backend connection, and the original service
+spec banned arbitrary HTTP forwarding - so it ships DISABLED and exists
+only when `MCP_ENABLE_FETCH_URL=true` (or `1`) was set at startup. With
+the flag off the tool is unknown: it is not listed and calls fail as an
+unknown tool. Warning: enabling it lets MCP clients make the service
+fetch public urls only.
+
+Hardening, all fixed compile-time caps:
+
+- Scheme is `http`/`https` only; URLs with embedded credentials are
+  rejected; URL length <= 2048; any authenticated token may call it
+  (read-only or full-control - it mutates nothing), subject to a tight
+  per-token fetch rate limit on top of the global limits.
+- SSRF policy: the host is resolved and EVERY resolved address must be
+  public - loopback, RFC1918, link-local (incl. cloud metadata),
+  unique-local, CGNAT, unspecified, multicast/broadcast and documentation
+  ranges are refused, and one refused address refuses the request. The
+  connection is pinned to a validated address (per-request DNS override,
+  env proxies disabled), so DNS rebinding between check and connect cannot
+  reach a private network. Redirects are followed manually (max 3), and
+  every hop re-runs the same URL + address validation.
+- Download cap 2 MiB, wall-clock 15 s, output capped at 60000 characters
+  with an explicit truncation marker. HTML is rendered to text (title,
+  meta description, body with inline links); JSON/XML/text pass through;
+  binary content types are never returned.
+
 ### soc-worker (LLM triage)
 
 Persistent queue (`soc_job`) in PostgreSQL, leased workers, bounded
@@ -268,6 +299,7 @@ python3 test_grpc_service.py http://YOUR_IP:31337
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MCP_SERVICE_TOKEN` | red-eye-mcp service credential for backend API calls | empty (MCP fail-closed) |
+| `MCP_ENABLE_FETCH_URL` | enable the fetch_url MCP tool (network egress to public hosts only) | `false` |
 | `SOC_WORKER_TOKEN` | soc-worker job credential for backend API calls | empty (worker retries) |
 | `MCP_TOKEN` | read-only MCP token the worker uses for evidence | empty |
 
