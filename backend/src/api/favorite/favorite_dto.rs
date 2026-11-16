@@ -1,8 +1,7 @@
 use serde::Serialize;
 use utoipa::ToSchema;
 
-/// Current retention state of one stream, returned by the favorite
-/// endpoints. favorite_revision is the token late workers compare against.
+/// Current retention state of one stream, returned by the favorite endpoints.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FavoriteStateResponse {
     pub id: i64,

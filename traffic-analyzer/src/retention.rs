@@ -39,8 +39,6 @@ impl RetentionTracker {
         self.segment_limit.load(Ordering::Relaxed)
     }
 
-    /// Would assigning a packet of `incoming` bytes to `stream_id` exceed
-    /// the segment limit? None = the stream is not starred (fast path).
     pub fn rotation_needed(&self, stream_id: usize, incoming: usize) -> bool {
         match self.entries.get(&(stream_id as i64)) {
             Some(entry) => {
@@ -50,9 +48,6 @@ impl RetentionTracker {
         }
     }
 
-    /// Local byte delta from a flush batch; tracked entries only (unstarred
-    /// streams are not rotation candidates and their DB column is updated
-    /// by the flusher's stats batch anyway).
     pub fn add_bytes(&self, stream_id: usize, delta: i64) {
         if let Some(mut entry) = self.entries.get_mut(&(stream_id as i64)) {
             entry.retained_bytes = entry.retained_bytes.saturating_add(delta);
@@ -73,8 +68,6 @@ impl RetentionTracker {
                 },
             );
         }
-        // Unstarred/rotated segments leave the tracker; their live rows are
-        // ordinary retention again.
         self.entries.retain(|k, _| fresh.contains(k));
     }
 
