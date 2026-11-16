@@ -117,8 +117,9 @@ impl TagRepository {
             .collect()
     }
 
-    /// Insert the tag_name row and its explicit targets in one transaction,
-    /// returning the stored filter.
+    /// Insert the tag_name row and its explicit targets in one transaction
+    /// with the control-plane revision bump, returning the stored filter.
+    /// Commit happens here; publication is the caller's job.
     pub async fn create_tag_name(
         &self,
         tag_name: TagNameCreate,
@@ -126,12 +127,14 @@ impl TagRepository {
         ip_network: Option<IpNetwork>,
     ) -> Result<TagName, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
+        let revision =
+            crate::api::agent::agent_config::ControlPlane::bump_revision(&mut tx).await?;
         let row = sqlx::query_as::<_, TagNameRow>(
             "INSERT INTO tag_name (name, color, template_type, template, direction, action, \
              enabled, ip_network, ip_endpoint, expression_source, service_targets_global, \
              agent_targets_global, threshold_count, threshold_window_secs, threshold_group_by, \
-             threshold_cooldown_secs, threshold_block_secs, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+             threshold_cooldown_secs, threshold_block_secs, expires_at, revision)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
              RETURNING *",
         )
         .bind(&tag_name.name)
@@ -152,6 +155,7 @@ impl TagRepository {
         .bind(tag_name.threshold_cooldown_secs)
         .bind(tag_name.threshold_block_secs)
         .bind(tag_name.expires_at)
+        .bind(revision)
         .fetch_one(tx.as_mut())
         .await?;
         let id = row.id;
@@ -193,13 +197,16 @@ impl TagRepository {
         ip_network: Option<IpNetwork>,
     ) -> Result<TagName, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
+        let revision =
+            crate::api::agent::agent_config::ControlPlane::bump_revision(&mut tx).await?;
         let row = sqlx::query_as::<_, TagNameRow>(
             "UPDATE tag_name SET name = $1, color = $2, template_type = $3, template = $4, \
              direction = $5, action = $6, enabled = $7, ip_network = $8, ip_endpoint = $9, \
              expression_source = $10, service_targets_global = $11, agent_targets_global = $12, \
              threshold_count = $13, threshold_window_secs = $14, threshold_group_by = $15, \
-             threshold_cooldown_secs = $16, threshold_block_secs = $17, expires_at = $18
-             WHERE id = $19
+             threshold_cooldown_secs = $16, threshold_block_secs = $17, expires_at = $18, \
+             revision = $19
+             WHERE id = $20
              RETURNING *",
         )
         .bind(&tag_name.name)
@@ -220,6 +227,7 @@ impl TagRepository {
         .bind(tag_name.threshold_cooldown_secs)
         .bind(tag_name.threshold_block_secs)
         .bind(tag_name.expires_at)
+        .bind(revision)
         .bind(id)
         .fetch_one(tx.as_mut())
         .await?;
@@ -239,16 +247,6 @@ impl TagRepository {
         Ok(Self::assemble(vec![row], services, agents).remove(0))
     }
 
-    /// Enable/disable toggle without rewriting the rest of the definition.
-    pub async fn set_tag_name_enabled(&self, id: i64, enabled: bool) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE tag_name SET enabled = $2 WHERE id = $1")
-            .bind(id)
-            .bind(enabled)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     pub async fn delete_tag(&self, id: i64) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM tag WHERE id = $1")
             .bind(id)
@@ -257,12 +255,35 @@ impl TagRepository {
         Ok(())
     }
 
-    pub async fn delete_tag_name(&self, id: i64) -> Result<(), sqlx::Error> {
+    pub async fn delete_tag_name(&self, id: i64) -> Result<i64, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        // Deleting a filter must also drop its unexpired active blocks (FK
+        // cascade) and advance the revision so agents unban promptly via
+        // the next snapshot.
+        let revision =
+            crate::api::agent::agent_config::ControlPlane::bump_revision(&mut tx).await?;
         sqlx::query("DELETE FROM tag_name WHERE id = $1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(tx.as_mut())
             .await?;
-        Ok(())
+        tx.commit().await?;
+        Ok(revision)
+    }
+
+    /// Enable/disable toggle without rewriting the rest of the definition;
+    /// bumps the revision so consumers converge.
+    pub async fn set_tag_name_enabled(&self, id: i64, enabled: bool) -> Result<i64, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let revision =
+            crate::api::agent::agent_config::ControlPlane::bump_revision(&mut tx).await?;
+        sqlx::query("UPDATE tag_name SET enabled = $2, revision = $3 WHERE id = $1")
+            .bind(id)
+            .bind(enabled)
+            .bind(revision)
+            .execute(tx.as_mut())
+            .await?;
+        tx.commit().await?;
+        Ok(revision)
     }
 
     pub async fn get_tags_by_stream_id(&self, stream_id: i64) -> Result<Vec<Tag>, sqlx::Error> {

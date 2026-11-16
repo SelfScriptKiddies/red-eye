@@ -393,6 +393,10 @@ pub async fn run() -> std::io::Result<()> {
     // Spawn special trigger handler (flag farm + alert notifications)
     api::special_triggers::spawn_special_trigger_handler(pool.clone(), broadcaster_tx.clone());
 
+    // Active-block expiry cleanup: blocks expire even if the analyzer that
+    // created them is offline (agents unban locally at expiry as well).
+    api::block_sync::spawn_block_cleanup(pool.clone());
+
     // Subscribe to NATS per-packet events and broadcast ONE aggregated
     // "activity" frame per second to WebSocket clients (see ws_activity.rs
     // for the wire format and the aggregation semantics).

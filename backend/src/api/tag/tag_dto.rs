@@ -21,6 +21,9 @@ pub const IP_ENDPOINTS: [&str; 2] = ["src", "dst"];
 /// substring bytes, bsubstr hex input).
 pub const MAX_PATTERN_LEN: usize = 255;
 
+/// Compiled-regex size limit (regex crate size_limit), documented.
+pub const MAX_REGEX_COMPILED_SIZE: usize = 1_000_000;
+
 /// Expression source length limit. Kept in sync with the filter-dsl crate
 /// limit (which enforces it at compile time as well).
 pub const MAX_EXPRESSION_SOURCE_LEN: usize = 4096;

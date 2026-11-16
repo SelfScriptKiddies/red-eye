@@ -317,7 +317,8 @@ impl ControlPlane {
 
     /// Build the complete snapshot for one agent: its effective network
     /// settings plus its service set (global services plus explicit
-    /// agent_service assignments). None when the DB read fails - callers
+    /// agent_service assignments), its enforceable filter projection and
+    /// its unexpired active blocks. None when the DB read fails - callers
     /// treat that as pending sync, never as an empty assignment.
     pub async fn snapshot_for(&self, agent_id: &str) -> Option<WireAgentConfigSnapshot> {
         let revision = match self.current_revision().await {
@@ -394,6 +395,33 @@ impl ControlPlane {
             });
         }
 
+        // Filter and block projections are part of the atomic snapshot:
+        // a failed read withholds the whole snapshot (complete replacement
+        // semantics mean a partial snapshot could wipe enforcement state).
+        // The agent keeps its last valid state; reconciliation re-delivers.
+        let filters =
+            match crate::api::block_sync::agent_filter_projection(&self.pool, agent_id).await {
+                Ok(f) => f,
+                Err(e) => {
+                    error!(
+                        "Filter projection for agent '{}' failed, snapshot withheld: {}",
+                        agent_id, e
+                    );
+                    return None;
+                }
+            };
+        let blocks =
+            match crate::api::block_sync::agent_block_projection(&self.pool, agent_id).await {
+                Ok(b) => b,
+                Err(e) => {
+                    error!(
+                        "Block projection for agent '{}' failed, snapshot withheld: {}",
+                        agent_id, e
+                    );
+                    return None;
+                }
+            };
+
         Some(WireAgentConfigSnapshot {
             revision: u64::try_from(revision).unwrap_or_default(),
             agent_id: agent_id.to_string(),
@@ -402,9 +430,8 @@ impl ControlPlane {
                 machine_ip: network.machine_ip.unwrap_or_default(),
             }),
             services,
-            // Filter projection arrives with the unified control plane.
-            filters: Vec::new(),
-            blocks: Vec::new(),
+            filters,
+            blocks,
         })
     }
 

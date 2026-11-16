@@ -49,7 +49,7 @@ impl From<crate::api::service::service_dto::Service> for WireService {
 
 impl From<crate::api::tag::tag_dto::TagName> for WireFilter {
     fn from(tag_name: crate::api::tag::tag_dto::TagName) -> Self {
-        let (filter_type, filter_payload, ip_network, ip_endpoint, expression_source) =
+        let (filter_type, filter_payload, ip_network, ip_endpoint, _expression_source) =
             match tag_name.template_type.as_str() {
                 // ip_cidr: the pattern is the normalized CIDR; endpoint
                 // rides its own field.

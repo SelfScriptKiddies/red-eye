@@ -72,6 +72,12 @@ fn validate(tag_name: &TagNameCreate, action: &str) -> Result<(), TagValidationE
                     if src.len() > crate::api::tag::tag_dto::MAX_EXPRESSION_SOURCE_LEN {
                         return fail("expression source exceeds the length limit");
                     }
+                    // The shared DSL must accept the source with a boolean
+                    // result type; a compile failure is rejected before
+                    // persistence, never shipped to consumers.
+                    if let Err(e) = filter_dsl::compile(src) {
+                        return fail(&format!("expression does not compile: {}", e));
+                    }
                 }
                 _ => return fail("expression filters require expression_source"),
             }
@@ -99,6 +105,9 @@ fn validate(tag_name: &TagNameCreate, action: &str) -> Result<(), TagValidationE
                 if hex::decode(&tag_name.template).is_err() {
                     return fail("bsubstr template must be valid hexadecimal");
                 }
+            }
+            if tag_name.template_type == "regex" {
+                validate_regex(&tag_name.template)?;
             }
         }
     }
@@ -169,6 +178,16 @@ pub(crate) fn normalize_cidr(input: &str) -> Result<IpNetwork, TagValidationErro
     let net: IpNetwork = input.parse().map_err(|_| fail())?;
     let masked = mask_host_bits(net.ip(), net.prefix());
     IpNetwork::new(masked, net.prefix()).map_err(|_| fail())
+}
+
+/// Validate the regex source compiles within the documented compiled-size
+/// limit; rejected at save time, never shipped to consumers.
+fn validate_regex(pattern: &str) -> Result<(), TagValidationError> {
+    regex::RegexBuilder::new(pattern)
+        .size_limit(crate::api::tag::tag_dto::MAX_REGEX_COMPILED_SIZE)
+        .build()
+        .map(|_| ())
+        .map_err(|e| TagValidationError(format!("regex does not compile: {}", e)))
 }
 
 fn mask_host_bits(addr: IpAddr, prefix: u8) -> IpAddr {
@@ -256,7 +275,7 @@ impl TagService {
             .await?)
     }
 
-    pub async fn set_tag_name_enabled(&self, id: i64, enabled: bool) -> Result<(), sqlx::Error> {
+    pub async fn set_tag_name_enabled(&self, id: i64, enabled: bool) -> Result<i64, sqlx::Error> {
         self.repository.set_tag_name_enabled(id, enabled).await
     }
 
@@ -264,7 +283,7 @@ impl TagService {
         self.repository.delete_tag(id).await
     }
 
-    pub async fn delete_tag_name(&self, id: i64) -> Result<(), sqlx::Error> {
+    pub async fn delete_tag_name(&self, id: i64) -> Result<i64, sqlx::Error> {
         self.repository.delete_tag_name(id).await
     }
 
@@ -405,6 +424,40 @@ mod tests {
         assert!(validate(&t, "tag").is_err());
 
         t.expression_source = Some("protocol == \"TCP\"".into());
+        assert!(validate(&t, "tag").is_ok());
+    }
+
+    /// Expressions must compile through the shared DSL with a boolean
+    /// result: type errors and unknown fields are rejected before
+    /// persistence.
+    #[test]
+    fn expression_source_must_compile_to_bool() {
+        let mut t = base();
+        t.template_type = "expression".into();
+        t.template = String::new();
+
+        t.expression_source = Some("src_port == \"80\"".into());
+        assert!(validate(&t, "tag").is_err());
+
+        t.expression_source = Some("unknown_field == 1".into());
+        assert!(validate(&t, "tag").is_err());
+
+        t.expression_source = Some("src_ip".into());
+        assert!(validate(&t, "tag").is_err());
+
+        t.expression_source = Some("ip_in_cidr(remote_ip, \"10.0.0.0/8\")".into());
+        assert!(validate(&t, "tag").is_ok());
+    }
+
+    /// Regex sources must compile within the compiled-size limit.
+    #[test]
+    fn regex_must_compile() {
+        let mut t = base();
+        t.template_type = "regex".into();
+        t.template = "(unclosed".into();
+        assert!(validate(&t, "tag").is_err());
+
+        t.template = "flag\\{[a-z]+\\}".into();
         assert!(validate(&t, "tag").is_ok());
     }
 

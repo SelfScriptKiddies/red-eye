@@ -112,6 +112,18 @@ impl ServiceService {
         let mut tx = self.repository.pool().begin().await?;
         ServiceRepository::delete_service_row(tx.as_mut(), id).await?;
         let revision = ControlPlane::bump_revision(&mut tx).await?;
+        // The FK cascade already removed the service's explicit filter
+        // targets. An explicitly targeted filter left with no services is
+        // disabled and flagged as requiring targets (shown in the UI);
+        // global filters are unaffected.
+        sqlx::query(
+            "UPDATE tag_name SET enabled = FALSE, revision = $1 \
+             WHERE NOT service_targets_global \
+               AND NOT EXISTS (SELECT 1 FROM filter_service_target WHERE filter_id = tag_name.id)",
+        )
+        .bind(revision)
+        .execute(tx.as_mut())
+        .await?;
         tx.commit().await?;
 
         let sync = self.publish_service_op(&existing, UpdateKind::Remove).await;
