@@ -517,8 +517,15 @@ pub async fn migrate_legacy_favorites(pool: &PgPool) {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ArchiveStep {
-    Advanced { through_packet_id: i64 },
-    Drained,
+    Advanced {
+        through_packet_id: i64,
+    },
+    /// No rows beyond the progress marker. `archived` marks a drained
+    /// closed segment (state already 'archived'): the worker memoizes it
+    /// so drained favorites cannot crowd the candidate window.
+    Drained {
+        archived: bool,
+    },
     NotStarred,
 }
 
@@ -539,7 +546,7 @@ async fn archive_stream_batch(pool: &PgPool, stream_id: i64) -> Result<ArchiveSt
         tx.commit().await?;
         return Ok(ArchiveStep::NotStarred);
     };
-    if !favorite || (state != "archiving") {
+    if !favorite || (state != "archiving" && state != "archived") {
         tx.commit().await?;
         return Ok(ArchiveStep::NotStarred);
     }
@@ -561,11 +568,14 @@ async fn archive_stream_batch(pool: &PgPool, stream_id: i64) -> Result<ArchiveSt
 
     if batch.is_empty() {
         if !active {
-            // Closed and fully drained: the segment is complete.
+            // Closed and fully drained: the segment is complete (a no-op
+            // for already-archived segments, which keeps re-scanning them
+            // cheap until their marker row stops matching).
             sqlx::query(
                 r#"
                 UPDATE stream SET retention_state = 'archived', archive_error = NULL
-                WHERE id = $1 AND favorite AND favorite_revision = $2 AND retention_state = 'archiving'
+                WHERE id = $1 AND favorite AND favorite_revision = $2
+                  AND retention_state IN ('archiving', 'archived')
                 "#,
             )
             .bind(stream_id)
@@ -574,7 +584,9 @@ async fn archive_stream_batch(pool: &PgPool, stream_id: i64) -> Result<ArchiveSt
             .await?;
         }
         tx.commit().await?;
-        return Ok(ArchiveStep::Drained);
+        return Ok(ArchiveStep::Drained {
+            archived: state == "archived",
+        });
     }
 
     let max_id = batch.iter().map(|r| r.0).max().unwrap_or(through);
@@ -880,10 +892,23 @@ async fn archive_worker_loop(pool: PgPool) {
     // Per-stream bounded backoff: a failing stream retries later without
     // starving the others, and never clears its star.
     let mut backoff: HashMap<i64, (Instant, u64)> = HashMap::new();
+    // Drained closed segments (state 'archived', nothing beyond the
+    // progress marker) are memoized here until they leave the candidate
+    // set; without it, finished favorites would fill the scan window and
+    // starve active segments.
+    let mut drained_archived: std::collections::HashSet<i64> = std::collections::HashSet::new();
     loop {
         sleep(Duration::from_millis(ARCHIVE_TICK_MS)).await;
         let candidates = match sqlx::query_as::<_, (i64,)>(
-            "SELECT id FROM stream WHERE favorite AND retention_state = 'archiving' ORDER BY id LIMIT $1",
+            // 'archived' stays in the scan: packets flushed to a just-rotated
+            // segment can land after it was marked complete, and those
+            // stragglers must still reach saved storage (otherwise the
+            // cleanup guard would retain their partitions forever).
+            // Archiving segments scan first: they carry real incremental
+            // work, straggler checks are second.
+            "SELECT id FROM stream \
+             WHERE favorite AND retention_state IN ('archiving', 'archived') \
+             ORDER BY (retention_state = 'archiving') DESC, id DESC LIMIT $1",
         )
         .bind(ARCHIVE_CANDIDATES_PER_TICK)
         .fetch_all(&pool)
@@ -895,8 +920,16 @@ async fn archive_worker_loop(pool: PgPool) {
                 continue;
             }
         };
+        // Memoized entries only matter while their stream still qualifies;
+        // unstarred or deleted streams drop out of the set here.
+        let candidate_ids: std::collections::HashSet<i64> =
+            candidates.iter().map(|(id,)| *id).collect();
+        drained_archived.retain(|id| candidate_ids.contains(id));
 
         for (stream_id,) in &candidates {
+            if drained_archived.contains(stream_id) {
+                continue;
+            }
             // Per-stream bounded backoff: skip until its retry window ends.
             if backoff
                 .get(stream_id)
@@ -907,12 +940,20 @@ async fn archive_worker_loop(pool: PgPool) {
             match archive_stream_batch(&pool, *stream_id).await {
                 Ok(step) => {
                     backoff.remove(stream_id);
-                    if let ArchiveStep::Advanced { through_packet_id } = step {
-                        log::debug!(
-                            "Archive stream {} advanced to packet {}",
-                            stream_id,
-                            through_packet_id
-                        );
+                    match step {
+                        ArchiveStep::Advanced { through_packet_id } => {
+                            log::debug!(
+                                "Archive stream {} advanced to packet {}",
+                                stream_id,
+                                through_packet_id
+                            );
+                        }
+                        ArchiveStep::Drained { archived } => {
+                            if archived {
+                                drained_archived.insert(*stream_id);
+                            }
+                        }
+                        ArchiveStep::NotStarred => {}
                     }
                 }
                 Err(e) => {
