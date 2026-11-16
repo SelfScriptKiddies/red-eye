@@ -19,6 +19,13 @@ pub const AI_ENTRY_MAX_BYTES: &str = "ai_entry_max_bytes";
 pub const AI_DAILY_COST_LIMIT: &str = "ai_daily_cost_limit";
 pub const AI_RETENTION_DAYS: &str = "ai_verdict_retention_days";
 
+/// Enablement watermark (backend-managed, not operator-editable): the
+/// highest stream packet id at the moment JEV was enabled. Candidates must
+/// carry activity AFTER this id, so enabling never sweeps historical
+/// streams into external analysis. Cleared on disable; a backend restart
+/// keeps it, which is what lets in-flight work be rescheduled safely.
+pub const AI_ENABLED_BOUNDARY: &str = "ai_enabled_at_packet_id";
+
 const KEYS: [&str; 12] = [
     AI_ENABLED,
     AI_API_KEY,
@@ -227,6 +234,9 @@ pub async fn validate_setting(key: &str, value: &str, pool: &PgPool) -> Result<(
             1..=3650,
             "ai_verdict_retention_days must be an integer from 1 to 3650",
         ),
+        AI_ENABLED_BOUNDARY => {
+            Err("ai_enabled_at_packet_id is managed by the scheduler and read-only".to_string())
+        }
         _ => Ok(()),
     }
 }
@@ -255,6 +265,36 @@ async fn get_setting_i64(pool: &PgPool, key: &str) -> Option<i64> {
         .ok()
         .flatten()
         .and_then(|v| v.trim().parse().ok())
+}
+
+/// The enablement watermark. Persisted at the disable->enable transition,
+/// cleared on disable, kept across restarts.
+pub async fn read_enablement_boundary(pool: &PgPool) -> Option<i64> {
+    get_setting_i64(pool, AI_ENABLED_BOUNDARY).await
+}
+
+pub async fn write_enablement_boundary(pool: &PgPool, value: i64) {
+    // MAX(last_packet_id) over the small stream table: bounded by stream
+    // count, runs once per enablement, never on the ingest path.
+    let boundary: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(last_packet_id), 0) FROM stream")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let _ = sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = $2",
+    )
+    .bind(AI_ENABLED_BOUNDARY)
+    .bind(value.max(boundary).to_string())
+    .execute(pool)
+    .await;
+}
+
+pub async fn clear_enablement_boundary(pool: &PgPool) {
+    let _ = sqlx::query("DELETE FROM app_settings WHERE key = $1")
+        .bind(AI_ENABLED_BOUNDARY)
+        .execute(pool)
+        .await;
 }
 
 #[cfg(test)]

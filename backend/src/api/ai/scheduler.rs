@@ -80,6 +80,10 @@ struct Candidate {
     dst_ip: String,
     dst_port: i32,
     verdict_last: i64,
+    /// Enablement watermark for this tick: transcripts must cover content
+    /// after max(verdict_last, boundary), so pre-enablement history is
+    /// never analyzed.
+    boundary: i64,
 }
 
 impl Candidate {
@@ -88,6 +92,12 @@ impl Candidate {
             "{}:{}:{}:{}",
             self.stream_id, self.last_packet_id, model, PROMPT_VERSION
         )
+    }
+
+    /// First packet id the transcript must EXCLUDE (everything up to it is
+    /// already analyzed or predates enablement).
+    fn after_packet_id(&self) -> i64 {
+        self.verdict_last.max(self.boundary)
     }
 
     /// A closed stream whose previous analysis predates the close gets one
@@ -277,7 +287,7 @@ async fn eligible(
     out
 }
 
-fn candidate_row(row: &sqlx::postgres::PgRow) -> Candidate {
+fn candidate_row(row: &sqlx::postgres::PgRow, boundary: i64) -> Candidate {
     use sqlx::Row;
     Candidate {
         stream_id: row.get("id"),
@@ -294,6 +304,7 @@ fn candidate_row(row: &sqlx::postgres::PgRow) -> Candidate {
         dst_ip: row.get("dst_ip"),
         dst_port: row.get("dst_port"),
         verdict_last: row.get("verdict_last"),
+        boundary,
     }
 }
 
@@ -331,6 +342,8 @@ fn candidate_sql(fair: bool) -> String {
         ) v ON true
         WHERE s.last_packet_id > 0
           AND s.last_packet_id > COALESCE(v.last_packet_id, 0)
+          -- Enablement boundary: activity before this id predates JEV.
+          AND s.last_packet_id > $6
           AND (
                 (s.active = false AND COALESCE(v.last_packet_id, 0) > 0)
                 OR COALESCE(s.last_packet_time, 0) <= $3
@@ -348,6 +361,7 @@ async fn fetch_candidates(
     pool: &PgPool,
     settings: &AiSettings,
     now_secs: i64,
+    boundary: i64,
 ) -> Result<(Vec<Candidate>, Vec<Candidate>), sqlx::Error> {
     let fair_cut = now_secs - FAIR_QUEUE_AGE_SECS;
     let debounce_cut = now_secs - settings.debounce_ms / 1000;
@@ -359,10 +373,11 @@ async fn fetch_candidates(
         .bind(debounce_cut)
         .bind(fair_cut)
         .bind(limit)
+        .bind(boundary)
         .fetch_all(pool)
         .await?
         .iter()
-        .map(candidate_row)
+        .map(|r| candidate_row(r, boundary))
         .collect::<Vec<_>>();
 
     let priority = sqlx::query(&candidate_sql(false))
@@ -371,10 +386,11 @@ async fn fetch_candidates(
         .bind(debounce_cut)
         .bind(fair_cut)
         .bind(limit)
+        .bind(boundary)
         .fetch_all(pool)
         .await?
         .iter()
-        .map(candidate_row)
+        .map(|r| candidate_row(r, boundary))
         .collect::<Vec<_>>();
 
     // The fair queue runs ahead of the priority ordering; cap the combined
@@ -524,7 +540,7 @@ async fn run_analysis(
         first_packet_time: 0,
         last_packet_time: candidate.last_time,
         revision_packet_id: candidate.last_packet_id,
-        after_packet_id: candidate.verdict_last,
+        after_packet_id: candidate.after_packet_id(),
     };
 
     let transcript = match super::transcript::build(
@@ -808,12 +824,14 @@ async fn tick(
     if !settings.enabled || settings.api_key.trim().is_empty() {
         // Disabled or unconfigured: cancel in-flight (where possible),
         // discard late responses at their insert-time re-check, expose an
-        // idle state, and never error-loop.
+        // idle state, and never error-loop. The enablement watermark is
+        // cleared so the next enablement re-captures it.
         for (_, f) in inner.in_flight.drain() {
             if let Some(handle) = f.abort {
                 handle.abort();
             }
         }
+        super::settings::clear_enablement_boundary(pool).await;
         inner.run_state = if settings.enabled {
             RunState::Unconfigured
         } else {
@@ -841,7 +859,19 @@ async fn tick(
     }
 
     let now_secs = now_unix();
-    let (mut fair, priority) = fetch_candidates(pool, &settings, now_secs)
+    // Enablement watermark: persisted at the disable->enable transition,
+    // cleared on disable, kept across restarts. Candidates below it are
+    // pre-JEV history and never leave the network.
+    let boundary = match super::settings::read_enablement_boundary(pool).await {
+        Some(b) => b,
+        None => {
+            super::settings::write_enablement_boundary(pool, 0).await;
+            super::settings::read_enablement_boundary(pool)
+                .await
+                .unwrap_or(0)
+        }
+    };
+    let (mut fair, priority) = fetch_candidates(pool, &settings, now_secs, boundary)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -937,6 +967,7 @@ mod tests {
             dst_ip: "10.0.0.2".to_string(),
             dst_port: 2,
             verdict_last,
+            boundary: 0,
         }
     }
 
@@ -1118,6 +1149,22 @@ mod tests {
     }
 
     #[test]
+    fn transcript_starts_after_the_enablement_boundary() {
+        // A verdict predating enablement: content is analyzed only after
+        // max(verdict_last, boundary).
+        let mut c = candidate(true, now_unix(), 50);
+        c.boundary = 100;
+        assert_eq!(c.after_packet_id(), 100);
+        // A newer verdict moves the boundary past the watermark.
+        c.verdict_last = 150;
+        assert_eq!(c.after_packet_id(), 150);
+        // Fresh enablement (no verdicts): boundary only.
+        let mut fresh = candidate(true, now_unix(), 0);
+        fresh.boundary = 77;
+        assert_eq!(fresh.after_packet_id(), 77);
+    }
+
+    #[test]
     fn candidate_sql_uses_fair_and_priority_orderings() {
         let fair = candidate_sql(true);
         let prio = candidate_sql(false);
@@ -1126,6 +1173,9 @@ mod tests {
         assert!(fair.contains("< $4"));
         assert!(prio.contains(">= $4"));
         assert!(fair.contains("LIMIT $5"));
+        // Enablement boundary: pre-JEV revisions are never candidates.
+        assert!(fair.contains("> $6"));
+        assert!(prio.contains("> $6"));
         // Neither queue scans the packets table.
         assert!(!fair.to_lowercase().contains("from packets"));
         assert!(!prio.to_lowercase().contains("from packets"));
