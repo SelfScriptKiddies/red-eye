@@ -16,5 +16,5 @@ pub use red_eye::wire::{
 // Snapshot-test-only shapes (validation helpers build wire values).
 #[cfg(test)]
 pub use red_eye::wire::{
-    AgentNetworkSettings as WireAgentNetworkSettings, IpEndpoint, Service as WireService,
+    AgentNetworkSettings as WireAgentNetworkSettings, Service as WireService,
 };
