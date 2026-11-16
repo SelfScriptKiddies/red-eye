@@ -1,5 +1,9 @@
 // Wire contracts for the red-eye NATS streams: agent -> analyzer raw
 // packets, and backend -> agent + analyzer settings updates.
+//
+// Wire version 4: coordinated between-games upgrade. Version 3 and below
+// are unsupported; consumers reject foreign versions explicitly and keep
+// their last valid configuration.
 syntax = "proto3";
 
 package red_eye.wire;
@@ -19,6 +23,18 @@ message PacketBatch {
   /// Wire protocol version (for check of unsynced components)
   uint32 version = 1;
   repeated RawPacket packets = 2;
+  /// Stable identity of the capturing agent. The analyzer resolves the
+  /// per-agent machine IP from it; batches without a known agent are
+  /// dropped and counted, never attributed through a global default.
+  string agent_id = 3;
+}
+
+/// Transport protocol of a service. TCP is the proto3 zero value, matching
+/// the database default for pre-migration rows; senders always set it
+/// explicitly.
+enum Protocol {
+  PROTOCOL_TCP = 0;
+  PROTOCOL_UDP = 1;
 }
 
 // Wire contract for the backend -> agent + analyzer settings stream on NATS
@@ -41,6 +57,12 @@ message Service {
   bool merge_adjacent_packets = 6;
   bool urldecode = 7;
   bool http_parse = 8;
+  /// Database id, 64-bit end-to-end: a 32-bit narrowing loses ids and must
+  /// never happen at a compatibility boundary.
+  uint64 id = 9;
+  Protocol protocol = 10;
+  /// True = applies to all agents; false = explicit agent assignment only.
+  bool is_global = 11;
 }
 
 /// A packet filter (backend "tag") as delivered to the analyzers.
@@ -53,19 +75,45 @@ message Filter {
 
 /// Id plus payload for single-entity operations.
 message ServiceOp {
-  uint32 id = 1;
+  uint64 id = 1;
   Service service = 2;
 }
 
 message FilterOp {
-  uint32 id = 1;
+  uint64 id = 1;
   Filter filter = 2;
 }
 
-/// Full configuration snapshot; ids ride inside the entries.
+/// Full global configuration snapshot (analyzer view: every service plus
+/// filters); ids ride inside the entries.
 message ConfigSync {
   repeated ServiceOp services = 1;
   repeated FilterOp filters = 2;
+}
+
+/// Effective per-agent network settings carried inside a snapshot.
+message AgentNetworkSettings {
+  /// Capture interface; the agent re-validates it exists on its host.
+  string interface = 1;
+  /// Machine IP: a concrete IPv4/IPv6 address or the wildcard 0.0.0.0 / ::
+  /// (wildcard = match services by protocol+port, preserve observed
+  /// endpoints when synthesizing packets).
+  string machine_ip = 2;
+}
+
+/// Complete desired configuration for one agent. Applying it atomically
+/// replaces that agent's interface, machine IP and service set; consumers
+/// ignore snapshots older than their current revision and snapshots
+/// addressed to other agent ids.
+message AgentConfigSnapshot {
+  /// Control-plane revision this snapshot was built from.
+  uint64 revision = 1;
+  /// Target agent id; receivers skip snapshots for other ids.
+  string agent_id = 2;
+  AgentNetworkSettings network = 3;
+  /// The agent's effective service set (global services plus explicitly
+  /// assigned ones), complete replacement semantics.
+  repeated Service services = 4;
 }
 
 /// One settings change on the wire. Exactly one `update` variant is set.
@@ -75,10 +123,11 @@ message SettingsEnvelope {
   oneof update {
     ServiceOp service_add = 2;
     ServiceOp service_update = 3;
-    uint32 service_remove = 4;
+    uint64 service_remove = 4;
     FilterOp filter_add = 5;
     FilterOp filter_update = 6;
-    uint32 filter_remove = 7;
+    uint64 filter_remove = 7;
     ConfigSync config_sync = 8;
+    AgentConfigSnapshot agent_snapshot = 9;
   }
 }

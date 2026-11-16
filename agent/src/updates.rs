@@ -11,8 +11,17 @@ use crate::config::AgentConfig;
 use crate::nats::NatsClient;
 use crate::wire::{self, SettingsEnvelope, WireService};
 
-// Switched to protobuf
-pub const SETTINGS_WIRE_VERSION: u32 = 3;
+// Wire v4: coordinated between-games upgrade; v3 producers/consumers are
+// unsupported and rejected by the version gate below.
+pub const SETTINGS_WIRE_VERSION: u32 = 4;
+
+/// JetStream stream carrying settings updates. New name for v4: the v4
+/// subject (updates_v4) differs from the v3 one, so history is not migrated.
+pub const SETTINGS_STREAM_NAME: &str = "SETTINGS_UPDATES_V4";
+
+/// Configuration history is bounded; snapshots are complete, so expired
+/// history is recoverable via reconciliation instead of unbounded growth.
+pub const SETTINGS_STREAM_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
 
 /// Decode the versioned settings envelope and check the version
 fn decode_settings_update(payload: &[u8]) -> Result<SettingsEnvelope, String> {
@@ -78,7 +87,8 @@ async fn listen_for_updates(
     let stream = js
         .create_stream(stream::Config {
             // Adding version for loud errors
-            name: "SETTINGS_UPDATES_V3".to_string(),
+            name: SETTINGS_STREAM_NAME.to_string(),
+            max_age: std::time::Duration::from_secs(SETTINGS_STREAM_MAX_AGE_SECS),
             subjects: vec![subject.to_string()],
             ..Default::default()
         })
@@ -200,6 +210,9 @@ mod tests {
             merge_adjacent_packets: false,
             urldecode: false,
             http_parse: false,
+            id: 1,
+            protocol: crate::wire::WireProtocol::Tcp as i32,
+            is_global: true,
         }
     }
 
@@ -225,7 +238,7 @@ mod tests {
     #[test]
     fn wrong_version_is_a_clean_error() {
         // All version, except actual, must be rejected by the version gate.
-        for wrong in [0u32, 1, 2] {
+        for wrong in [0u32, 1, 2, 3] {
             let bytes = SettingsEnvelope {
                 version: wrong,
                 update: None,

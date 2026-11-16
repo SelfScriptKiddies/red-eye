@@ -179,8 +179,11 @@ pub async fn run() {
 
     // Warm service cache from DB before consuming packets
     {
-        let rows = sqlx::query_as::<_, (i64, String, i32, bool, bool, bool, bool, bool, bool)>(
-            "SELECT id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
+        let rows = sqlx::query_as::<
+            _,
+            (i64, String, i32, String, bool, bool, bool, bool, bool, bool),
+        >(
+            "SELECT id, name, port, protocol, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
         )
         .fetch_all(db.pool())
         .await
@@ -191,6 +194,7 @@ pub async fn run() {
             id,
             name,
             port,
+            protocol,
             chunked_transfer_encoding,
             decrypt_tls,
             inflate_websockets,
@@ -199,11 +203,35 @@ pub async fn run() {
             http_parse,
         ) in rows
         {
+            // A row whose protocol this build cannot interpret is skipped:
+            // traffic for it degrades to counted unknown-service drops
+            // instead of being reinterpreted (e.g. UDP as TCP).
+            let transport = match protocol.as_str() {
+                "TCP" => configuration::updater::dto::TransportProto::Tcp,
+                "UDP" => configuration::updater::dto::TransportProto::Udp,
+                other => {
+                    log::warn!(
+                        "Skipping service id {} with unknown protocol '{}'",
+                        id,
+                        other
+                    );
+                    continue;
+                }
+            };
+            let Ok(port_u16) = u16::try_from(port) else {
+                log::warn!("Skipping service id {} with out-of-range port {}", id, port);
+                continue;
+            };
+            let Ok(id_usize) = usize::try_from(id) else {
+                log::warn!("Skipping service id {} overflows usize", id);
+                continue;
+            };
             services.insert(
-                id as usize,
+                id_usize,
                 configuration::updater::dto::Service {
                     name,
-                    port: port as u16,
+                    port: port_u16,
+                    protocol: transport,
                     chunked_transfer_encoding,
                     decrypt_tls,
                     inflate_websockets,

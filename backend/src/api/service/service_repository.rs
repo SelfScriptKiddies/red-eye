@@ -15,7 +15,7 @@ impl ServiceRepository {
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
                    merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
-                   alert_flag_leak
+                   alert_flag_leak, protocol, is_global
             FROM service
             WHERE id = $1
             "#,
@@ -30,10 +30,20 @@ impl ServiceRepository {
             r#"
             SELECT id, name, port, chunked_transfer_encoding, urldecode,
                    merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
-                   alert_flag_leak
+                   alert_flag_leak, protocol, is_global
             FROM service
             "#,
         )
+        .fetch_all(&self.pgpool)
+        .await
+    }
+
+    /// Explicit agent ids per service id (empty for global services).
+    pub async fn get_agent_ids_by_service(&self, service_id: i64) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT agent_id FROM agent_service WHERE service_id = $1 ORDER BY agent_id",
+        )
+        .bind(service_id)
         .fetch_all(&self.pgpool)
         .await
     }
@@ -43,11 +53,11 @@ impl ServiceRepository {
             r#"
             INSERT INTO service (name, port, chunked_transfer_encoding, urldecode,
                                merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
-                               alert_flag_leak)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                               alert_flag_leak, protocol, is_global)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id, name, port, chunked_transfer_encoding, urldecode,
                       merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
-                      alert_flag_leak
+                      alert_flag_leak, protocol, is_global
             "#)
             .bind(&service.name)
             .bind(service.port)
@@ -59,6 +69,8 @@ impl ServiceRepository {
             .bind(service.http_parse)
             .bind(service.http2_parse)
             .bind(service.alert_flag_leak)
+            .bind(&service.protocol)
+            .bind(service.is_global)
             .fetch_one(&self.pgpool)
             .await
     }
@@ -69,11 +81,11 @@ impl ServiceRepository {
             UPDATE service
             SET name = $2, port = $3, chunked_transfer_encoding = $4, urldecode = $5,
                 merge_adjacent_packets = $6, inflate_websockets = $7, decrypt_tls = $8, http_parse = $9,
-                http2_parse = $10, alert_flag_leak = $11
+                http2_parse = $10, alert_flag_leak = $11, protocol = $12, is_global = $13
             WHERE id = $1
             RETURNING id, name, port, chunked_transfer_encoding, urldecode,
                       merge_adjacent_packets, inflate_websockets, decrypt_tls, http_parse, http2_parse,
-                      alert_flag_leak
+                      alert_flag_leak, protocol, is_global
             "#)
             .bind(service.id)
             .bind(&service.name)
@@ -86,6 +98,8 @@ impl ServiceRepository {
             .bind(service.http_parse)
             .bind(service.http2_parse)
             .bind(service.alert_flag_leak)
+            .bind(&service.protocol)
+            .bind(service.is_global)
             .fetch_one(&self.pgpool)
             .await
     }

@@ -16,8 +16,8 @@ use crate::process_packet::PacketProcessor;
 use crate::wire::{PacketBatch, WireRawPacket};
 
 // One NATS message carries a BATCH of packets (agent batches up to K packets or ~10 ms, whichever first)
-// version 3 switched bincode to protobuf for stable contract
-pub const RAW_PACKET_WIRE_VERSION: u32 = 3;
+// version 4: protobuf contract with batch-level agent attribution (agent_id)
+pub const RAW_PACKET_WIRE_VERSION: u32 = 4;
 
 /// One raw packet as consumed downstream, converted from the protobuf
 /// type at the decode boundary: (tv_usec, tv_sec, ethernet_frame).
@@ -125,7 +125,12 @@ mod tests {
     use super::*;
 
     fn batch_bytes(version: u32, packets: Vec<WireRawPacket>) -> Vec<u8> {
-        PacketBatch { version, packets }.encode_to_vec()
+        PacketBatch {
+            version,
+            agent_id: "agent-a".into(),
+            packets,
+        }
+        .encode_to_vec()
     }
 
     #[test]

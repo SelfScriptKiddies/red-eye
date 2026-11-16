@@ -151,7 +151,7 @@ pub struct ApplicationConfig {
         ),
         env = "NATS_UPDATES_TOPIC",
         config = "nats.updates_topic",
-        default = "updates_v3"
+        default = "updates_v4"
     )]
     pub nats_updates_topic: String,
 
