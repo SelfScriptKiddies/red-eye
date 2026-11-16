@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use clap::Parser;
 
 /// `red-eye-agent --version` prints this: crate version + building commit
@@ -8,21 +10,20 @@ const FULL_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("RED_EYE
 #[derive(Parser, Debug, Clone)]
 #[command(name = "red-eye-agent", version = FULL_VERSION, about = "Red Eye traffic capture agent")]
 pub struct AgentConfig {
-    /// Agent identifier (defaults to hostname)
+    /// Agent identifier. Operator-controlled identity: when set it always
+    /// wins. Otherwise a stable id is persisted under DATA_DIR.
     #[arg(long, env = "AGENT_ID")]
     pub agent_id: Option<String>,
 
-    /// Network interface to capture on
+    /// Bootstrap network interface to capture on (overridden per-agent
+    /// from the control plane)
     #[arg(long, short = 'i', env = "INTERFACE", default_value = "eth0")]
     pub interface: String,
 
-    /// Machine IP address
+    /// Bootstrap machine IP address (overridden per-agent from the
+    /// control plane; 0.0.0.0 / :: = wildcard)
     #[arg(long, short = 'm', env = "MACHINE_IP", default_value = "0.0.0.0")]
     pub machine_ip: String,
-
-    /// Ports to sniff (comma-separated)
-    #[arg(long, short = 'p', env = "PORTS", value_delimiter = ',')]
-    pub ports: Vec<u16>,
 
     /// NATS broker host
     #[arg(long, env = "NATS_HOST", default_value = "nats:4222")]
@@ -56,7 +57,7 @@ pub struct AgentConfig {
     #[arg(long, env = "HEARTBEAT_INTERVAL_SECS", default_value_t = 5)]
     pub heartbeat_interval_secs: u64,
 
-    /// Data directory for CA certs and persistent state
+    /// Data directory for CA certs and persistent state (stable agent id)
     #[arg(long, env = "DATA_DIR", default_value = "/var/lib/red-eye-agent")]
     pub data_dir: String,
 
@@ -76,11 +77,8 @@ fn sanitize_nats_token(s: &str) -> String {
 }
 
 impl AgentConfig {
-    pub fn resolved_agent_id(&self) -> String {
-        if let Some(id) = &self.agent_id {
-            return sanitize_nats_token(id);
-        }
-
+    /// Bootstrap identity from the legacy hostname-machine_ip formula.
+    fn bootstrap_resolved_id(&self) -> String {
         let ip = &self.machine_ip;
         let raw = match hostname::get().ok().and_then(|h| h.into_string().ok()) {
             Some(host) => format!("{}-{}", host, ip),
@@ -93,5 +91,97 @@ impl AgentConfig {
             }
         };
         sanitize_nats_token(&raw)
+    }
+
+    /// Stable agent identity. An explicit AGENT_ID remains the
+    /// operator-controlled identity and is never overridden. Otherwise the
+    /// id is persisted under DATA_DIR: agent identity must not depend on
+    /// mutable network settings, and existing installations keep the id
+    /// the legacy formula produced on their first run with this build.
+    pub fn stable_agent_id(&self) -> String {
+        if let Some(id) = &self.agent_id {
+            return sanitize_nats_token(id);
+        }
+
+        let path = Path::new(&self.data_dir).join("agent_id");
+        if let Ok(persisted) = std::fs::read_to_string(&path) {
+            let trimmed = persisted.trim();
+            if !trimmed.is_empty() {
+                return sanitize_nats_token(trimmed);
+            }
+        }
+
+        let resolved = self.bootstrap_resolved_id();
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                log::warn!(
+                    "Cannot create data dir {} for the persistent agent id: {}",
+                    parent.display(),
+                    e
+                );
+                return resolved;
+            }
+        }
+        if let Err(e) = std::fs::write(&path, &resolved) {
+            log::warn!(
+                "Cannot persist agent id to {}: {} (identity will be re-derived next boot)",
+                path.display(),
+                e
+            );
+        }
+        resolved
+    }
+
+    /// Legacy bootstrap id formula (kept for tests of the sanitization
+    /// path; production identity flows through stable_agent_id).
+    pub fn resolved_agent_id(&self) -> String {
+        self.bootstrap_resolved_id()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_agent_id_always_wins_and_is_sanitized() {
+        let config = AgentConfig::parse_from([
+            "red-eye-agent",
+            "--agent-id",
+            "team.one x",
+            "--data-dir",
+            "/tmp/red-eye-agent-id-test-explicit",
+        ]);
+        assert_eq!(config.stable_agent_id(), "team-one-x");
+    }
+
+    #[test]
+    fn identity_persists_and_survives_machine_ip_change() {
+        let dir =
+            std::env::temp_dir().join(format!("red-eye-agent-id-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let first = AgentConfig::parse_from([
+            "red-eye-agent",
+            "--data-dir",
+            dir.to_str().unwrap(),
+            "--machine-ip",
+            "10.0.0.5",
+        ]);
+        let id1 = first.stable_agent_id();
+        assert!(!id1.is_empty());
+
+        // Same data dir, different machine IP: identity must not change.
+        let second = AgentConfig::parse_from([
+            "red-eye-agent",
+            "--data-dir",
+            dir.to_str().unwrap(),
+            "--machine-ip",
+            "10.0.0.99",
+        ]);
+        let id2 = second.stable_agent_id();
+        assert_eq!(id1, id2);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

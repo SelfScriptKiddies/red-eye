@@ -1,15 +1,17 @@
 use std::collections::HashSet;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use async_nats::jetstream::{self, consumer::pull, stream};
 use futures::StreamExt;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use prost::Message as _;
 
 use crate::config::AgentConfig;
 use crate::nats::NatsClient;
-use crate::wire::{self, SettingsEnvelope, WireService};
+use crate::wire::{self, SettingsEnvelope, WireAgentConfigSnapshot, WireProtocol};
 
 // Wire v4: coordinated between-games upgrade; v3 producers/consumers are
 // unsupported and rejected by the version gate below.
@@ -19,11 +21,14 @@ pub const SETTINGS_WIRE_VERSION: u32 = 4;
 /// subject (updates_v4) differs from the v3 one, so history is not migrated.
 pub const SETTINGS_STREAM_NAME: &str = "SETTINGS_UPDATES_V4";
 
-/// Configuration history is bounded; snapshots are complete, so expired
-/// history is recoverable via reconciliation instead of unbounded growth.
+/// Configuration history is bounded; complete snapshots make expired
+/// history recoverable via backend reconciliation instead of unbounded
+/// stream growth.
 pub const SETTINGS_STREAM_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
 
-/// Decode the versioned settings envelope and check the version
+/// Decode the versioned settings envelope and check the version. Unknown
+/// versions are a clean error: the last valid configuration stays active,
+/// a fresh agent remains idle, nothing is partially applied.
 fn decode_settings_update(payload: &[u8]) -> Result<SettingsEnvelope, String> {
     let envelope =
         SettingsEnvelope::decode(payload).map_err(|e| format!("protobuf decode failed: {e}"))?;
@@ -36,39 +41,95 @@ fn decode_settings_update(payload: &[u8]) -> Result<SettingsEnvelope, String> {
     Ok(envelope)
 }
 
-/// Shared set of active ports
-pub type PortsCache = Arc<RwLock<HashSet<u16>>>;
+/// Transport protocol of one monitored port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransportProto {
+    Tcp,
+    Udp,
+}
+
+impl TransportProto {
+    /// None for unknown enum values: an unrecognized protocol must never
+    /// silently degrade into TCP (that would sniff the wrong traffic).
+    pub fn from_wire(value: i32) -> Option<Self> {
+        WireProtocol::try_from(value).ok().map(|p| match p {
+            WireProtocol::Tcp => TransportProto::Tcp,
+            WireProtocol::Udp => TransportProto::Udp,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TransportProto::Tcp => "tcp",
+            TransportProto::Udp => "udp",
+        }
+    }
+}
+
+/// Shared set of monitored (protocol, port) pairs.
+pub type PortsCache = Arc<RwLock<HashSet<(TransportProto, u16)>>>;
 
 pub type RestartNotifier = tokio::sync::watch::Sender<()>;
 
-pub fn create_ports_cache(initial_ports: Vec<u16>) -> PortsCache {
-    Arc::new(RwLock::new(initial_ports.into_iter().collect()))
+pub fn create_ports_cache() -> PortsCache {
+    Arc::new(RwLock::new(HashSet::new()))
 }
 
 pub fn create_restart_notifier() -> (RestartNotifier, tokio::sync::watch::Receiver<()>) {
     tokio::sync::watch::channel(())
 }
 
-/// Spawn the settings update listener as a background task
-pub fn spawn_updates_listener(
-    nats: NatsClient,
-    config: &AgentConfig,
-    ports_cache: PortsCache,
-    restart_tx: RestartNotifier,
-) {
-    let updates_topic = config.nats_updates_topic.clone();
-    let agent_id = nats.agent_id.clone();
+/// Effective agent configuration, swapped atomically when a snapshot is
+/// applied. machine_ip == 0.0.0.0 / :: means wildcard: match services by
+/// protocol+port and preserve observed endpoints in synthesis.
+#[derive(Debug, Clone)]
+pub struct EffectiveConfig {
+    pub interface: String,
+    pub machine_ip: IpAddr,
+    pub revision: u64,
+}
+
+pub type SharedConfig = Arc<RwLock<EffectiveConfig>>;
+
+/// Agent-wide state shared by the update listener, heartbeat, command
+/// listener and sniffer loop.
+pub struct AppState {
+    pub ports: PortsCache,
+    pub config: SharedConfig,
+    pub restart_tx: RestartNotifier,
+    pub health: crate::sniffer::SharedSnifferHealth,
+    /// Revision awaiting capture confirmation (interface handoff or port
+    /// restart). Only a fully applied snapshot advances the applied
+    /// revision; failures keep the value so the backend keeps the agent
+    /// flagged stale and re-delivers.
+    pub pending_revision: Arc<AtomicU64>,
+    /// 0 = nothing acknowledged yet.
+    pub applied_revision: Arc<AtomicU64>,
+    /// Sanitized snapshot application error for the heartbeat (None = ok).
+    pub last_sync_error: Arc<RwLock<Option<String>>>,
+    pub agent_id: String,
+    pub boot_id: String,
+    pub config_source: AgentConfig,
+}
+
+/// Bounded error strings for the heartbeat: no payload data ever enters
+/// them (formatting is restricted to fixed strings and identifiers).
+fn sanitize_error(msg: &str) -> String {
+    let mut out: String = msg.chars().take(300).collect();
+    if msg.len() > 300 {
+        out.push_str("...");
+    }
+    out
+}
+
+/// Spawn the settings update listener as a background task. Listener
+/// errors are logged and contained: the task exits quietly only if the
+/// NATS subscription dies, never taking the rest of the agent with it.
+pub fn spawn_updates_listener(nats: NatsClient, state: Arc<AppState>) {
+    let updates_topic = state.config_source.nats_updates_topic.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = listen_for_updates(
-            nats.inner().clone(),
-            &updates_topic,
-            &agent_id,
-            ports_cache,
-            restart_tx,
-        )
-        .await
-        {
+        if let Err(e) = listen_for_updates(nats.inner().clone(), &updates_topic, state).await {
             error!("Update listener error: {}", e);
         }
     });
@@ -77,26 +138,24 @@ pub fn spawn_updates_listener(
 async fn listen_for_updates(
     client: async_nats::Client,
     subject: &str,
-    consumer_id: &str,
-    ports_cache: PortsCache,
-    restart_tx: RestartNotifier,
+    state: Arc<AppState>,
 ) -> Result<()> {
     info!("Listening for settings updates on '{}'", subject);
 
     let js = jetstream::new(client);
     let stream = js
         .create_stream(stream::Config {
-            // Adding version for loud errors
+            // Versioned stream name: loud mismatch errors between v3/v4.
             name: SETTINGS_STREAM_NAME.to_string(),
-            max_age: std::time::Duration::from_secs(SETTINGS_STREAM_MAX_AGE_SECS),
             subjects: vec![subject.to_string()],
+            max_age: std::time::Duration::from_secs(SETTINGS_STREAM_MAX_AGE_SECS),
             ..Default::default()
         })
         .await?;
 
     let consumer = stream
         .create_consumer(pull::Config {
-            durable_name: Some(consumer_id.to_string()),
+            durable_name: Some(state.agent_id.clone()),
             filter_subject: subject.to_string(),
             ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
             ..Default::default()
@@ -127,11 +186,16 @@ async fn listen_for_updates(
             }
         };
 
-        let changed = apply_update(&envelope, &ports_cache);
-
-        if changed {
-            let _ = restart_tx.send(());
-            info!("Ports changed, restart signal sent");
+        match &envelope.update {
+            // Complete per-agent snapshots are the only carrier of service
+            // and network configuration for this agent; every other variant
+            // is acknowledged and ignored (global analyzer view, filters).
+            Some(wire::settings_envelope::Update::AgentSnapshot(snapshot)) => {
+                apply_snapshot(snapshot, &state);
+            }
+            _ => {
+                debug!("Ignoring non-snapshot settings update");
+            }
         }
 
         if let Err(e) = msg.ack().await {
@@ -142,55 +206,163 @@ async fn listen_for_updates(
     Ok(())
 }
 
-/// Apply a settings update to the ports cache. Returns true if ports changed.
-fn apply_update(envelope: &SettingsEnvelope, ports_cache: &PortsCache) -> bool {
-    match &envelope.update {
-        Some(wire::settings_envelope::Update::ServiceAdd(op)) => {
-            debug!("Service added: {:?}", op.service);
-            service_port(op.service.as_ref())
-                .map_or(false, |port| ports_cache.write().unwrap().insert(port))
-        }
-        Some(wire::settings_envelope::Update::ServiceUpdate(op)) => {
-            debug!("Service updated: {:?}", op.service);
-            service_port(op.service.as_ref())
-                .map_or(false, |port| ports_cache.write().unwrap().insert(port))
-        }
-        Some(wire::settings_envelope::Update::ServiceRemove(_)) => {
-            debug!("Service removed, waiting for ConfigSync");
-            false
-        }
-        Some(wire::settings_envelope::Update::ConfigSync(sync)) => {
-            info!("Config sync: {} services", sync.services.len());
-            let mut cache = ports_cache.write().unwrap();
-            let existing: HashSet<u16> = cache.clone();
-            let incoming: HashSet<u16> = sync
-                .services
-                .iter()
-                .filter_map(|op| service_port(op.service.as_ref()))
-                .collect();
+/// Validate and atomically apply a snapshot addressed to this agent.
+/// Invalid snapshots leave the previous configuration untouched; stale
+/// ones are ignored. Returns nothing: outcomes are surfaced via heartbeat
+/// fields (applied revision + sanitized error).
+fn apply_snapshot(snapshot: &WireAgentConfigSnapshot, state: &AppState) {
+    // Snapshots are addressed by the agent id inside the message; the
+    // stream fans every message out to every durable consumer.
+    if snapshot.agent_id != state.agent_id {
+        debug!("Skipping snapshot addressed to '{}'", snapshot.agent_id);
+        return;
+    }
 
-            if existing == incoming {
-                debug!("Ports unchanged after sync");
-                false
-            } else {
-                *cache = incoming;
-                debug!("Ports after sync: {:?}", *cache);
-                true
-            }
+    let applied = state.applied_revision.load(Ordering::SeqCst);
+    if snapshot.revision <= applied {
+        debug!(
+            "Ignoring snapshot with revision {} (applied: {})",
+            snapshot.revision, applied
+        );
+        return;
+    }
+
+    if let Err(reason) = validate_snapshot(snapshot) {
+        let sanitized = sanitize_error(&reason);
+        warn!(
+            "Rejecting snapshot revision {}: {}",
+            snapshot.revision, reason
+        );
+        *state.last_sync_error.write().unwrap() = Some(sanitized);
+        return;
+    }
+
+    let network = snapshot.network.as_ref();
+    let interface = network.map(|n| n.interface.clone()).unwrap_or_default();
+    let machine_ip: IpAddr = network
+        .and_then(|n| n.machine_ip.parse().ok())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+
+    let mut new_ports: HashSet<(TransportProto, u16)> = HashSet::new();
+    for service in &snapshot.services {
+        // Validation already ran, but never trust a second pass.
+        let Some(protocol) = TransportProto::from_wire(service.protocol) else {
+            continue;
+        };
+        let Ok(port) = u16::try_from(service.port) else {
+            continue;
+        };
+        if port == 0 {
+            continue;
         }
-        // Filter updates don't affect the sniffer
-        _ => false,
+        new_ports.insert((protocol, port));
+    }
+
+    let old_ports: HashSet<(TransportProto, u16)> = state.ports.read().unwrap().clone();
+    let ports_changed = old_ports != new_ports;
+
+    {
+        let mut config = state.config.write().unwrap();
+        let interface_changed = config.interface != interface;
+        config.interface = interface;
+        config.machine_ip = machine_ip;
+
+        // Machine-IP-only changes take effect immediately (packet
+        // synthesis reads config per packet); capture-affecting changes go
+        // through the restart watch with the revision pending capture
+        // confirmation.
+        if interface_changed || ports_changed {
+            state
+                .pending_revision
+                .store(snapshot.revision, Ordering::SeqCst);
+            drop(config);
+            info!(
+                "Applied snapshot revision {}: ports changed={}, interface changed={}",
+                snapshot.revision, ports_changed, interface_changed
+            );
+            let _ = state.restart_tx.send(());
+        } else {
+            config.revision = snapshot.revision;
+            drop(config);
+            state
+                .applied_revision
+                .store(snapshot.revision, Ordering::SeqCst);
+            *state.last_sync_error.write().unwrap() = None;
+            info!(
+                "Applied snapshot revision {} (no capture change)",
+                snapshot.revision
+            );
+        }
+    }
+
+    // Swap the port set last: the sniffer reads it under the same lock.
+    {
+        let mut ports = state.ports.write().unwrap();
+        *ports = new_ports;
     }
 }
 
-fn service_port(service: Option<&WireService>) -> Option<u16> {
-    service.map(|s| s.port as u16)
+/// Full validation BEFORE any state changes: an invalid snapshot never
+/// replaces valid configuration, even partially.
+fn validate_snapshot(snapshot: &WireAgentConfigSnapshot) -> Result<(), String> {
+    if let Some(network) = &snapshot.network {
+        if network.interface.is_empty() {
+            return Err("snapshot carries an empty interface name".to_string());
+        }
+        if network.interface.len() > 64 {
+            return Err("snapshot interface name exceeds 64 characters".to_string());
+        }
+        if network.machine_ip.parse::<IpAddr>().is_err() {
+            return Err(format!(
+                "snapshot machine_ip '{}' is not an IP address or wildcard",
+                network.machine_ip
+            ));
+        }
+    }
+    for service in &snapshot.services {
+        if WireProtocol::try_from(service.protocol).is_err() {
+            return Err(format!(
+                "service id {} carries an unknown protocol {}",
+                service.id, service.protocol
+            ));
+        }
+        let Ok(port) = u16::try_from(service.port) else {
+            return Err(format!(
+                "service id {} port {} is out of range",
+                service.id, service.port
+            ));
+        };
+        if port == 0 {
+            return Err(format!("service id {} carries port 0", service.id));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::wire::red_eye::wire::{ConfigSync, ServiceOp};
+
+    fn state() -> Arc<AppState> {
+        let (restart_tx, _restart_rx) = create_restart_notifier();
+        Arc::new(AppState {
+            ports: create_ports_cache(),
+            config: Arc::new(RwLock::new(EffectiveConfig {
+                interface: "eth0".into(),
+                machine_ip: "0.0.0.0".parse().unwrap(),
+                revision: 0,
+            })),
+            restart_tx,
+            health: Arc::new(crate::sniffer::SnifferHealth::default()),
+            pending_revision: Arc::new(AtomicU64::new(0)),
+            applied_revision: Arc::new(AtomicU64::new(0)),
+            last_sync_error: Arc::new(RwLock::new(None)),
+            agent_id: "agent-a".into(),
+            boot_id: "boot-1".into(),
+            config_source: <AgentConfig as clap::Parser>::parse_from(["red-eye-agent"]),
+        })
+    }
 
     fn envelope(update: Option<wire::settings_envelope::Update>) -> Vec<u8> {
         SettingsEnvelope {
@@ -200,8 +372,8 @@ mod tests {
         .encode_to_vec()
     }
 
-    fn sample_service(port: u32) -> WireService {
-        WireService {
+    fn service(id: u64, port: u32, protocol: WireProtocol) -> crate::wire::WireService {
+        crate::wire::WireService {
             name: "team-site".into(),
             port,
             chunked_transfer_encoding: false,
@@ -210,26 +382,39 @@ mod tests {
             merge_adjacent_packets: false,
             urldecode: false,
             http_parse: false,
-            id: 1,
-            protocol: crate::wire::WireProtocol::Tcp as i32,
+            id,
+            protocol: protocol as i32,
             is_global: true,
+        }
+    }
+
+    fn snapshot(
+        agent_id: &str,
+        revision: u64,
+        services: Vec<crate::wire::WireService>,
+    ) -> WireAgentConfigSnapshot {
+        WireAgentConfigSnapshot {
+            revision,
+            agent_id: agent_id.into(),
+            network: Some(wire::WireAgentNetworkSettings {
+                interface: "eth1".into(),
+                machine_ip: "10.0.0.5".into(),
+            }),
+            services,
         }
     }
 
     #[test]
     fn decode_roundtrips_what_the_backend_encodes() {
-        let bytes = envelope(Some(wire::settings_envelope::Update::ServiceAdd(
-            ServiceOp {
-                id: 7,
-                service: Some(sample_service(8080)),
-            },
-        )));
+        let snap = snapshot("agent-a", 7, vec![service(1, 8080, WireProtocol::Tcp)]);
+        let bytes = envelope(Some(wire::settings_envelope::Update::AgentSnapshot(snap)));
         let decoded = decode_settings_update(&bytes).unwrap();
 
         match decoded.update {
-            Some(wire::settings_envelope::Update::ServiceAdd(op)) => {
-                assert_eq!(op.id, 7);
-                assert_eq!(op.service.unwrap().port, 8080);
+            Some(wire::settings_envelope::Update::AgentSnapshot(snap)) => {
+                assert_eq!(snap.revision, 7);
+                assert_eq!(snap.agent_id, "agent-a");
+                assert_eq!(snap.services[0].port, 8080);
             }
             other => panic!("wrong variant: {:?}", other),
         }
@@ -237,7 +422,8 @@ mod tests {
 
     #[test]
     fn wrong_version_is_a_clean_error() {
-        // All version, except actual, must be rejected by the version gate.
+        // Version 3 and below are unsupported under the coordinated v4
+        // upgrade: every foreign version must be rejected by the gate.
         for wrong in [0u32, 1, 2, 3] {
             let bytes = SettingsEnvelope {
                 version: wrong,
@@ -266,31 +452,153 @@ mod tests {
     }
 
     #[test]
-    fn apply_update_tracks_ports_from_service_ops() {
-        let ports = create_ports_cache(vec![80]);
+    fn snapshot_applies_services_atomically() {
+        let state = state();
+        let snap = snapshot(
+            "agent-a",
+            5,
+            vec![
+                service(1, 80, WireProtocol::Tcp),
+                service(2, 53, WireProtocol::Udp),
+            ],
+        );
+        apply_snapshot(&snap, &state);
 
-        let add = SettingsEnvelope {
-            version: SETTINGS_WIRE_VERSION,
-            update: Some(wire::settings_envelope::Update::ServiceAdd(ServiceOp {
-                id: 2,
-                service: Some(sample_service(8080)),
-            })),
-        };
-        assert!(apply_update(&add, &ports));
-        assert!(ports.read().unwrap().contains(&8080));
+        let ports = state.ports.read().unwrap();
+        assert!(ports.contains(&(TransportProto::Tcp, 80)));
+        assert!(ports.contains(&(TransportProto::Udp, 53)));
+        assert_eq!(ports.len(), 2);
+        let config = state.config.read().unwrap();
+        assert_eq!(config.interface, "eth1");
+        assert_eq!(config.machine_ip.to_string(), "10.0.0.5");
+        assert_eq!(state.applied_revision.load(Ordering::SeqCst), 0);
+        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 5);
+        assert!(state.last_sync_error.read().unwrap().is_none());
+    }
 
-        let sync = SettingsEnvelope {
-            version: SETTINGS_WIRE_VERSION,
-            update: Some(wire::settings_envelope::Update::ConfigSync(ConfigSync {
+    #[test]
+    fn snapshot_for_other_agent_is_skipped() {
+        let state = state();
+        let snap = snapshot("agent-b", 9, vec![service(1, 80, WireProtocol::Tcp)]);
+        apply_snapshot(&snap, &state);
+        assert!(state.ports.read().unwrap().is_empty());
+        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn stale_snapshot_is_ignored() {
+        let state = state();
+        apply_snapshot(
+            &snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]),
+            &state,
+        );
+        // Simulate a fully applied revision.
+        state.applied_revision.store(5, Ordering::SeqCst);
+        state.config.write().unwrap().revision = 5;
+
+        apply_snapshot(
+            &snapshot("agent-a", 4, vec![service(2, 81, WireProtocol::Tcp)]),
+            &state,
+        );
+        assert!(!state
+            .ports
+            .read()
+            .unwrap()
+            .contains(&(TransportProto::Tcp, 81)));
+    }
+
+    #[test]
+    fn repeated_snapshot_is_harmless() {
+        let state = state();
+        apply_snapshot(
+            &snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]),
+            &state,
+        );
+        // Simulate the sniffer confirming the capture (commit path).
+        state.applied_revision.store(5, Ordering::SeqCst);
+        state.pending_revision.store(0, Ordering::SeqCst);
+        let before = state.ports.read().unwrap().clone();
+
+        apply_snapshot(
+            &snapshot("agent-a", 5, vec![service(1, 80, WireProtocol::Tcp)]),
+            &state,
+        );
+        assert_eq!(*state.ports.read().unwrap(), before);
+        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn invalid_snapshot_keeps_previous_configuration() {
+        let state = state();
+        apply_snapshot(
+            &snapshot("agent-a", 3, vec![service(1, 80, WireProtocol::Tcp)]),
+            &state,
+        );
+        state.applied_revision.store(3, Ordering::SeqCst);
+        state.config.write().unwrap().revision = 3;
+
+        // Unknown protocol: must be rejected, never reinterpreted as TCP.
+        let mut bad = snapshot("agent-a", 4, vec![service(2, 81, WireProtocol::Tcp)]);
+        bad.services[0].protocol = 99;
+        apply_snapshot(&bad, &state);
+        let ports = state.ports.read().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert!(ports.contains(&(TransportProto::Tcp, 80)));
+        drop(ports);
+        assert!(state.last_sync_error.read().unwrap().is_some());
+
+        // Port overflow must be rejected, never truncated.
+        *state.last_sync_error.write().unwrap() = None;
+        let bad = snapshot("agent-a", 4, vec![service(2, 70000, WireProtocol::Tcp)]);
+        apply_snapshot(&bad, &state);
+        let ports = state.ports.read().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert!(ports.contains(&(TransportProto::Tcp, 80)));
+        drop(ports);
+        assert!(state.last_sync_error.read().unwrap().is_some());
+    }
+
+    #[test]
+    fn invalid_machine_ip_rejects_whole_snapshot() {
+        let state = state();
+        let mut snap = snapshot("agent-a", 6, vec![service(1, 80, WireProtocol::Tcp)]);
+        snap.network = Some(wire::WireAgentNetworkSettings {
+            interface: "eth1".into(),
+            machine_ip: "not-an-ip".into(),
+        });
+        apply_snapshot(&snap, &state);
+        assert_eq!(state.config.read().unwrap().interface, "eth0");
+        assert!(state.ports.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_service_set_is_a_valid_state() {
+        let state = state();
+        apply_snapshot(&snapshot("agent-a", 2, vec![]), &state);
+        assert!(state.ports.read().unwrap().is_empty());
+        assert_eq!(state.pending_revision.load(Ordering::SeqCst), 2);
+        // No error: an agent with no services is healthy and idle.
+        assert!(state.last_sync_error.read().unwrap().is_none());
+    }
+
+    #[test]
+    fn global_config_sync_is_ignored_by_the_agent() {
+        let state = state();
+        let bytes = envelope(Some(wire::settings_envelope::Update::ConfigSync(
+            ConfigSync {
                 services: vec![ServiceOp {
                     id: 1,
-                    service: Some(sample_service(80)),
+                    service: Some(service(1, 8080, WireProtocol::Tcp)),
                 }],
                 filters: vec![],
-            })),
-        };
-        assert!(apply_update(&sync, &ports));
-        assert!(!ports.read().unwrap().contains(&8080));
-        assert!(ports.read().unwrap().contains(&80));
+            },
+        )));
+        let decoded = decode_settings_update(&bytes).unwrap();
+        match &decoded.update {
+            Some(wire::settings_envelope::Update::ConfigSync(_)) => {}
+            _ => panic!("wrong variant"),
+        }
+        // The listener only applies snapshots; a ConfigSync changes nothing.
+        assert!(state.ports.read().unwrap().is_empty());
     }
 }

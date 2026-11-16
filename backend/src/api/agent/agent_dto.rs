@@ -7,7 +7,10 @@ pub struct AgentInfo {
     pub agent_id: String,
     pub uptime_secs: u64,
     pub sniffer_active: bool,
-    pub sniffer_ports: Vec<u16>,
+    /// Monitored (protocol, port) pairs as reported, e.g. "8080/tcp";
+    /// empty when no services are assigned (sniffer_idle = healthy wait)
+    #[serde(default)]
+    pub sniffer_ports: Vec<String>,
     pub harpoon_rules: Vec<String>,
     #[serde(default)]
     pub active_filters: usize,
@@ -173,7 +176,7 @@ mod tests {
             "agent_id": "team-1",
             "uptime_secs": 60,
             "sniffer_active": true,
-            "sniffer_ports": [80, 8080],
+            "sniffer_ports": ["80/tcp", "8080/udp"],
             "harpoon_rules": ["web-mitm"],
             "timestamp_ms": 1_791_464_509_000u64,
             "future_field": 42,
@@ -181,7 +184,7 @@ mod tests {
 
         let info: AgentInfo = serde_json::from_value(json).unwrap();
         assert_eq!(info.agent_id, "team-1");
-        assert_eq!(info.sniffer_ports, vec![80, 8080]);
+        assert_eq!(info.sniffer_ports, vec!["80/tcp", "8080/udp"]);
     }
 
     #[test]
