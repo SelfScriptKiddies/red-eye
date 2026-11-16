@@ -170,15 +170,23 @@ impl DB {
         ip_version: &IpVersion,
         service_id: usize,
         first_packet_time: i64,
+        agent_id: Option<&str>,
     ) -> Result<usize, Error> {
         let protocol_str: &'static str = protocol.into();
         let _ip_version_str: &'static str = ip_version.into();
 
-        let src_ip_addr: IpAddr = src_ip.parse().unwrap();
-        let dst_ip_addr: IpAddr = dst_ip.parse().unwrap();
+        // Parsed addresses come from the ethernet parser, never raw input;
+        // a parse failure here would mean a corrupted cache entry, so it
+        // degrades into a stream-creation error instead of a panic.
+        let src_ip_addr: IpAddr = src_ip
+            .parse()
+            .map_err(|e| std::io::Error::other(format!("invalid src_ip '{}': {}", src_ip, e)))?;
+        let dst_ip_addr: IpAddr = dst_ip
+            .parse()
+            .map_err(|e| std::io::Error::other(format!("invalid dst_ip '{}': {}", dst_ip, e)))?;
 
         sqlx::query(
-            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, service_id, first_packet_time) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id"
+            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, service_id, first_packet_time, agent_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id"
         )
         .bind(src_ip_addr)
         .bind(src_port as i32)
@@ -188,6 +196,7 @@ impl DB {
         .bind(true)
         .bind(service_id as i64)
         .bind(first_packet_time)
+        .bind(agent_id)
         .fetch_one(&self.pgpool)
         .await.map(|row| row.get::<i64, _>("id") as usize)
     }

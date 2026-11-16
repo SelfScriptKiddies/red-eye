@@ -141,13 +141,15 @@ pub struct UpdateListener {
 }
 
 impl UpdateListener {
-    pub async fn new(config: &ApplicationConfig) -> Self {
-        let client = create_consumer(config).await.unwrap();
+    /// Construction failure is contained by the caller's supervised retry
+    /// loop, never an unwrap: packet ingestion must survive NATS being down.
+    pub async fn new(config: &ApplicationConfig) -> Result<Self> {
+        let client = create_consumer(config).await?;
 
-        UpdateListener {
+        Ok(UpdateListener {
             client,
             uuid: config.service_uuid.clone(),
-        }
+        })
     }
 
     pub async fn listen_to_updates(self, subject: &str, cache: Arc<cache::Cache>) -> Result<()> {
@@ -262,14 +264,30 @@ impl UpdateListener {
                         Some(wire::settings_envelope::Update::ConfigSync(sync)) => {
                             apply_config_sync(sync, &cache);
                         }
-                        // Agent-targeted snapshots carry the per-agent
-                        // machine IP registry (consumed by the analyzer in
-                        // a later step); the global view stays ConfigSync.
+                        // Per-agent snapshots feed the machine-IP registry:
+                        // the packet consumer resolves direction per agent
+                        // from it (choice documented in cache.rs). Only the
+                        // network section is needed here; the service set
+                        // for analyzers arrives via ConfigSync.
                         Some(wire::settings_envelope::Update::AgentSnapshot(snapshot)) => {
-                            debug!(
-                                "Received agent snapshot for '{}' (revision {}), not a global update",
-                                snapshot.agent_id, snapshot.revision
-                            );
+                            if let Some(network) = &snapshot.network {
+                                if let Ok(machine_ip) = network.machine_ip.parse() {
+                                    cache.set_agent_network(
+                                        &snapshot.agent_id,
+                                        machine_ip,
+                                        snapshot.revision,
+                                    );
+                                    debug!(
+                                        "Registry updated: agent '{}' machine_ip={} revision={}",
+                                        snapshot.agent_id, network.machine_ip, snapshot.revision
+                                    );
+                                } else {
+                                    debug!(
+                                        "Snapshot for agent '{}' carries unparseable machine_ip, ignored",
+                                        snapshot.agent_id
+                                    );
+                                }
+                            }
                         }
                         None => {
                             error!("Settings update envelope carries no update variant");

@@ -2,6 +2,7 @@ use crate::configuration::updater::dto;
 use crate::proto_schema::ProtoSchema;
 use dashmap::DashMap;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 pub mod services;
@@ -9,11 +10,23 @@ pub mod streams;
 pub use services::ServicesCache;
 pub use streams::StreamsCache;
 
+/// Per-agent machine IP the packet consumer resolves direction with.
+/// Wildcard values (0.0.0.0 / ::) are stored as-is; the matcher treats
+/// them as protocol+port-only matching.
+#[derive(Debug, Clone)]
+pub struct AgentRegistryEntry {
+    pub machine_ip: IpAddr,
+    pub revision: u64,
+}
+
 pub struct Cache {
     pub services: Arc<RwLock<HashMap<usize, dto::Service>>>,
     pub streams: Arc<StreamsCache>,
     pub stream_locks: Arc<DashMap<String, Arc<Mutex<()>>>>,
     pub proto_schemas: Arc<RwLock<HashMap<usize, ProtoSchema>>>,
+    /// agent_id -> effective machine IP (warm from agent_config, updated
+    /// by AgentConfigSnapshot updates).
+    pub agent_registry: Arc<RwLock<HashMap<String, AgentRegistryEntry>>>,
     /// TCP lifecycle: tuple keys where a plain SYN opened a connection that
     /// has not carried data yet — a repeated plain SYN is a retransmission
     /// and must reuse the stream, not fork a new one. Cleared by the first
@@ -32,9 +45,38 @@ impl Cache {
             streams: Arc::new(StreamsCache::new(stream_ttl_secs)),
             stream_locks: Arc::new(DashMap::new()),
             proto_schemas: Arc::new(RwLock::new(HashMap::new())),
+            agent_registry: Arc::new(RwLock::new(HashMap::new())),
             syn_pending: Arc::new(DashMap::new()),
             closed_streams: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Record an agent's machine IP. Stale snapshots (older revision for
+    /// the same agent) are ignored; equal revisions re-apply harmlessly.
+    pub fn set_agent_network(&self, agent_id: &str, machine_ip: IpAddr, revision: u64) {
+        let mut registry = self.agent_registry.write().unwrap();
+        let entry = registry
+            .entry(agent_id.to_string())
+            .or_insert(AgentRegistryEntry {
+                machine_ip,
+                revision: 0,
+            });
+        if revision >= entry.revision {
+            entry.machine_ip = machine_ip;
+            entry.revision = revision;
+        }
+    }
+
+    pub fn agent_machine_ip(&self, agent_id: &str) -> Option<IpAddr> {
+        self.agent_registry
+            .read()
+            .unwrap()
+            .get(agent_id)
+            .map(|e| e.machine_ip)
+    }
+
+    pub fn agent_registry_len(&self) -> usize {
+        self.agent_registry.read().unwrap().len()
     }
 
     pub fn mark_syn_pending(&self, key: &str) {

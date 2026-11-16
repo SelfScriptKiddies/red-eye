@@ -249,20 +249,6 @@ pub struct ApplicationConfig {
     )]
     pub analyzer_concurrency: usize,
 
-    /// Sniffer configuration
-    #[source(
-        clap(
-            short = 'i',
-            long = "machine-ip",
-            help = "Machine IP address",
-            help_heading = "Sniffer"
-        ),
-        env = "MACHINE_IP",
-        config = "sniffer.machine_ip",
-        default = "0.0.0.0"
-    )]
-    pub machine_ip: String,
-
     /// Logging configuration
     #[source(
         clap(

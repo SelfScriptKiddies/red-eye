@@ -22,6 +22,9 @@ pub struct Stream {
     pub packet_count: i32,
     pub favorite: bool,
     pub l7_protocol: String,
+    /// Capturing agent (per-agent attribution); None for legacy rows
+    #[sqlx(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -36,6 +39,9 @@ pub struct StreamResponse {
     pub packet_count: i32,
     pub favorite: bool,
     pub l7_protocol: String,
+    /// Capturing agent (per-agent attribution); None for legacy rows
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     pub packets: Vec<PacketResponse>,
 }
 
@@ -52,6 +58,9 @@ pub struct StreamListResponse {
     pub l7_protocol: String,
     pub src_ip: String,
     pub dst_ip: String,
+    /// Capturing agent (per-agent attribution); None for legacy rows
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -76,6 +85,7 @@ impl Stream {
             packet_count: self.packet_count,
             favorite: self.favorite,
             l7_protocol: self.l7_protocol.clone(),
+            agent_id: self.agent_id.clone(),
             packets: service
                 .get_packets_by_stream_id(self.id)
                 .await
