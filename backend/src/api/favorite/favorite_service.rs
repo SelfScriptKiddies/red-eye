@@ -627,9 +627,11 @@ async fn archive_stream_batch(pool: &PgPool, stream_id: i64) -> Result<ArchiveSt
     }
 
     // Tags joined through (packet_id, timestamp) like every other reader.
-    let tag_rows = sqlx::query_as::<_, (i64, i64, i64, i32, i32, i64)>(
+    // stream_id comes from packets: live tag has no such column, but
+    // saved_tag does (per-stream cleanup batches key on it).
+    let tag_rows = sqlx::query_as::<_, (i64, i64, i64, i64, i32, i32, i64)>(
         r#"
-        SELECT t.id, t.packet_id, t.tag_id, t.start_index, t.end_index, t.timestamp
+        SELECT t.id, t.packet_id, p.stream_id, t.tag_id, t.start_index, t.end_index, t.timestamp
         FROM tag t
         JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
         WHERE p.stream_id = $1 AND p.id = ANY($2)
@@ -641,29 +643,31 @@ async fn archive_stream_batch(pool: &PgPool, stream_id: i64) -> Result<ArchiveSt
     .await?;
     if !tag_rows.is_empty() {
         let mut q = String::from(
-            "INSERT INTO saved_tag (id, packet_id, tag_id, start_index, end_index, timestamp) VALUES ",
+            "INSERT INTO saved_tag (id, packet_id, stream_id, tag_id, start_index, end_index, timestamp) VALUES ",
         );
         for i in 0..tag_rows.len() {
             if i > 0 {
                 q.push_str(", ");
             }
-            let base = i * 6;
+            let base = i * 7;
             q.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${}, ${})",
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
                 base + 1,
                 base + 2,
                 base + 3,
                 base + 4,
                 base + 5,
-                base + 6
+                base + 6,
+                base + 7
             ));
         }
         q.push_str(" ON CONFLICT (id) DO NOTHING");
         let mut query = sqlx::query(&q);
-        for (id, packet_id, tag_id, start, end, ts) in &tag_rows {
+        for (id, packet_id, saved_stream_id, tag_id, start, end, ts) in &tag_rows {
             query = query
                 .bind(*id)
                 .bind(*packet_id)
+                .bind(*saved_stream_id)
                 .bind(*tag_id)
                 .bind(*start)
                 .bind(*end)

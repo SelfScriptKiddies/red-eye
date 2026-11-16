@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_saved_packet_stream_ts ON saved_packet (stream_id
 
 CREATE TABLE IF NOT EXISTS saved_tag (
     id BIGINT PRIMARY KEY,
+    stream_id BIGINT NOT NULL,
     packet_id BIGINT NOT NULL,
     tag_id BIGINT NOT NULL,
     start_index INTEGER NOT NULL,

@@ -88,6 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_saved_packet_stream_ts ON saved_packet (stream_id
 
 CREATE TABLE IF NOT EXISTS saved_tag (
     id BIGINT PRIMARY KEY,
+    stream_id BIGINT NOT NULL,
     packet_id BIGINT NOT NULL,
     tag_id BIGINT NOT NULL,
     start_index INTEGER NOT NULL,
@@ -180,7 +181,8 @@ BEGIN
     ELSIF parent_table = 'tag' THEN
         SELECT EXISTS (
             SELECT 1 FROM tag t
-            JOIN stream s ON s.id = t.stream_id
+            JOIN packets p ON p.id = t.packet_id AND p.timestamp = t.timestamp
+            JOIN stream s ON s.id = p.stream_id
             WHERE s.favorite
               AND t.timestamp >= lo AND t.timestamp < hi
               AND NOT EXISTS (SELECT 1 FROM saved_tag st WHERE st.id = t.id)
@@ -269,6 +271,15 @@ DECLARE
         WHEN 'grpc_message' THEN 'saved_grpc_message'
     END;
     target TEXT := base_table || (CASE WHEN only_default THEN '_default' ELSE '' END);
+    -- Stream membership of a row d2. Live tag carries no stream_id; its
+    -- rows carry their packet's timestamp, so membership resolves through
+    -- packets with the (packet_id, timestamp) double key every reader uses.
+    member TEXT := CASE base_table
+        WHEN 'tag' THEN 'EXISTS (SELECT 1 FROM packets p
+                WHERE p.id = d2.packet_id AND p.timestamp = d2.timestamp
+                  AND p.stream_id = s.id)'
+        ELSE 'd2.stream_id = s.id'
+    END;
 BEGIN
     IF twin IS NULL THEN
         RAISE EXCEPTION 'delete_old_rows_batched: unsupported table %', base_table;
@@ -282,14 +293,14 @@ BEGIN
                     WHERE d2.timestamp < %s
                       AND NOT EXISTS (
                         SELECT 1 FROM stream s
-                        WHERE s.id = d2.stream_id AND s.favorite
+                        WHERE %s AND s.favorite
                           AND NOT EXISTS (
-                            SELECT 1 FROM %I sp WHERE sp.id = d2.packet_id
+                            SELECT 1 FROM %I sp WHERE sp.id = d2.id
                           )
                       )
                     LIMIT %s
                 )',
-                target, target, before_ts, twin, batch_size
+                target, target, before_ts, member, twin, batch_size
             );
         ELSE
             EXECUTE format(
