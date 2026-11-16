@@ -72,7 +72,7 @@ export function copyText(text: string) {
     }
 }
 
-// ── Starred-stream retention (favorites) ──
+// Starred-stream retention (favorites)
 
 /** Mirrors FavoriteStateResponse in backend/src/api/favorite/favorite_dto.rs */
 export interface FavoriteState {
