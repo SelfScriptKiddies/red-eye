@@ -34,6 +34,23 @@ const VERDICT_COLUMNS: &str = "id, stream_id, first_packet_id, last_packet_id, m
      analyzed_packet_count, omitted_packet_count, omitted_byte_count, truncated, \
      EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix";
 
+/// Keyset listing SQL with dynamically numbered parameters: $1 cursor,
+/// optional $2 stream_id, last param LIMIT. Bounded by limit; the
+/// (stream_id, id DESC) index serves the stream page, the PK the rest.
+fn list_sql(with_stream: bool, only_attacks: bool) -> String {
+    let mut sql = format!("SELECT {} FROM ai_verdict WHERE id < $1", VERDICT_COLUMNS);
+    let mut next = 2;
+    if with_stream {
+        sql.push_str(&format!(" AND stream_id = ${}", next));
+        next += 1;
+    }
+    if only_attacks {
+        sql.push_str(" AND is_attack = true");
+    }
+    sql.push_str(&format!(" ORDER BY id DESC LIMIT ${}", next));
+    sql
+}
+
 #[derive(Debug)]
 pub struct NewVerdict<'a> {
     pub stream_id: i64,
@@ -115,21 +132,15 @@ impl AiRepository {
         limit: i64,
         cursor: Option<i64>,
     ) -> Result<Vec<AiVerdictRow>, sqlx::Error> {
-        let mut sql = format!("SELECT {} FROM ai_verdict WHERE id < $1", VERDICT_COLUMNS);
-        if stream_id.is_some() {
-            sql.push_str(" AND stream_id = $2");
-        }
-        if only_attacks {
-            sql.push_str(" AND is_attack = true");
-        }
-        sql.push_str(" ORDER BY id DESC LIMIT $3");
-        let mut query = sqlx::query_as::<_, AiVerdictRow>(&sql)
-            .bind(cursor.unwrap_or(i64::MAX))
-            .bind(limit);
+        // Params are numbered dynamically so the optional stream filter
+        // never shifts the LIMIT parameter (a static $3 would bind the
+        // stream id into LIMIT when present, or leave a hole when absent).
+        let sql = list_sql(stream_id.is_some(), only_attacks);
+        let mut query = sqlx::query_as::<_, AiVerdictRow>(&sql).bind(cursor.unwrap_or(i64::MAX));
         if let Some(sid) = stream_id {
             query = query.bind(sid);
         }
-        query.fetch_all(&self.pgpool).await
+        query.bind(limit).fetch_all(&self.pgpool).await
     }
 
     pub async fn get_verdict(&self, id: i64) -> Result<Option<AiVerdictRow>, sqlx::Error> {
@@ -189,6 +200,23 @@ impl AiRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_sql_numbers_params_dynamically() {
+        // The optional stream filter must not shift the LIMIT parameter.
+        let plain = list_sql(false, false);
+        assert!(plain.contains("WHERE id < $1"));
+        assert!(plain.contains("LIMIT $2"));
+        assert!(!plain.contains("$3"));
+
+        let streamed = list_sql(true, false);
+        assert!(streamed.contains("AND stream_id = $2"));
+        assert!(streamed.contains("LIMIT $3"));
+
+        let attacks = list_sql(true, true);
+        assert!(attacks.contains("AND is_attack = true"));
+        assert!(attacks.contains("LIMIT $3"));
+    }
 
     #[test]
     fn verdict_column_projection_covers_every_field() {
