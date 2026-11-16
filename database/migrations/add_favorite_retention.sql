@@ -152,7 +152,233 @@ INSERT INTO app_settings (key, value) VALUES
     ('favorite_disk_reserve_bytes', '2147483648')
 ON CONFLICT (key) DO NOTHING;
 
+-- ── Cleanup guard functions ─────────────────────────────────────────────
+-- These REPLACE the versions from database/init/06_partitions.sql so a live
+-- database picks up favorite-safe cleanup together with the schema. The
+-- 5-minute partition interval (300s) must stay in sync with the Rust
+-- cleanup loop (PARTITION_INTERVAL_SECS).
+
+-- True when the half-open [lo, hi) window of a content table still holds
+-- rows of starred streams with no saved copy. Presence in the saved twin
+-- is the only authoritative proof; progress markers cannot bypass it.
+CREATE OR REPLACE FUNCTION partition_has_unarchived_favorites(
+    parent_table TEXT,
+    lo BIGINT,
+    hi BIGINT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    found BOOLEAN := false;
+BEGIN
+    IF parent_table = 'packets' THEN
+        SELECT EXISTS (
+            SELECT 1 FROM packets p
+            JOIN stream s ON s.id = p.stream_id
+            WHERE s.favorite
+              AND p.timestamp >= lo AND p.timestamp < hi
+              AND NOT EXISTS (SELECT 1 FROM saved_packet sp WHERE sp.id = p.id)
+        ) INTO found;
+    ELSIF parent_table = 'tag' THEN
+        SELECT EXISTS (
+            SELECT 1 FROM tag t
+            JOIN stream s ON s.id = t.stream_id
+            WHERE s.favorite
+              AND t.timestamp >= lo AND t.timestamp < hi
+              AND NOT EXISTS (SELECT 1 FROM saved_tag st WHERE st.id = t.id)
+        ) INTO found;
+    ELSIF parent_table = 'http_message' THEN
+        SELECT EXISTS (
+            SELECT 1 FROM http_message m
+            JOIN stream s ON s.id = m.stream_id
+            WHERE s.favorite
+              AND m.timestamp >= lo AND m.timestamp < hi
+              AND NOT EXISTS (SELECT 1 FROM saved_http_message sm WHERE sm.id = m.id)
+        ) INTO found;
+    ELSIF parent_table = 'grpc_message' THEN
+        SELECT EXISTS (
+            SELECT 1 FROM grpc_message g
+            JOIN stream s ON s.id = g.stream_id
+            WHERE s.favorite
+              AND g.timestamp >= lo AND g.timestamp < hi
+              AND NOT EXISTS (SELECT 1 FROM saved_grpc_message sg WHERE sg.id = g.id)
+        ) INTO found;
+    END IF;
+    RETURN found;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION drop_old_partitions(
+    parent_table TEXT,
+    before_ts BIGINT,
+    interval_secs INT DEFAULT 300
+) RETURNS TABLE(dropped INT, guard_skipped INT) AS $$
+DECLARE
+    r RECORD;
+    dropped_count INT := 0;
+    skipped_count INT := 0;
+    part_ts BIGINT;
+    matches TEXT[];
+    protected_from BIGINT := (EXTRACT(EPOCH FROM NOW())::BIGINT / interval_secs) * interval_secs;
+    guarded BOOLEAN := parent_table IN ('packets', 'tag', 'http_message', 'grpc_message');
+BEGIN
+    FOR r IN
+        SELECT c.relname AS partition_name
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhrelid
+        WHERE i.inhparent = parent_table::regclass
+    LOOP
+        matches := regexp_match(r.partition_name, '_p(\d+)$');
+        IF matches IS NOT NULL THEN
+            part_ts := matches[1]::BIGINT;
+            IF part_ts < protected_from AND part_ts < before_ts THEN
+                IF guarded AND partition_has_unarchived_favorites(
+                    parent_table, part_ts, part_ts + interval_secs
+                ) THEN
+                    skipped_count := skipped_count + 1;
+                    RAISE WARNING 'partition % of % retained: starred streams have unarchived rows in it', r.partition_name, parent_table;
+                    CONTINUE;
+                END IF;
+                EXECUTE format('DROP TABLE IF EXISTS %I', r.partition_name);
+                dropped_count := dropped_count + 1;
+            END IF;
+        END IF;
+    END LOOP;
+    dropped := dropped_count;
+    guard_skipped := skipped_count;
+    RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Bounded batched DELETE with the favorite guard: rows of starred streams
+-- without a saved copy are excluded from every chunk. only_default=true
+-- restricts the pass to the <t>_default partition (DEFAULT pruning).
+CREATE OR REPLACE FUNCTION delete_old_rows_batched(
+    base_table TEXT,
+    only_default BOOLEAN,
+    before_ts BIGINT,
+    batch_size INT DEFAULT 10000
+) RETURNS BIGINT AS $$
+DECLARE
+    total BIGINT := 0;
+    removed INT;
+    chunks INT := 0;
+    guarded BOOLEAN;
+    twin TEXT := CASE base_table
+        WHEN 'packets' THEN 'saved_packet'
+        WHEN 'tag' THEN 'saved_tag'
+        WHEN 'http_message' THEN 'saved_http_message'
+        WHEN 'grpc_message' THEN 'saved_grpc_message'
+    END;
+    target TEXT := base_table || (CASE WHEN only_default THEN '_default' ELSE '' END);
+BEGIN
+    IF twin IS NULL THEN
+        RAISE EXCEPTION 'delete_old_rows_batched: unsupported table %', base_table;
+    END IF;
+    SELECT EXISTS (SELECT 1 FROM stream WHERE favorite) INTO guarded;
+    LOOP
+        IF guarded THEN
+            EXECUTE format(
+                'DELETE FROM %I d WHERE d.ctid IN (
+                    SELECT d2.ctid FROM %I d2
+                    WHERE d2.timestamp < %s
+                      AND NOT EXISTS (
+                        SELECT 1 FROM stream s
+                        WHERE s.id = d2.stream_id AND s.favorite
+                          AND NOT EXISTS (
+                            SELECT 1 FROM %I sp WHERE sp.id = d2.packet_id
+                          )
+                      )
+                    LIMIT %s
+                )',
+                target, target, before_ts, twin, batch_size
+            );
+        ELSE
+            EXECUTE format(
+                'DELETE FROM %I WHERE ctid IN (
+                    SELECT ctid FROM %I WHERE timestamp < %s LIMIT %s
+                )',
+                target, target, before_ts, batch_size
+            );
+        END IF;
+        GET DIAGNOSTICS removed = ROW_COUNT;
+        total := total + removed;
+        chunks := chunks + 1;
+        EXIT WHEN removed = 0 OR chunks >= 100;
+        PERFORM pg_sleep(0.05);
+    END LOOP;
+    RETURN total;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cleanup_old_data(retention_minutes INT DEFAULT 20)
+RETURNS TABLE(partitions_dropped INT, guard_skipped INT, streams_deleted BIGINT) AS $$
+DECLARE
+    cutoff_ts BIGINT := EXTRACT(EPOCH FROM NOW())::BIGINT - (retention_minutes * 60);
+    dropped INT := 0;
+    skipped INT := 0;
+    part_result RECORD;
+    streams_removed BIGINT;
+    t TEXT;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['grpc_message', 'http_message', 'tag', 'packets'] LOOP
+        SELECT * INTO part_result FROM drop_old_partitions(t, cutoff_ts);
+        dropped := dropped + part_result.dropped;
+        skipped := skipped + part_result.guard_skipped;
+    END LOOP;
+
+    PERFORM ensure_default_partitions();
+    FOREACH t IN ARRAY ARRAY['packets', 'tag', 'http_message', 'grpc_message'] LOOP
+        PERFORM delete_old_rows_batched(t, true, cutoff_ts);
+    END LOOP;
+
+    -- Shared header/body sets survive while live OR saved rows reference
+    -- them (the archive worker revives sets deleted in a race window).
+    DELETE FROM header_set hs
+    WHERE NOT EXISTS (
+        SELECT 1 FROM http_message hm WHERE hm.header_set_id = hs.id
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM saved_http_message shm WHERE shm.header_set_id = hs.id
+    );
+    DELETE FROM grpc_body_set gbs
+    WHERE NOT EXISTS (
+        SELECT 1 FROM grpc_message gm WHERE gm.body_set_id = gbs.id
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM saved_grpc_message sgm WHERE sgm.body_set_id = gbs.id
+    );
+
+    -- A stream row is orphaned only when neither live nor saved content
+    -- remains (post-unstar pending cleanup keeps the row alive).
+    DELETE FROM stream s
+    WHERE NOT s.favorite
+      AND NOT EXISTS (SELECT 1 FROM packets p WHERE p.stream_id = s.id)
+      AND NOT EXISTS (SELECT 1 FROM saved_packet sp WHERE sp.stream_id = s.id)
+      AND NOT EXISTS (SELECT 1 FROM saved_tag st WHERE st.stream_id = s.id)
+      AND NOT EXISTS (SELECT 1 FROM saved_http_message shm WHERE shm.stream_id = s.id)
+      AND NOT EXISTS (SELECT 1 FROM saved_grpc_message sgm WHERE sgm.stream_id = s.id);
+    GET DIAGNOSTICS streams_removed = ROW_COUNT;
+
+    partitions_dropped := dropped;
+    guard_skipped := skipped;
+    streams_deleted := streams_removed;
+    RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION trim_old_rows_from_current(
+    parent_table TEXT,
+    keep_seconds INT DEFAULT 300,
+    batch_size INT DEFAULT 10000
+) RETURNS BIGINT AS $$
+DECLARE
+    before_ts BIGINT := EXTRACT(EPOCH FROM NOW())::BIGINT - keep_seconds;
+BEGIN
+    RETURN delete_old_rows_batched(parent_table, false, before_ts, batch_size);
+END;
+$$ LANGUAGE plpgsql;
+
 -- Post-migration sanity checks:
 --   SELECT retention_state, COUNT(*) FROM stream WHERE favorite GROUP BY 1;
 --   SELECT indexname FROM pg_indexes WHERE tablename = 'stream' AND indexname LIKE 'idx_stream_%';
 --   \d+ saved_packet
+--   SELECT drop_old_partitions('packets', 0); -- must not drop favorites' partitions

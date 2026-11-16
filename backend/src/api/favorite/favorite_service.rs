@@ -422,6 +422,12 @@ pub async fn seed_favorite_settings(pool: &PgPool, config: &ApplicationConfig) {
     }
 }
 
+/// Usage snapshot for the cleanup loop's capacity alert (settings-free:
+/// the caller applies the limits it already loaded).
+pub async fn favorite_usage_snapshot(pool: &PgPool) -> Result<UsageSnapshot, sqlx::Error> {
+    FavoriteService::new(pool.clone()).usage(None).await
+}
+
 /// Archive worker + saved-content cleanup worker + legacy favorite
 /// migration. All loops are bounded and failure-contained: an error never
 /// stops ingestion and never clears a star.
