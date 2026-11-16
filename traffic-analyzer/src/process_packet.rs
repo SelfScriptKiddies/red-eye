@@ -587,6 +587,7 @@ impl PacketProcessor {
                     timestamp: packet.timestamp_seconds as i64,
                     l7_protocol,
                     grpc: grpc_data,
+                    user_agent: crate::user_agent::classify(&parsed.headers, parsed.is_request),
                 });
 
                 debug!(

@@ -7,6 +7,7 @@ use tokio::time::{Duration, Instant};
 
 use crate::cache::Cache;
 use crate::db::DB;
+use crate::metrics;
 use crate::ws_aggregator::SharedWsAggregator;
 
 /// A fully-processed packet ready for batch insertion.
@@ -41,6 +42,9 @@ pub struct HttpMessageData {
     pub timestamp: i64,
     pub l7_protocol: String,
     pub grpc: Option<GrpcMessageData>,
+    /// Classified request User-Agent (see user_agent::classify). Responses
+    /// and blank values are None and never reach the aggregates.
+    pub user_agent: crate::user_agent::UserAgentStat,
 }
 
 pub struct GrpcMessageData {
@@ -343,8 +347,11 @@ async fn flush_batch(
         }
     }
 
-    // 3. Batch INSERT HTTP messages (multi-row, RETURNING id), then batch the
-    //    dependent gRPC inserts and l7-protocol UPDATEs.
+    // 3. Batch INSERT HTTP messages idempotently, then batch the dependent
+    //    gRPC inserts and l7-protocol UPDATEs. The first attempt also
+    //    carries the User-Agent aggregate update; if that fails, the retry
+    //    drops the aggregates (counted degradation) so packet/HTTP storage
+    //    never stalls on User-Agent statistics.
     let http_rows: Vec<(i64, &HttpMessageData)> = buffer
         .iter()
         .enumerate()
@@ -355,49 +362,67 @@ async fn flush_batch(
         })
         .collect();
     if !http_rows.is_empty() {
-        match db.insert_http_messages_batch(&http_rows).await {
-            Ok(msg_ids) if msg_ids.len() == http_rows.len() => {
-                // gRPC inserts keyed by the returned http_message ids.
-                let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, (_, http))| http.grpc.as_ref().map(|grpc| (msg_ids[i], grpc)))
-                    .collect();
-                if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
-                    error!("Batch gRPC insert failed: {:?}", e);
-                }
-
-                // Dedupe l7-protocol UPDATEs to the highest protocol per stream.
-                let rank = |p: &str| match p {
-                    "grpc" => 2,
-                    "http1" => 1,
-                    _ => 0,
-                };
-                let mut l7: HashMap<usize, &str> = HashMap::new();
-                for (_, http) in &http_rows {
-                    l7.entry(http.stream_id)
-                        .and_modify(|cur| {
-                            if rank(&http.l7_protocol) > rank(cur) {
-                                *cur = http.l7_protocol.as_str();
-                            }
-                        })
-                        .or_insert(http.l7_protocol.as_str());
-                }
-                let l7_rows: Vec<(usize, String)> =
-                    l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
-                if let Err(e) = db.update_stream_l7_protocol_batch(&l7_rows).await {
-                    error!("Batch l7_protocol update failed: {:?}", e);
-                }
-            }
-            Ok(msg_ids) => {
-                error!(
-                    "HTTP batch returned {} ids for {} messages — skipping grpc/l7",
-                    msg_ids.len(),
-                    http_rows.len()
-                );
-            }
+        let inserted = match db.insert_http_messages_batch(&http_rows, true).await {
+            Ok(out) => Some(out),
             Err(e) => {
-                error!("Batch HTTP message insert failed: {:?}", e);
+                let lost = metrics::UA_AGGREGATE_LOSS.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::rate_limited_log("ua-aggregate-loss", lost, || {
+                    format!(
+                        "HTTP batch with User-Agent aggregates failed ({:?}) -- retrying without aggregates",
+                        e
+                    )
+                });
+                tokio::time::sleep(Duration::from_millis(75)).await;
+                match db.insert_http_messages_batch(&http_rows, false).await {
+                    Ok(out) => Some(out),
+                    Err(e2) => {
+                        error!("Batch HTTP message insert failed after retry: {:?}", e2);
+                        None
+                    }
+                }
+            }
+        };
+        if let Some(out) = inserted {
+            metrics::UA_MESSAGES_AGGREGATED
+                .fetch_add(out.ua_messages_contributed, Ordering::Relaxed);
+            metrics::UA_AGGREGATE_ROWS.fetch_add(out.ua_rows_written, Ordering::Relaxed);
+            metrics::UA_OVERSIZED_VALUES.fetch_add(out.ua_oversized, Ordering::Relaxed);
+            metrics::UA_CARDINALITY_OVERFLOW
+                .fetch_add(out.ua_cardinality_overflow, Ordering::Relaxed);
+
+            // gRPC inserts keyed by each row's prefetched http_message id
+            // (positional, independent of which rows conflicted).
+            let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, http))| {
+                    http.grpc.as_ref().map(|grpc| (out.message_ids[i], grpc))
+                })
+                .collect();
+            if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
+                error!("Batch gRPC insert failed: {:?}", e);
+            }
+
+            // Dedupe l7-protocol UPDATEs to the highest protocol per stream.
+            let rank = |p: &str| match p {
+                "grpc" => 2,
+                "http1" => 1,
+                _ => 0,
+            };
+            let mut l7: HashMap<usize, &str> = HashMap::new();
+            for (_, http) in &http_rows {
+                l7.entry(http.stream_id)
+                    .and_modify(|cur| {
+                        if rank(&http.l7_protocol) > rank(cur) {
+                            *cur = http.l7_protocol.as_str();
+                        }
+                    })
+                    .or_insert(http.l7_protocol.as_str());
+            }
+            let l7_rows: Vec<(usize, String)> =
+                l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
+            if let Err(e) = db.update_stream_l7_protocol_batch(&l7_rows).await {
+                error!("Batch l7_protocol update failed: {:?}", e);
             }
         }
     }

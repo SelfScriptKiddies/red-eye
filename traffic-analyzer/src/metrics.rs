@@ -11,6 +11,14 @@ pub static AMBIGUOUS_DIRECTION_DROPS: AtomicU64 = AtomicU64::new(0);
 pub static FAVORITE_ROTATIONS: AtomicU64 = AtomicU64::new(0);
 pub static FAVORITE_ROTATION_FAILURES: AtomicU64 = AtomicU64::new(0);
 
+/// User-Agent aggregate counters (see user_agent.rs). Aggregates are
+/// degradable: every skipped update is counted, none may stall ingestion.
+pub static UA_MESSAGES_AGGREGATED: AtomicU64 = AtomicU64::new(0);
+pub static UA_AGGREGATE_ROWS: AtomicU64 = AtomicU64::new(0);
+pub static UA_AGGREGATE_LOSS: AtomicU64 = AtomicU64::new(0);
+pub static UA_OVERSIZED_VALUES: AtomicU64 = AtomicU64::new(0);
+pub static UA_CARDINALITY_OVERFLOW: AtomicU64 = AtomicU64::new(0);
+
 /// Minimum spacing between rate-limited log lines (shared guard so a
 /// burst of drops cannot flood the log under game load).
 const LOG_MIN_INTERVAL: Duration = Duration::from_secs(5);
