@@ -731,7 +731,12 @@ impl DB {
         query.push_str(") AS v(stream_id, ts, cnt, bytes, max_id) WHERE s.id = v.stream_id");
         let mut q = sqlx::query(&query);
         for (sid, ts, cnt, bytes, max_id) in rows {
-            q = q.bind(*sid as i64).bind(*ts).bind(*cnt).bind(*bytes).bind(*max_id);
+            q = q
+                .bind(*sid as i64)
+                .bind(*ts)
+                .bind(*cnt)
+                .bind(*bytes)
+                .bind(*max_id);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }

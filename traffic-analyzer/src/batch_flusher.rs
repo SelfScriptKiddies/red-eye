@@ -411,7 +411,9 @@ async fn flush_batch(
     for (idx, pkt) in buffer.iter().enumerate() {
         let ts = pkt.timestamp_seconds as i64;
         let packet_id = packet_ids[idx];
-        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0, 0, packet_id));
+        let entry = stream_stats
+            .entry(pkt.stream_id)
+            .or_insert((ts, 0, 0, packet_id));
         if ts > entry.0 {
             entry.0 = ts;
         }
