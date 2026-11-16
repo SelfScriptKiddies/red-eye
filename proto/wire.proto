@@ -101,10 +101,34 @@ message AgentNetworkSettings {
   string machine_ip = 2;
 }
 
+/// Desired proxy protection for one of the agent's services. The original
+/// service key (protocol + target_port) is what the agent must exclude
+/// from passive capture while the proxy is effective. Additive field on
+/// AgentConfigSnapshot (wire v4): agents that do not know it ignore it.
+message ProxyRule {
+  /// Service this proxy protects; the rule identity on the agent side.
+  uint64 service_id = 1;
+  /// Display name of the harpoon rule.
+  string name = 2;
+  string listen_address = 3;
+  uint32 listen_port = 4;
+  string target_address = 5;
+  /// Original service port: the nftables redirect source and the passive
+  /// capture key that must be excluded while the proxy is effective.
+  uint32 target_port = 6;
+  Protocol protocol = 7;
+  /// "" = no TLS; "mitm" | "terminate" | "passthrough".
+  string tls_mode = 8;
+  bool http2_enabled = 9;
+  /// Desired revision this rule was issued at (0 = legacy command without
+  /// revision; the agent still applies it).
+  uint64 revision = 10;
+}
+
 /// Complete desired configuration for one agent. Applying it atomically
-/// replaces that agent's interface, machine IP and service set; consumers
-/// ignore snapshots older than their current revision and snapshots
-/// addressed to other agent ids.
+/// replaces that agent's interface, machine IP, service set and desired
+/// proxy state; consumers ignore snapshots older than their current
+/// revision and snapshots addressed to other agent ids.
 message AgentConfigSnapshot {
   /// Control-plane revision this snapshot was built from.
   uint64 revision = 1;
@@ -114,6 +138,9 @@ message AgentConfigSnapshot {
   /// The agent's effective service set (global services plus explicitly
   /// assigned ones), complete replacement semantics.
   repeated Service services = 4;
+  /// Desired proxy state for this agent's services, complete replacement
+  /// semantics: a proxy absent here must not stay effective.
+  repeated ProxyRule desired_proxies = 5;
 }
 
 /// One settings change on the wire. Exactly one `update` variant is set.
