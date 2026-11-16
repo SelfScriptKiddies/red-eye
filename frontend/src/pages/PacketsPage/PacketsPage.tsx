@@ -17,6 +17,7 @@ import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
 import { useStableRowHeight } from '../../lib/useStableRowHeight';
 import { useRedEye } from '../../context/RedEyeContext';
+import { parseUaDrilldown } from '../../lib/userAgents';
 
 
 // Row component for virtual stream list
@@ -126,6 +127,10 @@ export function PacketsPage() {
     const timelineClearRef = useRef<(() => void) | null>(null);
     const clearTimeSelection = () => { setStartTime(null); setEndTime(null); timelineClearRef.current?.(); };
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string, exclude?: boolean}[]>([]);
+    // Drill-down scope from the URL (User-Agent drawer): every header
+    // search runs against one service (and optionally one agent) with
+    // exact value comparison until Reset clears it.
+    const [scopedFilter, setScopedFilter] = useState<{ serviceId: number; agentId?: string } | null>(null);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
     const [, setHeaderSearching] = useState(false);
@@ -249,6 +254,17 @@ export function PacketsPage() {
                     setTimeout(() => loadMultipleStreams(ids), 500);
                 }
             }
+            // User-Agent drill-down from the Settings drawer: the complete
+            // filter state travels in the URL, so reload and sharing
+            // restore the scoped exact search.
+            const drilldown = parseUaDrilldown(window.location.search);
+            if (drilldown) {
+                const scope = { serviceId: drilldown.serviceId, agentId: drilldown.agentId };
+                setScopedFilter(scope);
+                const filters = [{ name: drilldown.name, value: drilldown.value }];
+                setHeaderFilters(filters);
+                runHeaderSearch(filters, scope);
+            }
         }
     }, [isRedEyeActive, servicesLoaded, tagsLoaded]);
 
@@ -308,15 +324,25 @@ export function PacketsPage() {
     }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, filterMode, usedTags, usedServices, tagsArray]);
 
     // Stable callbacks so memoized rowProps (below) don't churn on every render.
-    const runHeaderSearch = useCallback(async (filters: {name: string, value: string, exclude?: boolean}[]) => {
+    // `scope` overrides the current drill-down scope (boot passes the URL
+    // scope synchronously, before the state update lands).
+    const runHeaderSearch = useCallback(async (filters: {name: string, value: string, exclude?: boolean}[], scope?: { serviceId: number; agentId?: string } | null) => {
         setHeaderSearching(true);
+        const effectiveScope = scope !== undefined ? scope : scopedFilter;
         try {
             const includeFilters = filters.filter(f => !f.exclude);
             const excludeFilters = filters.filter(f => f.exclude);
 
             let includeResult = null;
             if (includeFilters.length > 0) {
-                includeResult = await fetch('/api/http/search/multi', {
+                const qp = new URLSearchParams();
+                if (effectiveScope) {
+                    qp.set('service_id', String(effectiveScope.serviceId));
+                    if (effectiveScope.agentId) qp.set('agent_id', effectiveScope.agentId);
+                    qp.set('match_mode', 'exact');
+                }
+                const suffix = qp.toString();
+                includeResult = await fetch(`/api/http/search/multi${suffix ? `?${suffix}` : ''}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(includeFilters.map(f => ({ name: f.name, value: f.value }))),
@@ -339,7 +365,7 @@ export function PacketsPage() {
             setHeaderExcludeIds(new Set());
         }
         setHeaderSearching(false);
-    }, []);
+    }, [scopedFilter]);
 
     const addHeaderFilter = useCallback((name: string, value: string, exclude: boolean = false) => {
         setHeaderFilters(prev => {
@@ -782,6 +808,7 @@ export function PacketsPage() {
                         setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false);
                         clearTimeSelection();
                         setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set());
+                        setScopedFilter(null);
                     }}>
                         Сброс
                     </button>
@@ -846,8 +873,16 @@ export function PacketsPage() {
                                 ))}
                             </div>
                         )}
+                        {headerFilters.length > 0 && scopedFilter && (
+                            <div className="filter-indicator-chips">
+                                <span className="filter-indicator-chip">
+                                    сервис #{scopedFilter.serviceId}{scopedFilter.agentId ? ` (${scopedFilter.agentId})` : ''} точное совпадение
+                                    <button onClick={() => setScopedFilter(null)}>x</button>
+                                </span>
+                            </div>
+                        )}
                         {headerFilters.length > 0 && (
-                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set()); }}>
+                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set()); setScopedFilter(null); }}>
                                 Сбросить HTTP фильтры
                             </button>
                         )}
