@@ -966,7 +966,7 @@ export function PacketsPage() {
                                 title="Скопировать ссылку на выбранные стримы для LLM-агента (MCP get_selected_streams)"
                                 aria-label="Скопировать ссылку на выбранные стримы для LLM-агента"
                             >
-                                {agentLinkCopied ? '✓ Скопировано' : 'Copy agent link'}
+                                {agentLinkCopied ? 'Скопировано' : 'Скопировать ссылку'}
                             </button>
                             {agentLinkNote && (
                                 <span style={{ fontSize: '11px', color: 'var(--re-text-secondary)', marginRight: '4px' }}>
