@@ -2,6 +2,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_descriptors = protox::compile(["proto/wire.proto"], ["proto/"])?;
     prost_build::Config::new().compile_fds(file_descriptors)?;
     println!("cargo:rerun-if-changed=proto/wire.proto");
+    println!("cargo:rerun-if-env-changed=RED_EYE_VERSION");
+    println!("cargo:rerun-if-env-changed=RED_EYE_GIT_SHA");
     stamp_git_sha();
     stamp_version();
     Ok(())
