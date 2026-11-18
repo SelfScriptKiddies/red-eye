@@ -2,9 +2,9 @@ mod audit;
 mod auth;
 mod backend;
 mod config;
-mod fetch;
 mod handler;
 mod state;
+mod streams;
 mod tools;
 
 use std::net::SocketAddr;
@@ -34,8 +34,8 @@ async fn main() {
         }
     };
     info!(
-        "red-eye-mcp starting: mode={:?} backend={} bind={} fetch_url={}",
-        config.mode, config.backend_url, config.bind, config.fetch_url_enabled
+        "red-eye-mcp starting: mode={:?} backend={} bind={} public_url={:?}",
+        config.mode, config.backend_url, config.bind, config.public_url
     );
 
     let backend = match backend::BackendClient::new(&config) {
@@ -62,8 +62,7 @@ async fn main() {
         backend: backend.clone(),
         dryruns: Arc::new(state::DryRunStore::new()),
         mode_read_only: config.mode == config::Mode::ReadOnly,
-        fetch_url_enabled: config.fetch_url_enabled,
-        fetch_limit: Arc::new(state::RateLimiter::fetch()),
+        public_url: config.public_url,
     };
 
     let service: StreamableHttpService<handler::SocMcpServer, LocalSessionManager> =

@@ -50,11 +50,6 @@ impl RateLimiter {
         Self::new(RATE_LIMIT_PER_ADDR)
     }
 
-    /// Tighter budget for fetch_url egress calls per token.
-    pub fn fetch() -> Self {
-        Self::new(crate::config::FETCH_RATE_LIMIT_PER_TOKEN)
-    }
-
     /// Some(true) = allowed, Some(false) = over limit, None = lock
     /// poisoned (fail closed upstream).
     pub fn check(&self, key: &str) -> Option<bool> {

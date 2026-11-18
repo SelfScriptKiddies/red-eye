@@ -5,8 +5,11 @@ use crate::auth::AuthContext;
 // Audit records: token id, session id, tool, target ids, expected
 // revision, dry-run/mutation status, result, sanitized error. Payload
 // contents and bearer tokens are never audit fields - arguments are
-// summarized to integer targets only. fetch_url records the final URL
-// after redirects, never any fetched body content.
+// summarized to integer targets only. get_selected_streams records the
+// url the operator handed over, never the returned bundle.
+
+/// Cap for a recorded url target.
+const TARGET_MAX: usize = 2048;
 
 fn sanitize(text: &str, max_chars: usize) -> String {
     text.chars()
@@ -61,23 +64,15 @@ pub fn mutation_result(auth: &AuthContext, tool: &str, result: &str, error: &str
     );
 }
 
-pub fn fetch_result(
-    auth: &AuthContext,
-    tool: &str,
-    target: &str,
-    result: &str,
-    bytes: u64,
-    error: &str,
-) {
+pub fn read_result(auth: &AuthContext, tool: &str, target: &str, result: &str, error: &str) {
     log::info!(
         target: "mcp_audit",
-        "MCP_AUDIT tool={} token_id={} session={} target={} result={} bytes={} error={}",
+        "MCP_AUDIT tool={} token_id={} session={} target={} result={} error={}",
         tool,
         auth.token_id,
         auth.session_id,
-        sanitize(target, crate::config::MAX_URL_LEN),
+        sanitize(target, TARGET_MAX),
         result,
-        bytes,
         sanitize(error, 200)
     );
 }
