@@ -244,7 +244,7 @@ impl StreamRepository {
     /// per bucket (no per-service split — the timeline shows two series,
     /// packets and flags). Packets are counted from the `packets` table
     /// (idx_packets_timestamp); flags are tag triggers whose tag_name has
-    /// special_type='flag'. FULL JOIN so buckets with only flags (or only
+    /// action='flag'. FULL JOIN so buckets with only flags (or only
     /// packets) are kept.
     pub async fn get_stream_histogram(
         &self,
@@ -261,7 +261,7 @@ impl StreamRepository {
                 SELECT (t.timestamp / $1) * $1 AS bucket_ts, COUNT(*) AS cnt
                 FROM tag t
                 JOIN tag_name tn ON tn.id = t.tag_id
-                WHERE tn.special_type = 'flag'
+                WHERE tn.action = 'flag'
                 GROUP BY bucket_ts
             )
             SELECT COALESCE(p.bucket_ts, f.bucket_ts) AS bucket_ts,

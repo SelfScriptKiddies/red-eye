@@ -134,7 +134,7 @@ pub struct HistogramBucket {
     pub timestamp: i64,
     /// Total packets in the bucket (all services).
     pub packet_count: i64,
-    /// Flag tag triggers in the bucket (tag_name.special_type = 'flag').
+    /// Flag tag triggers in the bucket (tag_name.action = 'flag').
     pub flag_count: i64,
 }
 

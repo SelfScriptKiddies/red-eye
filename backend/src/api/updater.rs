@@ -49,15 +49,74 @@ impl From<crate::api::service::service_dto::Service> for WireService {
 
 impl From<crate::api::tag::tag_dto::TagName> for WireFilter {
     fn from(tag_name: crate::api::tag::tag_dto::TagName) -> Self {
+        let (filter_type, filter_payload, ip_network, ip_endpoint, _expression_source) =
+            match tag_name.template_type.as_str() {
+                // ip_cidr: the pattern is the normalized CIDR; endpoint
+                // rides its own field.
+                "ip_cidr" => (
+                    "ip_cidr".to_string(),
+                    Vec::new(),
+                    tag_name.ip_network.clone().unwrap_or_default(),
+                    match tag_name.ip_endpoint.as_deref() {
+                        Some("dst") => wire::WireIpEndpoint::Dst as i32,
+                        _ => wire::WireIpEndpoint::Src as i32,
+                    },
+                    String::new(),
+                ),
+                // expression: the source text travels as the payload bytes.
+                "expression" => (
+                    "expression".to_string(),
+                    tag_name
+                        .expression_source
+                        .clone()
+                        .unwrap_or_default()
+                        .into_bytes(),
+                    String::new(),
+                    wire::WireIpEndpoint::Src as i32,
+                    String::new(),
+                ),
+                other => (
+                    other.to_string(),
+                    tag_name.template.as_bytes().to_vec(),
+                    String::new(),
+                    wire::WireIpEndpoint::Src as i32,
+                    String::new(),
+                ),
+            };
+
         WireFilter {
             pattern_name: tag_name.name,
-            filter_type: tag_name.template_type,
-            filter_payload: tag_name.template.as_bytes().to_vec(),
+            filter_type,
+            filter_payload,
             direction: match tag_name.direction.to_lowercase().as_str() {
                 "in" => WireFilterDirection::Inbound as i32,
                 "out" => WireFilterDirection::Outbound as i32,
                 _ => WireFilterDirection::Both as i32,
             },
+            enabled: tag_name.enabled,
+            action: tag_name.action,
+            revision: u64::try_from(tag_name.revision).unwrap_or_default(),
+            ip_network,
+            ip_endpoint,
+            expires_at_ms: tag_name
+                .expires_at
+                .map(|t| t.timestamp_millis().max(0) as u64)
+                .unwrap_or_default(),
+            services_all: tag_name.service_targets_global,
+            service_ids: tag_name
+                .service_ids
+                .iter()
+                .map(|&s| u64::try_from(s).unwrap_or_default())
+                .collect(),
+            agents_all: tag_name.agent_targets_global,
+            agent_ids: tag_name.agent_ids.clone(),
+            threshold: tag_name.threshold_count.map(|count| wire::WireThreshold {
+                count: count.max(0) as u32,
+                window_seconds: tag_name.threshold_window_secs.unwrap_or(0).max(0) as u32,
+                group_by: tag_name.threshold_group_by.clone().unwrap_or_default(),
+                cooldown_seconds: tag_name.threshold_cooldown_secs.unwrap_or(0).max(0) as u32,
+                block_seconds: tag_name.threshold_block_secs.unwrap_or(0).max(0) as u32,
+            }),
         }
     }
 }
@@ -318,6 +377,8 @@ mod tests {
             }),
             services: vec![sample_service()],
             desired_proxies: vec![],
+            filters: vec![],
+            blocks: vec![],
         };
         let envelope = SettingsEnvelope {
             version: SETTINGS_WIRE_VERSION,
@@ -333,6 +394,76 @@ mod tests {
                 assert_eq!(network.interface, "eth1");
                 assert_eq!(network.machine_ip, "10.0.0.5");
                 assert_eq!(snap.services.len(), 1);
+                assert!(snap.filters.is_empty());
+                assert!(snap.blocks.is_empty());
+            }
+            other => panic!("wrong variant: {:?}", other),
+        }
+    }
+
+    /// The unified filter model must survive the wire roundtrip: matcher
+    /// kind, action, targets, threshold, expiry and revision all decode
+    /// back exactly.
+    #[test]
+    fn unified_filter_roundtrips_through_the_wire() {
+        let tag = crate::api::tag::tag_dto::TagName {
+            id: 12,
+            name: "bruteforce".into(),
+            color: 120,
+            template_type: "ip_cidr".into(),
+            template: String::new(),
+            direction: "in".into(),
+            special_type: None,
+            action: "block".into(),
+            enabled: true,
+            ip_network: Some("10.6.0.0/16".into()),
+            ip_endpoint: Some("src".into()),
+            expression_source: None,
+            service_targets_global: false,
+            agent_targets_global: false,
+            service_ids: vec![3, 9],
+            agent_ids: vec!["agent-a".into(), "agent-b".into()],
+            threshold_count: Some(4),
+            threshold_window_secs: Some(10),
+            threshold_group_by: Some("remote_ip".into()),
+            threshold_cooldown_secs: Some(30),
+            threshold_block_secs: Some(120),
+            expires_at: Some(chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()),
+            revision: 77,
+        };
+        let wire_filter: WireFilter = tag.into();
+
+        let op = WireFilterOp {
+            id: 12,
+            filter: Some(wire_filter),
+        };
+        let envelope = SettingsEnvelope {
+            version: SETTINGS_WIRE_VERSION,
+            update: Some(wire::settings_envelope::Update::FilterAdd(op)),
+        };
+        let decoded = SettingsEnvelope::decode(envelope.encode_to_vec().as_slice()).unwrap();
+        match decoded.update {
+            Some(wire::settings_envelope::Update::FilterAdd(op)) => {
+                assert_eq!(op.id, 12);
+                let f = op.filter.unwrap();
+                assert_eq!(f.filter_type, "ip_cidr");
+                assert_eq!(f.action, "block");
+                assert!(f.enabled);
+                assert_eq!(f.ip_network, "10.6.0.0/16");
+                assert_eq!(f.ip_endpoint, wire::WireIpEndpoint::Src as i32);
+                assert!(!f.services_all);
+                assert_eq!(f.service_ids, vec![3, 9]);
+                assert!(!f.agents_all);
+                assert_eq!(
+                    f.agent_ids,
+                    vec!["agent-a".to_string(), "agent-b".to_string()]
+                );
+                assert_eq!(f.expires_at_ms, 1_700_000_000_000);
+                assert_eq!(f.revision, 77);
+                let threshold = f.threshold.unwrap();
+                assert_eq!(threshold.count, 4);
+                assert_eq!(threshold.window_seconds, 10);
+                assert_eq!(threshold.block_seconds, 120);
             }
             other => panic!("wrong variant: {:?}", other),
         }
@@ -348,6 +479,22 @@ mod tests {
             template: "flag{{".into(),
             direction: direction.into(),
             special_type: None,
+            action: "tag".into(),
+            enabled: true,
+            ip_network: None,
+            ip_endpoint: None,
+            expression_source: None,
+            service_targets_global: true,
+            agent_targets_global: true,
+            service_ids: vec![],
+            agent_ids: vec![],
+            threshold_count: None,
+            threshold_window_secs: None,
+            threshold_group_by: None,
+            threshold_cooldown_secs: None,
+            threshold_block_secs: None,
+            expires_at: None,
+            revision: 0,
         };
 
         assert_eq!(

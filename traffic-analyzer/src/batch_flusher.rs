@@ -488,13 +488,13 @@ fn build_trigger_rows(
 /// losing one tag pair is acceptable degradation.
 fn build_stream_tag_pairs(
     buffer: &[ProcessedPacket],
-    names: &HashMap<usize, String>,
+    names: &HashMap<u64, String>,
 ) -> Vec<(usize, String)> {
     let mut seen: HashSet<(usize, &str)> = HashSet::new();
     let mut pairs: Vec<(usize, String)> = Vec::new();
     for pkt in buffer {
         for &(filter_id, _, _) in &pkt.triggers {
-            if let Some(name) = names.get(&filter_id) {
+            if let Some(name) = names.get(&(filter_id as u64)) {
                 if seen.insert((pkt.stream_id, name.as_str())) {
                     pairs.push((pkt.stream_id, name.clone()));
                 }
@@ -608,9 +608,9 @@ mod tests {
         let mut buffer = buffer;
         buffer.push(other_stream);
 
-        let mut names = HashMap::new();
-        names.insert(10usize, "flag_leak".to_string());
-        names.insert(11usize, "exploit".to_string());
+        let mut names: HashMap<u64, String> = HashMap::new();
+        names.insert(10u64, "flag_leak".to_string());
+        names.insert(11u64, "exploit".to_string());
 
         let mut pairs = build_stream_tag_pairs(&buffer, &names);
         pairs.sort();
@@ -630,8 +630,8 @@ mod tests {
         // Filter removed mid-game: no name mapping -> skip, no panic, no
         // placeholder garbage in stream_tag.
         let buffer = vec![packet(1_000, vec![(999, 0, 5), (10, 1, 2)])];
-        let mut names = HashMap::new();
-        names.insert(10usize, "flag_leak".to_string());
+        let mut names: HashMap<u64, String> = HashMap::new();
+        names.insert(10u64, "flag_leak".to_string());
 
         let pairs = build_stream_tag_pairs(&buffer, &names);
         assert_eq!(pairs, vec![(1, "flag_leak".to_string())]);
@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn stream_tag_pairs_empty_when_no_triggers() {
         let buffer = vec![packet(1_000, vec![])];
-        let names = HashMap::new();
+        let names: HashMap<u64, String> = HashMap::new();
         assert!(build_stream_tag_pairs(&buffer, &names).is_empty());
     }
 

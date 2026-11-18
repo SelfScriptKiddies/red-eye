@@ -65,12 +65,66 @@ message Service {
   bool is_global = 11;
 }
 
-/// A packet filter (backend "tag") as delivered to the analyzers.
+/// Where an IP/CIDR matcher looks: the ORIGINAL packet's source or
+/// destination endpoint, before stream tuple normalization.
+enum IpEndpoint {
+  IP_ENDPOINT_SRC = 0;
+  IP_ENDPOINT_DST = 1;
+}
+
+/// Threshold counter configuration for alert and block actions.
+message Threshold {
+  /// Match count within the window that fires the action.
+  uint32 count = 1;
+  /// Sliding window length in seconds.
+  uint32 window_seconds = 2;
+  /// remote_ip | stream | service
+  string group_by = 3;
+  /// Suppression window after the action fires.
+  uint32 cooldown_seconds = 4;
+  /// Temporary remote-IP block length for block actions.
+  uint32 block_seconds = 5;
+}
+
+/// A persistent temporary block on one agent (threshold blocks and
+/// IP/CIDR blocks). Agents apply it through nftables and unban locally at
+/// expiry; the backend cleanup removes expired rows.
+message ActiveBlock {
+  uint64 filter_id = 1;
+  string agent_id = 2;
+  /// Bare remote address (no prefix).
+  string remote_ip = 3;
+  /// Expiry, epoch milliseconds.
+  uint64 blocked_until_ms = 4;
+}
+
+/// A packet filter of the unified model as delivered to the analyzers
+/// (ConfigSync) and agents (per-agent snapshots). Legacy fields 1-4 keep
+/// their meaning; every new field is additive within wire v4.
 message Filter {
   string pattern_name = 1;
+  /// Matcher kind: regex | substr | bsubstr | ip_cidr | expression
   string filter_type = 2;
+  /// Payload pattern (bsubstr: hex; ip_cidr: empty; expression: unused).
   bytes filter_payload = 3;
   FilterDirection direction = 4;
+  bool enabled = 5;
+  /// tag | flag | alert | block | block_connection
+  string action = 6;
+  /// Filter revision at its last mutation (stale per-filter updates are
+  /// rejected; ConfigSync replaces wholesale).
+  uint64 revision = 7;
+  /// Normalized CIDR for ip_cidr matchers ("10.0.0.5/32").
+  string ip_network = 8;
+  IpEndpoint ip_endpoint = 9;
+  /// Expiry, epoch milliseconds; 0 = never expires.
+  uint64 expires_at_ms = 10;
+  bool services_all = 11;
+  repeated uint64 service_ids = 12;
+  bool agents_all = 13;
+  repeated string agent_ids = 14;
+  /// Present only for threshold alert/block filters.
+  Threshold threshold = 15;
 }
 
 /// Id plus payload for single-entity operations.
@@ -126,9 +180,10 @@ message ProxyRule {
 }
 
 /// Complete desired configuration for one agent. Applying it atomically
-/// replaces that agent's interface, machine IP, service set and desired
-/// proxy state; consumers ignore snapshots older than their current
-/// revision and snapshots addressed to other agent ids.
+/// replaces that agent's interface, machine IP, service set, desired proxy
+/// state and filter projection (only filters the agent can enforce in its
+/// current mode, plus its active blocks); consumers ignore snapshots older
+/// than their current revision and snapshots addressed to other agent ids.
 message AgentConfigSnapshot {
   /// Control-plane revision this snapshot was built from.
   uint64 revision = 1;
@@ -141,6 +196,11 @@ message AgentConfigSnapshot {
   /// Desired proxy state for this agent's services, complete replacement
   /// semantics: a proxy absent here must not stay effective.
   repeated ProxyRule desired_proxies = 5;
+  /// Filters assigned to this agent that its protection mode can enforce.
+  /// Renumbered from 5 to avoid colliding with desired_proxies.
+  repeated Filter filters = 6;
+  /// Unexpired blocks for this agent; complete replacement semantics.
+  repeated ActiveBlock blocks = 7;
 }
 
 /// One settings change on the wire. Exactly one `update` variant is set.

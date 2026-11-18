@@ -8,8 +8,10 @@ use async_nats::jetstream::{self, consumer::pull, stream};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
 use prost::Message as _;
+use tokio::sync::mpsc;
 
 use crate::config::AgentConfig;
+use crate::enforce::{self, EnforcePlan};
 use crate::nats::NatsClient;
 use crate::proxy_state::ProxyDesired;
 use crate::supervisor::ProxySupervisor;
@@ -233,6 +235,13 @@ pub struct AppState {
     pub applied_revision: Arc<AtomicU64>,
     /// Sanitized snapshot application error for the heartbeat (None = ok).
     pub last_sync_error: Arc<RwLock<Option<String>>>,
+    /// Enforcement plans flow here to the engine owner task (hot-swap +
+    /// nftables bans, no process restart).
+    pub enforce_tx: mpsc::Sender<EnforcePlan>,
+    /// Count of filters/blocks this agent could not enforce (heartbeat).
+    pub enforcement_failures: Arc<AtomicU64>,
+    /// Sanitized last enforcement failure (None = everything enforced).
+    pub last_enforcement_error: Arc<RwLock<Option<String>>>,
     pub agent_id: String,
     pub boot_id: String,
     pub config_source: AgentConfig,
@@ -447,6 +456,30 @@ pub(crate) fn apply_snapshot(
         }
     }
 
+    // Enforcement plan from the snapshot's filter + block projection.
+    // Valid parts apply even when other parts fail; failures land on the
+    // shared state for the heartbeat (detection continues on the analyzer).
+    let plan = enforce::plan(&snapshot.filters, &snapshot.blocks);
+    if !plan.failures.is_empty() {
+        state
+            .enforcement_failures
+            .fetch_add(plan.failures.len() as u64, Ordering::Relaxed);
+        if let Some(first) = plan.failures.first() {
+            let mut bounded: String = first.chars().take(300).collect();
+            if first.len() > 300 {
+                bounded.push_str("...");
+            }
+            *state.last_enforcement_error.write().unwrap() = Some(bounded);
+        }
+    }
+    let enforce_sent = state.enforce_tx.try_send(plan).is_ok();
+    if !enforce_sent {
+        warn!(
+            "Enforcement plan for revision {} dropped (queue full), retrying on next snapshot",
+            snapshot.revision
+        );
+    }
+
     let old_ports: HashSet<(TransportProto, u16)> = state.ports.read().unwrap().clone();
 
     let interface_changed = {
@@ -534,6 +567,50 @@ fn validate_snapshot(snapshot: &WireAgentConfigSnapshot) -> Result<(), String> {
         }
         parse_desired_proxy(rule)?;
     }
+    const KNOWN_ACTIONS: [&str; 5] = ["tag", "flag", "alert", "block", "block_connection"];
+    const KNOWN_KINDS: [&str; 5] = ["regex", "substr", "bsubstr", "ip_cidr", "expression"];
+    for filter in &snapshot.filters {
+        if !KNOWN_ACTIONS.contains(&filter.action.as_str()) {
+            return Err(format!(
+                "filter '{}' carries an unknown action '{}'",
+                filter.pattern_name, filter.action
+            ));
+        }
+        if !KNOWN_KINDS.contains(&filter.filter_type.as_str()) {
+            return Err(format!(
+                "filter '{}' carries an unknown matcher kind '{}'",
+                filter.pattern_name, filter.filter_type
+            ));
+        }
+        if filter.filter_type == "expression" {
+            // The shared DSL must accept the source: a filter the analyzer
+            // could evaluate but this agent cannot compile would diverge.
+            let source = String::from_utf8_lossy(&filter.filter_payload);
+            if let Err(e) = filter_dsl::compile(&source) {
+                return Err(format!(
+                    "filter '{}' expression does not compile: {}",
+                    filter.pattern_name, e
+                ));
+            }
+        }
+        if filter.filter_type == "ip_cidr" {
+            let network = filter.ip_network.split('/').next().unwrap_or("");
+            if network.parse::<IpAddr>().is_err() {
+                return Err(format!(
+                    "filter '{}' carries an invalid ip_network '{}'",
+                    filter.pattern_name, filter.ip_network
+                ));
+            }
+        }
+    }
+    for block in &snapshot.blocks {
+        if block.remote_ip.parse::<IpAddr>().is_err() {
+            return Err(format!(
+                "block for filter {} carries an invalid remote ip '{}'",
+                block.filter_id, block.remote_ip
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -558,6 +635,9 @@ pub(crate) fn test_state() -> Arc<AppState> {
         acker: Arc::new(RevisionAcker::new(applied.clone(), last_error.clone())),
         applied_revision: applied,
         last_sync_error: last_error,
+        enforce_tx: mpsc::channel(8).0,
+        enforcement_failures: Arc::new(AtomicU64::new(0)),
+        last_enforcement_error: Arc::new(RwLock::new(None)),
         agent_id: "agent-a".into(),
         boot_id: "boot-1".into(),
         config_source: <AgentConfig as clap::Parser>::parse_from(["red-eye-agent"]),
@@ -573,6 +653,7 @@ mod tests {
         let (restart_tx, _restart_rx) = create_restart_notifier();
         let applied = Arc::new(AtomicU64::new(0));
         let last_error: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+        let (enforce_tx, _enforce_rx) = mpsc::channel(8);
         Arc::new(AppState {
             ports: create_ports_cache(),
             excluded_ports: Arc::new(RwLock::new(HashSet::new())),
@@ -587,6 +668,9 @@ mod tests {
             acker: Arc::new(RevisionAcker::new(applied.clone(), last_error.clone())),
             applied_revision: applied,
             last_sync_error: last_error,
+            enforce_tx,
+            enforcement_failures: Arc::new(AtomicU64::new(0)),
+            last_enforcement_error: Arc::new(RwLock::new(None)),
             agent_id: "agent-a".into(),
             boot_id: "boot-1".into(),
             config_source: <AgentConfig as clap::Parser>::parse_from(["red-eye-agent"]),
@@ -640,6 +724,8 @@ mod tests {
             }),
             services,
             desired_proxies,
+            filters: vec![],
+            blocks: vec![],
         }
     }
 
@@ -712,6 +798,77 @@ mod tests {
         // Addressed to another agent: nothing applied.
         assert!(validate_snapshot(&snap).is_ok());
         assert!(state.ports.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn snapshot_applies_services_atomically() {
+        let state = state();
+        let snap = snapshot(
+            "agent-a",
+            5,
+            vec![
+                service(1, 80, WireProtocol::Tcp),
+                service(2, 53, WireProtocol::Udp),
+            ],
+        );
+        apply_snapshot(&snap, &state, &never_supervisor());
+
+        let ports = state.ports.read().unwrap();
+        assert!(ports.contains(&(TransportProto::Tcp, 80)));
+        assert!(ports.contains(&(TransportProto::Udp, 53)));
+        assert_eq!(ports.len(), 2);
+        drop(ports);
+        let config = state.config.read().unwrap();
+        assert_eq!(config.interface, "eth1");
+        assert_eq!(config.machine_ip.to_string(), "10.0.0.5");
+        drop(config);
+        assert!(state.last_sync_error.read().unwrap().is_none());
+        // The revision stays pending until capture converges.
+        assert_eq!(state.acker.pending_revision(), 5);
+    }
+
+    #[test]
+    fn invalid_snapshot_keeps_previous_configuration() {
+        let state = state();
+        apply_snapshot(
+            &snapshot("agent-a", 3, vec![service(1, 80, WireProtocol::Tcp)]),
+            &state,
+            &never_supervisor(),
+        );
+        state.applied_revision.store(3, Ordering::SeqCst);
+
+        // Unknown protocol: must be rejected, never reinterpreted as TCP.
+        let mut bad = snapshot("agent-a", 4, vec![service(2, 81, WireProtocol::Tcp)]);
+        bad.services[0].protocol = 99;
+        apply_snapshot(&bad, &state, &never_supervisor());
+        let ports = state.ports.read().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert!(ports.contains(&(TransportProto::Tcp, 80)));
+        drop(ports);
+        assert!(state.last_sync_error.read().unwrap().is_some());
+
+        // Port overflow must be rejected, never truncated.
+        *state.last_sync_error.write().unwrap() = None;
+        let bad = snapshot("agent-a", 4, vec![service(2, 70000, WireProtocol::Tcp)]);
+        apply_snapshot(&bad, &state, &never_supervisor());
+        let ports = state.ports.read().unwrap();
+        assert_eq!(ports.len(), 1);
+        assert!(ports.contains(&(TransportProto::Tcp, 80)));
+        drop(ports);
+        assert!(state.last_sync_error.read().unwrap().is_some());
+    }
+
+    #[test]
+    fn garbage_and_lying_lengths_error_instead_of_allocating() {
+        // Random garbage (bincode-era bytes of the old settings format).
+        assert!(decode_settings_update(&[0xfc, 0x28, 0x5c, 0x22, 0x06, 0x00]).is_err());
+
+        // A lying field length: field 8 (config_sync, length-delimited)
+        // declares ~34 GB. prost validates the length against the bytes
+        // that remain and errors - no oversized allocation is attempted.
+        let mut lie = envelope(None);
+        lie.extend_from_slice(&[0x42, 0xff, 0xff, 0xff, 0xff, 0x0f]);
+        assert!(decode_settings_update(&lie).is_err());
     }
 
     #[test]

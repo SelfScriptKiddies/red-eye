@@ -1,6 +1,5 @@
 use crate::cache;
 use crate::configuration::ApplicationConfig;
-use crate::filters::{add_filter, edit_filter, remove_filter, sync_filters};
 use crate::message_broker::create_consumer;
 use crate::wire::{self, SettingsEnvelope, WireConfigSync};
 use anyhow::Result;
@@ -35,15 +34,13 @@ pub mod dto {
     // FilterDirection lives with the filter types (filters::filterDTO) so the
     // filters storage can use it without depending on the configuration module.
     pub use crate::filters::filterDTO::FilterDirection;
+    use crate::filters::spec::{
+        Action, FilterSpec, GroupBy, IpEndpointSel, MatcherSpec, Targets, ThresholdCfg,
+    };
+    use crate::wire::red_eye::wire::IpEndpoint;
     use crate::wire::{WireFilter, WireFilterDirection, WireProtocol, WireService};
-
-    #[derive(Debug, Clone)]
-    pub struct Filter {
-        pub pattern_name: String,
-        pub filter_type: String,
-        pub filter_payload: Vec<u8>,
-        pub direction: FilterDirection,
-    }
+    use log::warn;
+    use std::net::IpAddr;
 
     /// Transport protocol of a service. Unknown wire values must never
     /// degrade into a guess (silently treating UDP as TCP would misroute
@@ -107,17 +104,99 @@ pub mod dto {
         })
     }
 
-    pub fn filter_from_wire(filter: &WireFilter) -> Filter {
-        Filter {
-            pattern_name: filter.pattern_name.clone(),
-            filter_type: filter.filter_type.clone(),
-            filter_payload: filter.filter_payload.clone(),
-            direction: match WireFilterDirection::try_from(filter.direction) {
-                Ok(WireFilterDirection::Inbound) => FilterDirection::Inbound,
-                Ok(WireFilterDirection::Outbound) => FilterDirection::Outbound,
-                _ => FilterDirection::Both,
+    /// Map the unified wire filter (plus its op id) onto the analyzer
+    /// FilterSpec. None when the entry cannot be interpreted faithfully
+    /// (unknown action, invalid CIDR, invalid UTF-8): the caller drops it
+    /// instead of guessing, and periodic reconciliation re-reads the DB.
+    pub fn filter_spec_from_wire(id: u64, filter: &WireFilter) -> Option<FilterSpec> {
+        let direction = match WireFilterDirection::try_from(filter.direction) {
+            Ok(WireFilterDirection::Inbound) => FilterDirection::Inbound,
+            Ok(WireFilterDirection::Outbound) => FilterDirection::Outbound,
+            _ => FilterDirection::Both,
+        };
+        let action = match filter.action.as_str() {
+            "" => Action::Tag,
+            other => Action::from_wire_str(other)?,
+        };
+
+        let matcher = match filter.filter_type.as_str() {
+            "ip_cidr" => {
+                let (addr_text, prefix) = match filter.ip_network.rsplit_once('/') {
+                    Some((a, p)) => (a, p.parse::<u8>().ok()?),
+                    None => (filter.ip_network.as_str(), 0),
+                };
+                let addr: IpAddr = addr_text.parse().ok()?;
+                let max = if addr.is_ipv4() { 32 } else { 128 };
+                let prefix = if filter.ip_network.contains('/') {
+                    prefix
+                } else {
+                    max
+                };
+                if prefix > max {
+                    return None;
+                }
+                let endpoint = match IpEndpoint::try_from(filter.ip_endpoint) {
+                    Ok(IpEndpoint::Dst) => IpEndpointSel::Dst,
+                    _ => IpEndpointSel::Src,
+                };
+                MatcherSpec::IpCidr {
+                    network: addr,
+                    prefix,
+                    endpoint,
+                }
+            }
+            "expression" => MatcherSpec::Expression {
+                source: String::from_utf8(filter.filter_payload.clone()).ok()?,
             },
-        }
+            other => MatcherSpec::Payload {
+                kind: other.to_string(),
+                payload: filter.filter_payload.clone(),
+            },
+        };
+
+        let threshold = filter.threshold.as_ref().and_then(|t| {
+            let count = t.count;
+            let window = t.window_seconds;
+            if count == 0 || window == 0 {
+                warn!(
+                    "Filter {} carries an invalid threshold, ignoring it (immediate action)",
+                    filter.pattern_name
+                );
+                return None;
+            }
+            let group_by = match t.group_by.as_str() {
+                "stream" => GroupBy::Stream,
+                "service" => GroupBy::Service,
+                _ => GroupBy::RemoteIp,
+            };
+            Some(ThresholdCfg {
+                count,
+                window_secs: window,
+                group_by,
+                cooldown_secs: t.cooldown_seconds,
+                block_secs: t.block_seconds.max(1),
+            })
+        });
+
+        let targets = Targets {
+            services_all: filter.services_all,
+            service_ids: filter.service_ids.iter().copied().collect(),
+            agents_all: filter.agents_all,
+            agent_ids: filter.agent_ids.iter().cloned().collect(),
+        };
+
+        Some(FilterSpec {
+            id,
+            name: filter.pattern_name.clone(),
+            direction,
+            action,
+            enabled: filter.enabled,
+            revision: filter.revision,
+            targets,
+            threshold,
+            expires_at_ms: filter.expires_at_ms,
+            matcher,
+        })
     }
 }
 
@@ -232,14 +311,12 @@ impl UpdateListener {
                                 "Received filter add: (id={}, filter={:?})",
                                 op.id, op.filter
                             );
-                            if let Some((index, filter)) = filter_op(op) {
-                                add_filter(
-                                    index,
-                                    filter.pattern_name,
-                                    filter.filter_type,
-                                    &filter.filter_payload,
-                                    filter.direction,
-                                );
+                            if let Some(spec) = op
+                                .filter
+                                .as_ref()
+                                .and_then(|f| dto::filter_spec_from_wire(op.id, f))
+                            {
+                                crate::filters::add_filter(spec);
                             }
                         }
                         Some(wire::settings_envelope::Update::FilterUpdate(op)) => {
@@ -247,19 +324,17 @@ impl UpdateListener {
                                 "Received filter update: (id={}, filter={:?})",
                                 op.id, op.filter
                             );
-                            if let Some((index, filter)) = filter_op(op) {
-                                edit_filter(
-                                    index,
-                                    filter.pattern_name,
-                                    filter.filter_type,
-                                    &filter.filter_payload,
-                                    filter.direction,
-                                );
+                            if let Some(spec) = op
+                                .filter
+                                .as_ref()
+                                .and_then(|f| dto::filter_spec_from_wire(op.id, f))
+                            {
+                                crate::filters::edit_filter(spec);
                             }
                         }
                         Some(wire::settings_envelope::Update::FilterRemove(index)) => {
                             debug!("Received filter remove: {}", index);
-                            remove_filter(index as usize);
+                            crate::filters::remove_filter(index);
                         }
                         Some(wire::settings_envelope::Update::ConfigSync(sync)) => {
                             apply_config_sync(sync, &cache);
@@ -317,12 +392,6 @@ fn service_op(op: wire::WireServiceOp) -> Option<(usize, dto::Service)> {
     Some((id, service))
 }
 
-fn filter_op(op: wire::WireFilterOp) -> Option<(usize, dto::Filter)> {
-    let id = usize::try_from(op.id).ok()?;
-    let filter = dto::filter_from_wire(op.filter.as_ref()?);
-    Some((id, filter))
-}
-
 fn apply_config_sync(sync: WireConfigSync, cache: &Arc<cache::Cache>) {
     info!(
         "Received config sync: {} services, {} filters",
@@ -375,23 +444,14 @@ fn apply_config_sync(sync: WireConfigSync, cache: &Arc<cache::Cache>) {
         }
     }
 
-    // Sync filters
-    let filters_data: Vec<(usize, String, String, Vec<u8>, dto::FilterDirection)> = sync
+    // Sync filters: a full replacement with per-id revision gates (a
+    // spec older than the registered revision keeps the registered state).
+    let specs: Vec<crate::filters::spec::FilterSpec> = sync
         .filters
         .iter()
-        .filter_map(|op| {
-            let id = usize::try_from(op.id).ok()?;
-            let filter = dto::filter_from_wire(op.filter.as_ref()?);
-            Some((
-                id,
-                filter.pattern_name,
-                filter.filter_type,
-                filter.filter_payload,
-                filter.direction,
-            ))
-        })
+        .filter_map(|op| dto::filter_spec_from_wire(op.id, op.filter.as_ref()?))
         .collect();
-    sync_filters(filters_data);
+    crate::filters::sync_filters(specs);
 }
 
 #[cfg(test)]

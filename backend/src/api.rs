@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod auth;
 pub mod block_sync;
+pub mod blocks;
 pub mod download;
 pub mod favorite;
 pub mod l7;
@@ -74,6 +75,7 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
                 .configure(l7::config)
                 .configure(settings::config)
                 .configure(protect::config)
+                .configure(blocks::config)
                 .configure(proto::config)
                 .configure(stats::config)
                 .configure(version::config)

@@ -51,6 +51,13 @@ pub struct AgentInfo {
     /// Sanitized snapshot application error (no payload or credentials)
     #[serde(default)]
     pub last_sync_error: Option<String>,
+    /// Filters/blocks this agent could not enforce (detection continues on
+    /// the analyzer). None = older agent binary.
+    #[serde(default)]
+    pub enforcement_failures: Option<u64>,
+    /// Sanitized last enforcement failure (absent = everything enforced)
+    #[serde(default)]
+    pub last_enforcement_error: Option<String>,
     /// True when capture is idle because no services are assigned
     /// (healthy, waiting for control-plane updates)
     #[serde(default)]

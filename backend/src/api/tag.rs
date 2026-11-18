@@ -1,5 +1,3 @@
-use crate::api::agent::agent_service::AgentService;
-use crate::api::block_sync::sync_block_filters;
 use crate::api::tag::tag_dto::Tag;
 use crate::api::tag::tag_dto::TagName;
 use crate::api::tag::tag_service::TagService;
@@ -7,11 +5,19 @@ use crate::api::updater::UpdateAgent;
 use actix_identity::Identity;
 use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
 use serde_json::json;
-use sqlx::PgPool;
-use std::sync::Arc;
-
-fn is_block_type(st: Option<&str>) -> bool {
-    matches!(st, Some("block") | Some("block_conn"))
+/// Map a service error to an HTTP response: validation -> 400 with the
+/// reason, pool exhaustion -> 503, everything else -> 500.
+fn tag_service_error_response(
+    error: crate::api::tag::tag_service::TagServiceError,
+) -> HttpResponse {
+    match error {
+        crate::api::tag::tag_service::TagServiceError::Validation(e) => {
+            HttpResponse::BadRequest().json(json!({"error": e.to_string()}))
+        }
+        crate::api::tag::tag_service::TagServiceError::Sqlx(e) => {
+            crate::api::sqlx_error_response(&e)
+        }
+    }
 }
 
 pub(crate) mod tag_dto;
@@ -147,22 +153,21 @@ async fn create_tag_name(
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
     updater: web::Data<UpdateAgent>,
-    agent_service: web::Data<Arc<AgentService>>,
-    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
-    let is_block = is_block_type(tag_name.special_type.as_deref());
-    match tag_service.create_tag_name(tag_name.into_inner()).await {
+    let tag_name = tag_name.into_inner();
+    match tag_service.create_tag_name(tag_name).await {
         Ok(created_tag) => {
-            let id = created_tag.id.try_into().unwrap();
+            // The revision bump inside the transaction already schedules
+            // fresh agent snapshots (heartbeat-driven); this publish gives
+            // analyzers the new filter immediately. A failed publish stays
+            // visible as pending sync, never a rollback.
+            let id = u64::try_from(created_tag.id).unwrap_or_default();
             if let Err(e) = updater.add_filter(created_tag.clone().into(), id).await {
                 log::error!("Failed to send update: {}", e);
             }
-            if is_block {
-                sync_block_filters(pool.get_ref(), &agent_service).await;
-            }
             Ok(HttpResponse::Ok().json(created_tag))
         }
-        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
+        Err(e) => Ok(tag_service_error_response(e)),
     }
 }
 
@@ -184,32 +189,18 @@ async fn update_tag_name(
     tag_name: web::Json<TagNameCreate>,
     tag_service: web::Data<TagService>,
     updater: web::Data<UpdateAgent>,
-    agent_service: web::Data<Arc<AgentService>>,
-    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
-    // Check if old tag was block (need to re-sync if changing away from block)
-    let was_block = tag_service
-        .get_tag_name_by_id(id)
-        .await
-        .map(|t| is_block_type(t.special_type.as_deref()))
-        .unwrap_or(false);
-    let will_be_block = is_block_type(tag_name.special_type.as_deref());
-    match tag_service.update_tag_name(id, tag_name.into_inner()).await {
+    let tag_name = tag_name.into_inner();
+    match tag_service.update_tag_name(id, tag_name).await {
         Ok(updated_tag) => {
-            let id = updated_tag.id.try_into().unwrap();
+            let id = u64::try_from(updated_tag.id).unwrap_or_default();
             if let Err(e) = updater.update_filter(id, updated_tag.clone().into()).await {
                 log::error!("Failed to send update: {}", e);
             }
-            if was_block || will_be_block {
-                sync_block_filters(pool.get_ref(), &agent_service).await;
-            }
             Ok(HttpResponse::Ok().json(updated_tag))
         }
-        Err(sqlx::Error::RowNotFound) => {
-            Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"})))
-        }
-        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
+        Err(e) => Ok(tag_service_error_response(e)),
     }
 }
 
@@ -229,23 +220,15 @@ async fn delete_tag_name(
     path: web::Path<(i64,)>,
     tag_service: web::Data<TagService>,
     updater: web::Data<UpdateAgent>,
-    agent_service: web::Data<Arc<AgentService>>,
-    pool: web::Data<PgPool>,
 ) -> Result<impl Responder, actix_web::error::Error> {
     let id = path.into_inner().0;
-    // Check if deleted tag was block type (need to re-sync after delete)
-    let was_block = tag_service
-        .get_tag_name_by_id(id)
-        .await
-        .map(|t| is_block_type(t.special_type.as_deref()))
-        .unwrap_or(false);
     match tag_service.delete_tag_name(id).await {
         Ok(_) => {
-            if let Err(e) = updater.remove_filter(id.try_into().unwrap()).await {
+            if let Err(e) = updater
+                .remove_filter(u64::try_from(id).unwrap_or_default())
+                .await
+            {
                 log::error!("Failed to send update: {}", e);
-            }
-            if was_block {
-                sync_block_filters(pool.get_ref(), &agent_service).await;
             }
             Ok(HttpResponse::NoContent().finish())
         }
@@ -335,12 +318,53 @@ async fn get_flag_balance(
     }
 }
 
+/// Enable/disable a filter without rewriting its definition. Disabled
+/// filters stop matching on every consumer via the next update.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct TagEnabledRequest {
+    pub enabled: bool,
+}
+
+#[utoipa::path(post, path = "/api/tag/names/{id}/enabled",
+    responses((status = 200, description = "Enabled state stored"),
+              (status = 400, description = "Invalid request"),
+              (status = 404, description = "Tag name not found")))]
+#[post("/tag/names/{id}/enabled")]
+async fn set_tag_name_enabled(
+    _identity: Identity,
+    path: web::Path<(i64,)>,
+    body: web::Json<TagEnabledRequest>,
+    tag_service: web::Data<TagService>,
+    updater: web::Data<UpdateAgent>,
+) -> Result<impl Responder, actix_web::error::Error> {
+    let id = path.into_inner().0;
+    match tag_service.set_tag_name_enabled(id, body.enabled).await {
+        Ok(_) => {
+            // Re-publish the full definition so consumers swap the whole
+            // entry (revision bump rides the periodic sync; the FilterUpdate
+            // gives analyzers the change immediately).
+            if let Ok(tag) = tag_service.get_tag_name_by_id(id).await {
+                let wire_id = u64::try_from(id).unwrap_or_default();
+                if let Err(e) = updater.update_filter(wire_id, tag.clone().into()).await {
+                    log::error!("Failed to send update: {}", e);
+                }
+            }
+            Ok(HttpResponse::Ok().json(json!({"enabled": body.enabled})))
+        }
+        Err(sqlx::Error::RowNotFound) => {
+            Ok(HttpResponse::NotFound().json(json!({"error": "Tag name not found"})))
+        }
+        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
+    }
+}
+
 pub fn tag_config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_tags_by_stream_id)
         .service(get_all_tag_names)
         .service(get_tag_name_by_id)
         .service(create_tag_name)
         .service(update_tag_name)
+        .service(set_tag_name_enabled)
         .service(delete_tag_name)
         .service(get_tag_metrics)
         .service(get_flag_balance);

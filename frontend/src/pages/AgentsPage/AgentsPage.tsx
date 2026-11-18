@@ -80,14 +80,6 @@ interface ProxyForm {
   duplicate_to: string;
 }
 
-interface FilterForm {
-  name: string;
-  kind: string;
-  pattern: string;
-  direction: string;
-  action: string;
-}
-
 interface ReplayForm {
   name: string;
   listen_port: string;
@@ -98,10 +90,6 @@ interface ReplayForm {
 const defaultProxy: ProxyForm = {
   name: '', listen: '', target: '', protocol: 'tcp',
   tls_mode: '', nft_redirect_port: '', duplicate_to: ''
-};
-
-const defaultFilter: FilterForm = {
-  name: '', kind: 'substr', pattern: '', direction: 'c2s', action: 'drop'
 };
 
 const defaultReplay: ReplayForm = {
@@ -127,9 +115,6 @@ export default function AgentsPage() {
 
   const [proxyModal, setProxyModal] = useState(false);
   const [proxyForm, setProxyForm] = useState<ProxyForm>(defaultProxy);
-
-  const [filterModal, setFilterModal] = useState(false);
-  const [filters, setFilters] = useState<FilterForm[]>([]);
 
   const [replayModal, setReplayModal] = useState(false);
   const [replayForm, setReplayForm] = useState<ReplayForm>(defaultReplay);
@@ -403,25 +388,6 @@ export default function AgentsPage() {
     });
   };
 
-  const broadcastCommand = (command: object, agentIds: string[] = []) => {
-    fetch('/api/agent/broadcast', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent_ids: agentIds, ...command })
-    }).then(async r => {
-      if (!r.ok) {
-        alert(`Команда не отправлена (${r.status}): ${(await r.text()).slice(0, 200)}`);
-        return;
-      }
-      const results = await r.json().catch(() => []);
-      const failed = (Array.isArray(results) ? results : []).filter((x: any) => x.status === 'error');
-      if (failed.length > 0) {
-        alert(`Не доставлено агентам:\n${failed.map((f: any) => `  ${f.agent_id}: ${f.error}`).join('\n')}`);
-      }
-      setTimeout(fetchAgents, 1000);
-    });
-  };
-
   // Proxy
   const saveProxy = () => {
     if (!selected || !proxyForm.name.trim() || !proxyForm.listen.trim() || !proxyForm.target.trim()) return;
@@ -443,26 +409,6 @@ export default function AgentsPage() {
   const removeProxy = (ruleName: string) => {
     if (!selected || !confirm(`Удалить прокси "${ruleName}"?`)) return;
     sendCommand(selected, { type: 'ProxyRemove', name: ruleName });
-  };
-
-  // Filters
-  const addFilterRow = () => setFilters([...filters, { ...defaultFilter }]);
-  const removeFilterRow = (i: number) => setFilters(filters.filter((_, idx) => idx !== i));
-  const updateFilterRow = (i: number, field: string, value: string) => {
-    const updated = [...filters];
-    (updated[i] as any)[field] = value;
-    setFilters(updated);
-  };
-
-  const syncFilters = () => {
-    if (!selected) return;
-    sendCommand(selected, { type: 'FilterSync', filters });
-    setFilterModal(false);
-  };
-
-  const syncFiltersAll = () => {
-    broadcastCommand({ type: 'FilterSync', filters });
-    setFilterModal(false);
   };
 
   // Replay
@@ -772,11 +718,24 @@ export default function AgentsPage() {
             <div className="action-group">
               <h3>Для выбранного</h3>
               <button className="action-btn" disabled={!selected} onClick={() => setReplayModal(true)}>Port Forward</button>
-              <button className="action-btn" disabled={!selected} onClick={() => { setFilters([]); setFilterModal(true); }}>Firewall</button>
+              <button
+                className="action-btn"
+                disabled={!selected}
+                title="Фильтры теперь управляются централизованно (Настройки -> Фильтры)"
+                onClick={() => window.location.assign('/settings')}
+              >
+                Firewall
+              </button>
             </div>
             <div className="action-group">
               <h3>Для всех агентов</h3>
-              <button className="action-btn broadcast" onClick={() => { setFilters([]); setFilterModal(true); }}>Firewall (все агенты)</button>
+              <button
+                className="action-btn broadcast"
+                title="Фильтры теперь управляются централизованно (Настройки -> Фильтры)"
+                onClick={() => window.location.assign('/settings')}
+              >
+                Firewall (все агенты)
+              </button>
             </div>
           </div>
         </div>
@@ -817,53 +776,6 @@ export default function AgentsPage() {
             <div className="modal-footer">
               <button onClick={() => setProxyModal(false)}>Отмена</button>
               <button onClick={saveProxy}>Добавить</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Filter Modal */}
-      {filterModal && (
-        <div className="modal-overlay" onClick={() => setFilterModal(false)}>
-          <div className="modal-content wide" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Фильтры файервола</h3>
-              <button className="close-btn" onClick={() => setFilterModal(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              {filters.map((f, i) => (
-                <div key={i} className="filter-row">
-                  <input placeholder="Имя" value={f.name}
-                    onChange={e => updateFilterRow(i, 'name', e.target.value)} />
-                  <select className="select-input" value={f.kind}
-                    onChange={e => updateFilterRow(i, 'kind', e.target.value)}>
-                    <option value="substr">Substr</option>
-                    <option value="regex">Regex</option>
-                    <option value="bsubstr">Binary</option>
-                  </select>
-                  <input placeholder="Паттерн" value={f.pattern}
-                    onChange={e => updateFilterRow(i, 'pattern', e.target.value)} />
-                  <select className="select-input" value={f.direction}
-                    onChange={e => updateFilterRow(i, 'direction', e.target.value)}>
-                    <option value="c2s">C→S</option>
-                    <option value="s2c">S→C</option>
-                    <option value="both">Both</option>
-                  </select>
-                  <select className="select-input" value={f.action}
-                    onChange={e => updateFilterRow(i, 'action', e.target.value)}>
-                    <option value="drop">Drop Packet</option>
-                    <option value="drop_connection">Drop Connection</option>
-                    <option value="alert">Alert</option>
-                  </select>
-                  <button className="remove-btn" onClick={() => removeFilterRow(i)}>✕</button>
-                </div>
-              ))}
-              <button className="add-row-btn" onClick={addFilterRow}>+ Добавить фильтр</button>
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setFilterModal(false)}>Отмена</button>
-              {selected && <button onClick={syncFilters}>Применить к {selected}</button>}
-              <button onClick={syncFiltersAll}>Применить ко всем</button>
             </div>
           </div>
         </div>

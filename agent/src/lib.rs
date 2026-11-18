@@ -10,6 +10,7 @@ mod commands;
 mod config;
 /// Public for the `list_containers` live-verification example.
 pub mod docker;
+mod enforce;
 mod harpoon;
 mod heartbeat;
 mod nats;
@@ -89,6 +90,8 @@ pub async fn run() {
     let applied_revision = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let last_sync_error: Arc<std::sync::RwLock<Option<String>>> =
         Arc::new(std::sync::RwLock::new(None));
+    // Enforcement plans flow from the update listener to the engine owner.
+    let (enforce_tx, enforce_rx) = tokio::sync::mpsc::channel(8);
     let state = Arc::new(updates::AppState {
         ports: updates::create_ports_cache(),
         excluded_ports: updates::create_ports_cache(),
@@ -109,6 +112,9 @@ pub async fn run() {
         )),
         applied_revision,
         last_sync_error,
+        enforce_tx,
+        enforcement_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        last_enforcement_error: Arc::new(std::sync::RwLock::new(None)),
         agent_id: agent_id.clone(),
         boot_id: boot_id.clone(),
         config_source: config.clone(),
@@ -154,6 +160,10 @@ pub async fn run() {
         harpoon.clone(),
         supervisor.clone(),
     );
+
+    // Snapshot enforcement: filter hot-swaps + nftables bans with expiry,
+    // fed by the update listener through a bounded plan channel.
+    enforce::spawn_enforcement(harpoon.clone(), state.clone(), enforce_rx);
 
     // SIGTERM (systemctl restart/stop) and SIGINT must clean up nftables
     // before exit, otherwise the table keeps redirecting traffic to a dead

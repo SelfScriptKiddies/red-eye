@@ -431,6 +431,10 @@ pub fn spawn_heartbeat_listener(
                             status.machine_ip.as_deref(),
                             status.applied_revision.and_then(|r| i64::try_from(r).ok()),
                             status.last_sync_error.as_deref(),
+                            status
+                                .enforcement_failures
+                                .and_then(|f| i64::try_from(f).ok()),
+                            status.last_enforcement_error.as_deref(),
                         )
                         .await;
                     if reason != SnapshotReason::NotNeeded {
@@ -495,17 +499,20 @@ pub fn spawn_heartbeat_listener(
                         agent_service.set_forwarder_drops(&agent_id, drops);
                     }
 
-                    // Freshly seen agent (backend restart or first contact):
-                    // push block filters. Service assignment rides the
-                    // snapshot flow, not per-agent binding.
+                    // Freshly seen agent (backend restart or first
+                    // contact): force a full snapshot so filters, blocks,
+                    // proxies and service assignment all arrive together.
                     if is_new {
                         let control = control.clone();
-                        let agent_svc2 = agent_service.clone();
                         let aid = agent_id.clone();
                         tokio::spawn(async move {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                            log::info!("New agent '{}' connected, syncing block filters", aid);
-                            crate::api::block_sync::sync_block_filters(control.pool(), &agent_svc2)
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            log::info!("New agent '{}' connected, sending snapshot", aid);
+                            control
+                                .send_snapshot(
+                                    &aid,
+                                    crate::api::agent::agent_config::SnapshotReason::NewBoot,
+                                )
                                 .await;
                         });
                     }

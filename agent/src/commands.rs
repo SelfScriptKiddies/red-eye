@@ -8,35 +8,12 @@ use tokio::sync::Mutex;
 
 use harpoon_core::types::endpoint::Protocol;
 
-use crate::harpoon::{self, HarpoonEngine, ProxyRuleSpec};
+use crate::harpoon::{HarpoonEngine, ProxyRuleSpec};
 use crate::nats::NatsClient;
 use crate::nftables::RedirectRule;
 use crate::proxy_state::ProxyDesired;
 use crate::supervisor::ProxySupervisor;
 use crate::updates::{AppState, TransportProto};
-
-#[derive(Debug, Deserialize)]
-pub struct FilterDef {
-    pub name: String,
-    /// "substr", "bsubstr", "regex"
-    pub kind: String,
-    /// Pattern string (or hex for bsubstr)
-    pub pattern: String,
-    /// "c2s", "s2c", "both"
-    #[serde(default = "default_direction")]
-    pub direction: String,
-    /// "drop", "alert", "pass"
-    #[serde(default = "default_action")]
-    pub action: String,
-}
-
-fn default_direction() -> String {
-    "both".to_string()
-}
-
-fn default_action() -> String {
-    "drop".to_string()
-}
 
 fn default_tcp() -> String {
     "tcp".to_string()
@@ -94,11 +71,6 @@ pub enum AgentCommand {
         rules: Vec<RedirectRule>,
     },
     NftablesClear,
-
-    // Firewall filters
-    FilterSync {
-        filters: Vec<FilterDef>,
-    },
 
     // Replay: forward to another team
     ReplayForward {
@@ -301,37 +273,6 @@ async fn handle_command(
             info!("Clearing all nftables rules");
             if let Err(e) = harpoon.lock().await.clear_nft_rules() {
                 error!("Failed to clear nftables rules: {}", e);
-            }
-        }
-
-        AgentCommand::FilterSync { filters } => {
-            info!("Syncing {} firewall filters", filters.len());
-            let mut parsed = Vec::new();
-            let mut errors = 0;
-            for f in &filters {
-                match harpoon::parse_filter(&f.kind, &f.pattern, &f.direction, &f.action) {
-                    Ok(filter) => {
-                        debug!(
-                            "Filter '{}': {} {} -> {}",
-                            f.name, f.kind, f.direction, f.action
-                        );
-                        parsed.push(filter);
-                    }
-                    Err(e) => {
-                        error!("Invalid filter '{}': {}", f.name, e);
-                        errors += 1;
-                    }
-                }
-            }
-            if errors > 0 {
-                warn!(
-                    "{} filters failed to parse, applying {} valid ones",
-                    errors,
-                    parsed.len()
-                );
-            }
-            if let Err(e) = harpoon.lock().await.sync_filters(parsed).await {
-                error!("Failed to sync filters: {}", e);
             }
         }
 

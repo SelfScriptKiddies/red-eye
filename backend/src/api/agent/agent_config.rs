@@ -37,6 +37,8 @@ pub struct AgentConfigState {
     pub last_boot_id: String,
     pub last_acked_revision: i64,
     pub last_sync_error: Option<String>,
+    pub enforcement_failures: i64,
+    pub last_enforcement_error: Option<String>,
 }
 
 /// Why a snapshot should be (re)published to an agent.
@@ -176,7 +178,8 @@ impl ControlPlane {
             r#"
             SELECT agent_id, interface_override, machine_ip_override,
                    reported_interface, reported_machine_ip, last_boot_id,
-                   last_acked_revision, last_sync_error
+                   last_acked_revision, last_sync_error,
+                   enforcement_failures, last_enforcement_error
             FROM agent_config
             WHERE agent_id = $1
             "#,
@@ -191,6 +194,7 @@ impl ControlPlane {
     /// Persist heartbeat-learned state and decide whether the agent needs a
     /// fresh snapshot: new boot id, acknowledged revision behind the
     /// current one, or an uncertain outcome (DB failure this round).
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_heartbeat(
         &self,
         agent_id: &str,
@@ -199,6 +203,8 @@ impl ControlPlane {
         machine_ip: Option<&str>,
         applied_revision: Option<i64>,
         sync_error: Option<&str>,
+        enforcement_failures: Option<i64>,
+        enforcement_error: Option<&str>,
     ) -> SnapshotReason {
         let current = match self.current_revision().await {
             Some(rev) => rev,
@@ -209,13 +215,16 @@ impl ControlPlane {
             r#"
             INSERT INTO agent_config
                 (agent_id, reported_interface, reported_machine_ip,
-                 last_boot_id, last_acked_revision, last_sync_error, updated_at)
+                 last_boot_id, last_acked_revision, last_sync_error,
+                 enforcement_failures, last_enforcement_error, updated_at)
             VALUES ($1,
                     COALESCE($2, ''),
                     COALESCE($3, ''),
                     COALESCE($4, ''),
                     COALESCE($5, 0),
-                    $6, now())
+                    $6,
+                    COALESCE($7, 0),
+                    $8, now())
             ON CONFLICT (agent_id) DO UPDATE SET
                 reported_interface = COALESCE(EXCLUDED.reported_interface, agent_config.reported_interface),
                 reported_machine_ip = COALESCE(EXCLUDED.reported_machine_ip, agent_config.reported_machine_ip),
@@ -225,6 +234,8 @@ impl ControlPlane {
                         THEN EXCLUDED.last_acked_revision
                     ELSE agent_config.last_acked_revision END,
                 last_sync_error = EXCLUDED.last_sync_error,
+                enforcement_failures = COALESCE(EXCLUDED.enforcement_failures, agent_config.enforcement_failures),
+                last_enforcement_error = EXCLUDED.last_enforcement_error,
                 updated_at = now()
             RETURNING last_boot_id, last_acked_revision
             "#,
@@ -235,6 +246,8 @@ impl ControlPlane {
         .bind(boot_id)
         .bind(applied_revision)
         .bind(sync_error)
+        .bind(enforcement_failures)
+        .bind(enforcement_error)
         .fetch_one(&self.pool)
         .await;
 
@@ -320,7 +333,8 @@ impl ControlPlane {
 
     /// Build the complete snapshot for one agent: its effective network
     /// settings plus its service set (global services plus explicit
-    /// agent_service assignments). None when the DB read fails - callers
+    /// agent_service assignments), its enforceable filter projection and
+    /// its unexpired active blocks. None when the DB read fails - callers
     /// treat that as pending sync, never as an empty assignment.
     pub async fn snapshot_for(&self, agent_id: &str) -> Option<WireAgentConfigSnapshot> {
         let revision = match self.current_revision().await {
@@ -338,6 +352,8 @@ impl ControlPlane {
                 last_boot_id: String::new(),
                 last_acked_revision: 0,
                 last_sync_error: None,
+                enforcement_failures: 0,
+                last_enforcement_error: None,
             },
         };
         let network = Self::effective_network(&state);
@@ -466,6 +482,33 @@ impl ControlPlane {
             }
         };
 
+        // Filter and block projections are part of the atomic snapshot:
+        // a failed read withholds the whole snapshot (complete replacement
+        // semantics mean a partial snapshot could wipe enforcement state).
+        // The agent keeps its last valid state; reconciliation re-delivers.
+        let filters =
+            match crate::api::block_sync::agent_filter_projection(&self.pool, agent_id).await {
+                Ok(f) => f,
+                Err(e) => {
+                    error!(
+                        "Filter projection for agent '{}' failed, snapshot withheld: {}",
+                        agent_id, e
+                    );
+                    return None;
+                }
+            };
+        let blocks =
+            match crate::api::block_sync::agent_block_projection(&self.pool, agent_id).await {
+                Ok(b) => b,
+                Err(e) => {
+                    error!(
+                        "Block projection for agent '{}' failed, snapshot withheld: {}",
+                        agent_id, e
+                    );
+                    return None;
+                }
+            };
+
         Some(WireAgentConfigSnapshot {
             revision: u64::try_from(revision).unwrap_or_default(),
             agent_id: agent_id.to_string(),
@@ -475,6 +518,8 @@ impl ControlPlane {
             }),
             services,
             desired_proxies,
+            filters,
+            blocks,
         })
     }
 
@@ -648,6 +693,8 @@ mod tests {
             last_boot_id: String::new(),
             last_acked_revision: 0,
             last_sync_error: None,
+            enforcement_failures: 0,
+            last_enforcement_error: None,
         }
     }
 

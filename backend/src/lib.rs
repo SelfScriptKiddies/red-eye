@@ -491,6 +491,10 @@ pub async fn run() -> std::io::Result<()> {
     // Spawn special trigger handler (flag farm + alert notifications)
     api::special_triggers::spawn_special_trigger_handler(pool.clone(), broadcaster_tx.clone());
 
+    // Active-block expiry cleanup: blocks expire even if the analyzer that
+    // created them is offline (agents unban locally at expiry as well).
+    api::block_sync::spawn_block_cleanup(pool.clone());
+
     // Favorite retention workers: bounded archive batches (live + saved
     // unions) and bounded post-unstar saved cleanup. Failures back off
     // without touching ingestion or the star state. Pre-feature favorite
