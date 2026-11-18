@@ -131,6 +131,15 @@ Full-control mutations additionally require `expected_revision`
 operations a prior `dry_run=true` call whose `operation_id` the mutation
 must reference. Every audit record carries ids and statuses only.
 
+#### get_selected_streams (UI-selection bundle)
+
+The operator selects streams in the UI, copies the `/packets?streams=1,2,3`
+link and hands it to the agent. The tool accepts only links whose origin
+equals `MCP_PUBLIC_URL` (unset = fail closed), extracts the ids (cap 25) and
+serves each stream's bounded summary + messages from the service's backend
+connection. It never connects to the link itself, so external URLs are never
+fetchable. Unknown ids land in `failed_ids` instead of failing the call.
+Available to any authenticated token; audit records carry the url only.
 ## Features
 
 ### Traffic Capture
@@ -226,7 +235,7 @@ python3 test_grpc_service.py http://YOUR_IP:31337
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MCP_SERVICE_TOKEN` | red-eye-mcp service credential for backend API calls | empty (MCP fail-closed) |
-| `MCP_ENABLE_FETCH_URL` | enable the fetch_url MCP tool (network egress to public hosts only) | `false` |
+| `MCP_PUBLIC_URL` | public origin of the Red Eye UI; `get_selected_streams` accepts only links on this origin | empty (tool fails closed) |
 | `SOC_WORKER_TOKEN` | soc-worker job credential for backend API calls | empty (worker retries) |
 | `MCP_TOKEN` | read-only MCP token the worker uses for evidence | empty |
 
