@@ -9,7 +9,9 @@ RUN cargo install cargo-chef --locked
 # ./proto); the crate itself comes in below. Copy proto/ explicitly — a
 # symlinked path cannot cross the build context boundary.
 COPY proto/ ./proto/
+COPY filter-dsl/ /usr/src/filter-dsl/
 COPY traffic-analyzer/ .
+
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -29,6 +31,11 @@ RUN rustup target add x86_64-unknown-linux-musl
 COPY --from=planner /usr/src/app/recipe.json recipe.json
 
 # Build dependencies - this layer will be cached
+# Cook resolves and builds the path dep from a stub, so source changes
+# do not bust the cached dependency layer.
+COPY filter-dsl/Cargo.toml /usr/src/filter-dsl/Cargo.toml
+RUN mkdir -p /usr/src/filter-dsl/src && touch /usr/src/filter-dsl/src/lib.rs
+
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 # Stamp the built binary with the building commit and release version
@@ -41,7 +48,12 @@ ENV RED_EYE_VERSION=${RED_EYE_VERSION}
 
 # Copy source code and build application
 COPY proto/ ./proto/
+COPY filter-dsl/ /usr/src/filter-dsl/
 COPY traffic-analyzer/ .
+# COPY preserves context mtimes; without the touch cargo considers the
+# real source older than the stub it built during cook and links the stub.
+RUN touch /usr/src/filter-dsl/src/lib.rs
+
 
 RUN cargo build --target x86_64-unknown-linux-musl --release
 
