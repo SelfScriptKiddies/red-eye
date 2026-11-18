@@ -1,5 +1,5 @@
 import './SettingsPage.css'
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AgentContainerInfo, AgentListItem, apiFetch, copyText, fetchAgentContainers, fetchFavoriteUsage, FavoriteUsage } from '../../lib/api';
 import { capacityPercent, formatBytes } from '../../lib/favoriteRetention';
@@ -13,6 +13,7 @@ import {
 import { usePages } from '../../PagesProvider';
 import { UserAgentsDrawer } from '../../components/UserAgentsDrawer';
 import { buildUaDrilldownUrl } from '../../lib/userAgents';
+import { AI_SETTING_ROWS, fetchAiStatus, putAiSetting, type AiStatus } from '../../lib/aiVerdict';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -152,6 +153,202 @@ function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo })
             ) : (
                 <span className="version-error">нет данных</span>
             )}
+        </div>
+    );
+}
+
+/** AI stream analysis (JEV). Off by default: enabling requires an explicit
+ * acknowledgement that plaintext (TLS-MITM content, credentials, flags,
+ * exploit payloads) leaves the game network to OpenRouter/TypeSafe. The
+ * API key is write-only: GET /api/settings masks it, so the field starts
+ * empty and clearing sends an empty string. */
+function AiAnalysisBlock() {
+    const [status, setStatus] = useState<AiStatus | null>(null);
+    const [values, setValues] = useState<Record<string, string>>({});
+    const [apiKey, setApiKey] = useState('');
+    const [acknowledged, setAcknowledged] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+
+    const reload = useCallback(async () => {
+        try {
+            const [st, settings] = await Promise.all([
+                fetchAiStatus(),
+                apiFetch<Record<string, string>>('/api/settings'),
+            ]);
+            setStatus(st);
+            setValues({
+                ai_model: String(settings.ai_model ?? ''),
+                ai_threshold: String(settings.ai_threshold ?? ''),
+                ai_max_per_tick: String(settings.ai_max_per_tick ?? ''),
+                ai_stream_debounce_ms: String(settings.ai_stream_debounce_ms ?? ''),
+                ai_stream_min_interval_secs: String(settings.ai_stream_min_interval_secs ?? ''),
+                ai_stream_max_bytes: String(settings.ai_stream_max_bytes ?? ''),
+                ai_stream_max_entries: String(settings.ai_stream_max_entries ?? ''),
+                ai_entry_max_bytes: String(settings.ai_entry_max_bytes ?? ''),
+                ai_daily_cost_limit: String(settings.ai_daily_cost_limit ?? ''),
+                ai_verdict_retention_days: String(settings.ai_verdict_retention_days ?? ''),
+            });
+        } catch (e) {
+            setError(`Не удалось загрузить состояние JEV: ${e}`);
+        }
+    }, []);
+
+    useEffect(() => { reload(); }, [reload]);
+
+    const save = async (key: string, value: string) => {
+        setError(null);
+        setNotice(null);
+        try {
+            await putAiSetting(key, value);
+            setNotice(`${key} сохранено, применяется без перезапуска`);
+            await reload();
+        } catch (e) {
+            setError(`${key}: отклонено (${e})`);
+        }
+    };
+
+    const validateAndSave = (row: { key: string; type?: string }) => {
+        const raw = (values[row.key] ?? '').trim();
+        if (row.type === 'float') {
+            const n = Number(raw);
+            if (!raw || !Number.isFinite(n)) {
+                setError(`${row.key}: нужно число`);
+                return;
+            }
+        } else if (row.type === 'int') {
+            if (!raw || !Number.isInteger(Number(raw))) {
+                setError(`${row.key}: нужно целое число`);
+                return;
+            }
+        } else if (row.key === 'ai_model' && !raw) {
+            setError('ai_model не может быть пустым');
+            return;
+        }
+        save(row.key, raw);
+    };
+
+    const toggleEnabled = () => {
+        if (!status) return;
+        if (status.enabled) {
+            save('ai_enabled', 'false');
+            return;
+        }
+        if (!status.configured) {
+            setError('Сначала сохраните API-ключ OpenRouter');
+            return;
+        }
+        if (!acknowledged) {
+            setError('Подтвердите предупреждение о приватности, чтобы включить анализ');
+            return;
+        }
+        save('ai_enabled', 'true');
+    };
+
+    const stateLabel = (st: AiStatus): string => {
+        if (!st.enabled) return 'выключен';
+        if (!st.configured) return 'нет ключа';
+        switch (st.run_state) {
+            case 'active': return 'активен';
+            case 'backoff': return 'пауза (ошибки провайдера)';
+            case 'cost_limited': return 'лимит стоимости (до завтра)';
+            case 'unconfigured': return 'не настроен';
+            default: return st.run_state;
+        }
+    };
+
+    return (
+        <div>
+            {status && (
+                <div className="favorite-usage">
+                    <div className="favorite-usage-row">
+                        <span>Состояние: {stateLabel(status)}</span>
+                        <span>Модель: {status.model}</span>
+                    </div>
+                    <div className="favorite-usage-row">
+                        <span>Расход сегодня: ${status.cost_spent_today.toFixed(4)} из ${status.cost_limit}</span>
+                        <span>Очередь: {status.backlog} · в полёте: {status.in_flight}</span>
+                    </div>
+                    <div className="favorite-usage-row">
+                        <span>Вердикты: {status.verdicts_total} (атак: {status.attack_verdicts_total})</span>
+                        <span>Ошибки: {status.calls_failed} / невалидные: {status.invalid_responses}</span>
+                    </div>
+                </div>
+            )}
+
+            <div className="jev-warning" style={{
+                border: '1px solid #a05050', borderRadius: '8px', padding: '10px',
+                margin: '10px 0', background: 'rgba(160, 80, 80, 0.12)', fontSize: '12px',
+            }}>
+                <b>Приватность.</b> При включении содержимое трафика уходит наружу в открытом виде:
+                расшифрованный TLS-MITM текст, учётные данные, флаги и эксплойты покидают игровую
+                сеть и передаются в OpenRouter / TypeSafe. Данные нельзя отозвать после отправки.
+                Анализ только для информации: ничего не блокируется автоматически.
+                <label className="checkbox-label" style={{ display: 'block', marginTop: '8px' }}>
+                    <input
+                        type="checkbox"
+                        checked={acknowledged}
+                        onChange={(e) => setAcknowledged(e.target.checked)}
+                    />
+                    Я понимаю, что plaintext покидает сеть
+                </label>
+            </div>
+
+            <div className="setting-row">
+                <button
+                    className={`add-btn ${status?.enabled ? '' : acknowledged && status?.configured ? '' : 'disabled'}`}
+                    onClick={toggleEnabled}
+                    style={{ fontSize: '12px', padding: '6px 14px' }}
+                >
+                    {status?.enabled ? 'Выключить AI-анализ' : 'Включить AI-анализ'}
+                </button>
+                <span style={{ fontSize: '11px', color: '#888' }}>
+                    {status?.configured ? 'ключ сохранён' : 'ключ не задан'}
+                </span>
+            </div>
+
+            <div className="setting-row" style={{ marginTop: '10px', flexDirection: 'column', alignItems: 'stretch' }}>
+                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ OpenRouter (запись-только)</label>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                    <input
+                        type="password"
+                        autoComplete="off"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder={status?.configured ? 'ключ скрыт; введите новый для замены' : 'sk-or-...'}
+                        style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                    />
+                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', apiKey); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                        Сохранить
+                    </button>
+                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', ''); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                        Удалить
+                    </button>
+                </div>
+                <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>
+                    Ключ никогда не возвращается через API и не попадает в логи.
+                </p>
+            </div>
+
+            {AI_SETTING_ROWS.map(row => (
+                <div key={row.key} className="setting-row" style={{ marginTop: '8px', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <label style={{ fontSize: '12px', color: '#ccc' }}>{row.label}</label>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                        <input
+                            type="text"
+                            value={values[row.key] ?? ''}
+                            onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
+                            style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                        />
+                        <button className="add-btn" onClick={() => validateAndSave(row)} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                            Сохранить
+                        </button>
+                    </div>
+                    <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>{row.hint}</p>
+                </div>
+            ))}
+            {error && <p style={{ color: '#e0606a', fontSize: '12px', margin: '8px 0 0' }}>{error}</p>}
+            {notice && !error && <p style={{ color: '#87d37c', fontSize: '12px', margin: '8px 0 0' }}>{notice}</p>}
         </div>
     );
 }
@@ -1059,6 +1256,13 @@ export function SettingsPage() {
                             <div className="card-content">
                                 <h4>Хранилище избранного</h4>
                                 <FavoriteStorageBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>AI-анализ стримов (JEV)</h4>
+                                <AiAnalysisBlock />
                             </div>
                         </div>
 

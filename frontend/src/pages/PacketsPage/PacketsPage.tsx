@@ -9,6 +9,7 @@ import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
 
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
+import { AiVerdictPanel } from '../../components/AiVerdict';
 import { apiFetch, copyText, setStreamFavorite, FavoriteCapacityError } from '../../lib/api';
 import { formatBytes } from '../../lib/favoriteRetention';
 import { shq, pyStr } from '../../lib/exportEscaping';
@@ -929,6 +930,9 @@ export function PacketsPage() {
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
                         <div className="toolbar-left">
+                            {selectedStreamIds.length === 1 && (
+                                <AiVerdictPanel streamId={selectedStreamIds[0]} />
+                            )}
                             <div className="stream-info-wrap">
                                 <button
                                     className="toolbar-btn"

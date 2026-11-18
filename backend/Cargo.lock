@@ -540,6 +540,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "strum 0.26.3",
  "strum_macros 0.26.4",

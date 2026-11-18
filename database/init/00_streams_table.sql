@@ -40,7 +40,11 @@ CREATE TABLE IF NOT EXISTS stream (
     -- Running payload-byte estimate maintained by the analyzer flush.
     retention_bytes BIGINT NOT NULL DEFAULT 0,
     -- Last archive batch failure, sanitized (ids/byte counts, no payloads).
-    archive_error TEXT
+    archive_error TEXT,
+    -- Highest packet id included in the flusher's stream-stats update; the
+    -- JEV scheduler's content-revision boundary. Legacy/pre-JEV rows stay 0
+    -- and are never analysis candidates until new packets arrive.
+    last_packet_id BIGINT NOT NULL DEFAULT 0
 );
 
 -- Streams list keyset pagination: the list orders by
@@ -71,3 +75,8 @@ CREATE INDEX IF NOT EXISTS idx_stream_favorite_state ON stream (favorite, retent
 -- Continuation chain walks (prev/next segment links).
 CREATE INDEX IF NOT EXISTS idx_stream_continuation
     ON stream (continuation_of) WHERE continuation_of IS NOT NULL;
+-- JEV candidate scan (recent-first and oldest-waiting-first queues);
+-- partial because rows without a revision (last_packet_id = 0) are never
+-- analysis candidates.
+CREATE INDEX IF NOT EXISTS idx_stream_ai_candidates
+    ON stream (last_packet_time DESC, id DESC) WHERE last_packet_id > 0;

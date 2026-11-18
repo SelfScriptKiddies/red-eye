@@ -1011,38 +1011,47 @@ impl DB {
         q.execute(&self.pgpool).await.map(|_| ())
     }
 
-    /// Batch update stream last_packet_time (max), increment packet_count
-    /// and accumulate the payload-byte estimate (retention_bytes feeds
-    /// segment rotation and star-time capacity measurement).
-    /// `rows` is (stream_id, max_timestamp, packet_count_delta, bytes_delta).
-    /// Single set-based UPDATE.
+    /// Batch update stream last_packet_time (max), increment packet_count,
+    /// accumulate the payload-byte estimate (retention_bytes feeds segment
+    /// rotation and star-time capacity measurement) and advance
+    /// last_packet_id (the JEV scheduler's content-revision boundary).
+    /// `rows` is (stream_id, max_timestamp, packet_count_delta, bytes_delta,
+    /// max_packet_id). Single set-based UPDATE; the id lands in the same
+    /// statement as the stats so JEV never sees a revision whose packets
+    /// are not committed yet.
     pub async fn update_streams_stats_batch(
         &self,
-        rows: &[(usize, i64, i64, i64)],
+        rows: &[(usize, i64, i64, i64, i64)],
     ) -> Result<(), Error> {
         if rows.is_empty() {
             return Ok(());
         }
         let mut query = String::from(
-            "UPDATE stream s SET last_packet_time = GREATEST(COALESCE(s.last_packet_time, 0), v.ts), packet_count = s.packet_count + v.cnt, retention_bytes = s.retention_bytes + v.bytes FROM (VALUES "
+            "UPDATE stream s SET last_packet_time = GREATEST(COALESCE(s.last_packet_time, 0), v.ts), packet_count = s.packet_count + v.cnt, retention_bytes = s.retention_bytes + v.bytes, last_packet_id = GREATEST(s.last_packet_id, v.max_id) FROM (VALUES "
         );
         for (i, _) in rows.iter().enumerate() {
             if i > 0 {
                 query.push_str(", ");
             }
-            let base = i * 4;
+            let base = i * 5;
             query.push_str(&format!(
-                "(${}::bigint, ${}::bigint, ${}::bigint, ${}::bigint)",
+                "(${}::bigint, ${}::bigint, ${}::bigint, ${}::bigint, ${}::bigint)",
                 base + 1,
                 base + 2,
                 base + 3,
-                base + 4
+                base + 4,
+                base + 5
             ));
         }
-        query.push_str(") AS v(stream_id, ts, cnt, bytes) WHERE s.id = v.stream_id");
+        query.push_str(") AS v(stream_id, ts, cnt, bytes, max_id) WHERE s.id = v.stream_id");
         let mut q = sqlx::query(&query);
-        for (sid, ts, cnt, bytes) in rows {
-            q = q.bind(*sid as i64).bind(*ts).bind(*cnt).bind(*bytes);
+        for (sid, ts, cnt, bytes, max_id) in rows {
+            q = q
+                .bind(*sid as i64)
+                .bind(*ts)
+                .bind(*cnt)
+                .bind(*bytes)
+                .bind(*max_id);
         }
         q.execute(&self.pgpool).await.map(|_| ())
     }
