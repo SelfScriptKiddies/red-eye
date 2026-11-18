@@ -354,7 +354,7 @@ async fn warm_services_from_db(db: &db::DB, cache: &cache::Cache) {
 /// Warm the per-agent machine IP registry from agent_config: the
 /// effective value is the override when present, else the last reported
 /// bootstrap value. Values that no longer parse (e.g. legacy garbage) are
-/// skipped — an agent without a resolvable IP has its packets dropped and
+/// skipped: an agent without a resolvable IP has its packets dropped and
 /// counted until a snapshot re-registers it, never guessed.
 async fn warm_agent_registry_from_db(db: &db::DB, cache: &cache::Cache) {
     let rows = match sqlx::query_as::<_, (String, Option<String>, Option<String>, i64)>(
@@ -545,7 +545,7 @@ pub async fn run() {
     // Periodic DB reconciliation: services, filters and the agent registry
     // re-read on a bounded interval, bounding how long a missed update
     // event can stay effective. Never restarts the consumer or the packet
-    // path — it only swaps cache contents.
+    // path: it only swaps cache contents.
     tokio::spawn({
         let config = config.clone();
         let cache = cache.clone();
