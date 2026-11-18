@@ -2,8 +2,8 @@ use crate::configuration::ApplicationConfig;
 use crate::ethernet::{IpVersion, PacketInfo, Protocol};
 use crate::process_packet::Direction;
 use log::{error, info, warn};
-use sqlx::{postgres::PgPoolOptions, Error, PgPool, Row};
-use std::collections::HashMap;
+use sqlx::{postgres::PgPoolOptions, Error, PgPool, Postgres, Row};
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 
 /// Build the COPY FROM STDIN body for a packet batch in PostgreSQL's
@@ -67,6 +67,23 @@ fn encode_packets_copy_body_binary(
 
 pub struct DB {
     pgpool: PgPool,
+}
+
+/// Outcome of one idempotent HTTP message batch. `message_ids` holds
+/// the prefetched id for EVERY input row (positional); only
+/// `inserted_count` of them were actually persisted.
+#[derive(Debug, Default, Clone)]
+pub struct HttpMessageBatchInsert {
+    pub message_ids: Vec<i64>,
+    pub inserted_count: usize,
+    /// New messages whose User-Agent contributed to aggregates.
+    pub ua_messages_contributed: u64,
+    /// Aggregate bucket rows written (inserts + updates).
+    pub ua_rows_written: u64,
+    /// Contributions whose value exceeded the size bound.
+    pub ua_oversized: u64,
+    /// Contributions moved to the overflow row by the cardinality bound.
+    pub ua_cardinality_overflow: u64,
 }
 
 impl Clone for DB {
@@ -578,20 +595,36 @@ impl DB {
         Ok(())
     }
 
-    /// Batch insert HTTP messages with a single multi-row INSERT.
-    /// `rows` is (packet_id, http). Returns generated ids in insertion order.
+    /// Insert a batch of HTTP messages idempotently and update the
+    /// User-Agent aggregate buckets for the newly inserted rows.
+    ///
+    /// Message ids are prefetched from the sequence (packet-id pattern)
+    /// and written WITH the row; ON CONFLICT (id, timestamp) DO NOTHING
+    /// RETURNING reports which rows are actually new, so a redelivered or
+    /// retried batch returns no new rows and contributes no aggregates.
+    ///
+    /// The header_set upsert, the message insert and the aggregate upsert
+    /// share ONE transaction: a crashed transaction persists neither the
+    /// messages nor their aggregates, so the retry supplies both. With
+    /// `with_ua_aggregates` false (degradation path after a failed
+    /// aggregate attempt) the aggregates are skipped and ingestion still
+    /// proceeds.
     pub async fn insert_http_messages_batch(
         &self,
         rows: &[(i64, &crate::batch_flusher::HttpMessageData)],
-    ) -> Result<Vec<i64>, Error> {
+        with_ua_aggregates: bool,
+    ) -> Result<HttpMessageBatchInsert, Error> {
         if rows.is_empty() {
-            return Ok(vec![]);
+            return Ok(HttpMessageBatchInsert::default());
         }
+
+        let ids = self.prefetch_packet_ids(rows.len()).await?;
+        let mut tx = self.pgpool.begin().await?;
 
         // Resolve header_set ids per batch (same pattern as gRPC body
         // sets). The hash is UNIQUE in header_set, so the upsert both
         // dedups and REVIVES sets deleted by cleanup_old_data's orphan
-        // GC — the old per-packet in-memory cache happily reused ids of
+        // GC -- the old per-packet in-memory cache happily reused ids of
         // deleted rows, leaving http_messages whose headers rendered
         // empty in the UI.
         let mut distinct: HashMap<i64, &str> = HashMap::new();
@@ -610,7 +643,7 @@ impl DB {
                     q1.push_str(", ");
                 }
                 let base = i * 2;
-                // header_json is carried as text — cast to the column type.
+                // header_json is carried as text -- cast to the column type.
                 q1.push_str(&format!("(${}, ${}::jsonb)", base + 1, base + 2));
             }
             q1.push_str(
@@ -620,14 +653,14 @@ impl DB {
             for (h, j) in &distinct {
                 query1 = query1.bind(*h).bind(*j);
             }
-            for row in query1.fetch_all(&self.pgpool).await? {
+            for row in query1.fetch_all(&mut *tx).await? {
                 id_by_hash.insert(row.get::<i64, _>("hash"), row.get::<i64, _>("id"));
             }
         }
 
-        const COLS: usize = 13;
+        const COLS: usize = 14;
         let mut query = String::from(
-            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp) VALUES "
+            "INSERT INTO http_message (id, stream_id, packet_id, is_request, method, path, status_code, http_version, content_type, content_length, body_offset, body_length, header_set_id, timestamp) VALUES ",
         );
         for (i, _) in rows.iter().enumerate() {
             if i > 0 {
@@ -643,12 +676,17 @@ impl DB {
             }
             query.push(')');
         }
-        query.push_str(" RETURNING id");
+        // RETURNING lists ONLY the rows this statement actually inserted;
+        // conflicting (redelivered) rows are skipped and add nothing.
+        query.push_str(
+            " ON CONFLICT (id, timestamp) DO NOTHING RETURNING id, stream_id, header_set_id, is_request, timestamp",
+        );
 
-        let mut q = sqlx::query_scalar::<_, i64>(&query);
-        for (packet_id, http) in rows {
+        let mut q = sqlx::query_as::<_, (i64, i64, Option<i64>, bool, i64)>(&query);
+        for (row_idx, (packet_id, http)) in rows.iter().enumerate() {
             let header_set_id = http.header_hash.and_then(|h| id_by_hash.get(&h).copied());
             q = q
+                .bind(ids[row_idx])
                 .bind(http.stream_id as i64)
                 .bind(*packet_id)
                 .bind(http.is_request)
@@ -663,7 +701,212 @@ impl DB {
                 .bind(header_set_id)
                 .bind(http.timestamp);
         }
-        q.fetch_all(&self.pgpool).await
+        let inserted = q.fetch_all(&mut *tx).await?;
+        let newly: HashSet<i64> = inserted.iter().map(|(id, _, _, _, _)| *id).collect();
+
+        let mut outcome = HttpMessageBatchInsert {
+            message_ids: ids.clone(),
+            inserted_count: newly.len(),
+            ..Default::default()
+        };
+        if with_ua_aggregates && !newly.is_empty() {
+            match self.apply_ua_aggregates(&mut tx, rows, &ids, &newly).await {
+                Ok((contributed, written, oversized, cardinality_overflow)) => {
+                    outcome.ua_messages_contributed = contributed;
+                    outcome.ua_rows_written = written;
+                    outcome.ua_oversized = oversized;
+                    outcome.ua_cardinality_overflow = cardinality_overflow;
+                }
+                Err(e) => {
+                    // A failed statement aborts the whole transaction, so
+                    // nothing is persisted; the caller retries the batch
+                    // without aggregates (User-Agent stats are degradable,
+                    // message storage is not).
+                    return Err(e);
+                }
+            }
+        }
+
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
+    /// Group the batch's newly inserted request messages into User-Agent
+    /// bucket increments and upsert them in the caller's transaction.
+    /// Stream service/agent identity comes from the stream rows; scopes
+    /// without identity are skipped. Returns (messages contributed, rows
+    /// written, oversized values, messages moved to overflow by the
+    /// cardinality bound).
+    async fn apply_ua_aggregates(
+        &self,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+        rows: &[(i64, &crate::batch_flusher::HttpMessageData)],
+        ids: &[i64],
+        newly: &HashSet<i64>,
+    ) -> Result<(u64, u64, u64, u64), Error> {
+        use crate::user_agent::{
+            apply_cardinality_bound, group_contributions, BucketCardinality, UserAgentStat,
+        };
+
+        let is_new = |pos: usize| newly.contains(&ids[pos]);
+
+        let identities: HashMap<i64, (i64, Option<String>)> =
+            sqlx::query("SELECT id, service_id, agent_id FROM stream WHERE id = ANY($1)")
+                .bind(
+                    rows.iter()
+                        .filter(|(_, http)| !matches!(http.user_agent, UserAgentStat::None))
+                        .map(|(_, http)| http.stream_id as i64)
+                        .collect::<Vec<i64>>(),
+                )
+                .fetch_all(&mut **tx)
+                .await?
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.get::<i64, _>("id"),
+                        (
+                            row.get::<i64, _>("service_id"),
+                            row.get::<Option<String>, _>("agent_id"),
+                        ),
+                    )
+                })
+                .collect();
+
+        let mut oversized: u64 = 0;
+        let contributions: Vec<(i64, String, i64, UserAgentStat)> = rows
+            .iter()
+            .enumerate()
+            .filter(|(pos, _)| is_new(*pos))
+            .filter_map(|(_pos, (_, http))| {
+                let identity = identities.get(&(http.stream_id as i64))?;
+                let agent_id = identity.1.clone()?;
+                if matches!(http.user_agent, UserAgentStat::Overflow(_)) {
+                    oversized += 1;
+                }
+                Some((
+                    identity.0,
+                    agent_id,
+                    http.timestamp,
+                    http.user_agent.clone(),
+                ))
+            })
+            .collect();
+        let contributed = contributions.len() as u64;
+        if contributions.is_empty() {
+            return Ok((0, 0, oversized, 0));
+        }
+
+        let mut groups = group_contributions(contributions);
+
+        // Cardinality bound per (service, agent, bucket) scope touched with
+        // ordinary values: stored values keep updating, everything new
+        // beyond the remaining capacity collapses into the overflow row.
+        let mut cardinality_overflow: u64 = 0;
+        let mut scopes: Vec<(i64, String, i64)> = groups
+            .keys()
+            .filter(|(_, _, _, _, overflow)| !*overflow)
+            .map(|(svc, agt, bkt, _, _)| (*svc, agt.clone(), *bkt))
+            .collect();
+        scopes.sort();
+        scopes.dedup();
+        for (service_id, agent_id, bucket) in &scopes {
+            let batch_values: Vec<String> = groups
+                .keys()
+                .filter(|(svc, agt, bkt, _, overflow)| {
+                    !*overflow && svc == service_id && agt == agent_id && bkt == bucket
+                })
+                .map(|(_, _, _, ua, _)| ua.clone())
+                .collect();
+            let (ordinary_total, known): (i64, Vec<String>) = sqlx::query_as(
+                r#"
+                SELECT count(*) AS ordinary_total,
+                       COALESCE(array_agg(t.user_agent)
+                                FILTER (WHERE t.user_agent = ANY($4::text[])),
+                                '{}'::text[]) AS known
+                FROM (
+                    SELECT user_agent FROM http_user_agent_bucket
+                    WHERE service_id = $1 AND agent_id = $2
+                      AND bucket_start = $3 AND is_overflow = FALSE
+                    LIMIT 1000
+                ) t
+                "#,
+            )
+            .bind(service_id)
+            .bind(agent_id)
+            .bind(bucket)
+            .bind(&batch_values)
+            .fetch_one(&mut **tx)
+            .await?;
+            let cap = BucketCardinality {
+                ordinary_total,
+                known: known.into_iter().collect(),
+            };
+            cardinality_overflow +=
+                apply_cardinality_bound(&mut groups, *service_id, agent_id, *bucket, &cap);
+        }
+
+        // One atomic set-based upsert: count accumulates, first_seen
+        // minimizes, last_seen maximizes.
+        let mut service_ids: Vec<i64> = Vec::with_capacity(groups.len());
+        let mut agent_ids: Vec<String> = Vec::with_capacity(groups.len());
+        let mut buckets: Vec<i64> = Vec::with_capacity(groups.len());
+        let mut values: Vec<String> = Vec::with_capacity(groups.len());
+        let mut counts: Vec<i64> = Vec::with_capacity(groups.len());
+        let mut firsts: Vec<i64> = Vec::with_capacity(groups.len());
+        let mut lasts: Vec<i64> = Vec::with_capacity(groups.len());
+        let mut overflows: Vec<bool> = Vec::with_capacity(groups.len());
+        for ((svc, agt, bkt, ua, ovf), agg) in groups.iter() {
+            service_ids.push(*svc);
+            agent_ids.push(agt.clone());
+            buckets.push(*bkt);
+            values.push(ua.clone());
+            counts.push(agg.message_count);
+            firsts.push(agg.first_seen);
+            lasts.push(agg.last_seen);
+            overflows.push(*ovf);
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO http_user_agent_bucket
+                (service_id, agent_id, bucket_start, user_agent,
+                 message_count, first_seen, last_seen, is_overflow)
+            SELECT * FROM unnest($1::bigint[], $2::varchar[], $3::bigint[], $4::text[],
+                                 $5::bigint[], $6::bigint[], $7::bigint[], $8::boolean[])
+            ON CONFLICT (service_id, agent_id, bucket_start, is_overflow, user_agent)
+            DO UPDATE SET
+                message_count = http_user_agent_bucket.message_count + EXCLUDED.message_count,
+                first_seen = LEAST(http_user_agent_bucket.first_seen, EXCLUDED.first_seen),
+                last_seen = GREATEST(http_user_agent_bucket.last_seen, EXCLUDED.last_seen)
+            "#,
+        )
+        .bind(&service_ids)
+        .bind(&agent_ids)
+        .bind(&buckets)
+        .bind(&values)
+        .bind(&counts)
+        .bind(&firsts)
+        .bind(&lasts)
+        .bind(&overflows)
+        .execute(&mut **tx)
+        .await?;
+
+        // Honesty marker for the UI: when aggregation started. DO NOTHING
+        // keeps the very first write; the seed row stores an empty value.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        sqlx::query(
+            "INSERT INTO app_settings (key, value) \
+             VALUES ('http_user_agent_aggregation_start', $1::text) \
+             ON CONFLICT (key) DO NOTHING",
+        )
+        .bind(now.to_string())
+        .execute(&mut **tx)
+        .await?;
+
+        let written = groups.len() as u64;
+        Ok((contributed, written, oversized, cardinality_overflow))
     }
 
     /// Batch insert gRPC messages. `rows` is (http_message_id, grpc).

@@ -1,6 +1,6 @@
 use sqlx::{Error, PgPool};
 
-use super::l7_dto::{HttpMessage, HttpMessageFull};
+use super::l7_dto::{HeaderMatchMode, HttpMessage, HttpMessageFull};
 use super::l7_repository::L7Repository;
 
 pub struct L7Service {
@@ -33,6 +33,9 @@ impl L7Service {
         name: &str,
         value: Option<&str>,
         limit: i64,
+        service_id: Option<i64>,
+        agent_id: Option<&str>,
+        match_mode: HeaderMatchMode,
     ) -> Result<(Vec<i64>, i64), Error> {
         let stream_ids = if name == "_path" {
             self.repository
@@ -44,7 +47,7 @@ impl L7Service {
                 .await?
         } else {
             self.repository
-                .search_streams_by_header(name, value, limit)
+                .search_streams_by_header(name, value, limit, service_id, agent_id, match_mode)
                 .await?
         };
         let total = stream_ids.len() as i64;
@@ -55,9 +58,12 @@ impl L7Service {
         &self,
         filters: &[(String, Option<String>)],
         limit: i64,
+        service_id: Option<i64>,
+        agent_id: Option<&str>,
+        match_mode: HeaderMatchMode,
     ) -> Result<Vec<i64>, Error> {
         self.repository
-            .search_streams_by_headers(filters, limit)
+            .search_streams_by_headers(filters, limit, service_id, agent_id, match_mode)
             .await
     }
 

@@ -92,6 +92,12 @@ lazy_static::lazy_static! {
     pub static ref FAVORITE_CLEANUP_BACKLOG: IntGauge = IntGauge::with_opts(
         Opts::new("red_eye_favorite_cleanup_backlog", "Streams with saved content awaiting post-unstar deletion")
     ).unwrap();
+    pub static ref UA_BUCKET_CLEANUP_FAILURES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_ua_bucket_cleanup_failures", "User-Agent bucket cleanup passes that failed and will retry")
+    ).unwrap();
+    pub static ref UA_CLEANUP_BACKLOG: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_ua_cleanup_backlog", "User-Agent aggregate rows past the retention cutoff awaiting deletion")
+    ).unwrap();
 }
 
 pub fn register_metrics() {
@@ -123,6 +129,8 @@ pub fn register_metrics() {
     let _ = r.register(Box::new(FAVORITE_CAPACITY_BYTES.clone()));
     let _ = r.register(Box::new(FAVORITE_ACTIVE_SEGMENTS.clone()));
     let _ = r.register(Box::new(FAVORITE_CLEANUP_BACKLOG.clone()));
+    let _ = r.register(Box::new(UA_BUCKET_CLEANUP_FAILURES.clone()));
+    let _ = r.register(Box::new(UA_CLEANUP_BACKLOG.clone()));
 }
 
 /// Refresh gauge metrics from DB and agent state.

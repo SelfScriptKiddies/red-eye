@@ -13,6 +13,7 @@ pub mod process_packet;
 pub mod proto_schema;
 pub mod retention;
 pub mod thresholds;
+pub mod user_agent;
 pub mod version;
 pub mod wire;
 pub mod ws_aggregator;

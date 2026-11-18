@@ -145,6 +145,9 @@ pub async fn run() -> std::io::Result<()> {
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
     let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
+    let ua_service = web::Data::new(
+        api::l7::user_agent_service::UserAgentService::new_from_pgpool(pool.clone()),
+    );
     let pg_pool = web::Data::new(pool.clone());
 
     health::init_start_time();
@@ -273,6 +276,42 @@ pub async fn run() -> std::io::Result<()> {
                         }
                     }
                     Err(e) => error!("Cleanup failed: {}", e),
+                }
+
+                // User-Agent bucket retention: drop aggregate buckets whose
+                // ENTIRE 5-minute window is older than the ordinary HTTP
+                // retention horizon. Bounded batches, online; failure only
+                // delays the cleanup (counted), never blocks ingestion.
+                {
+                    use crate::api::l7::user_agent_service::UserAgentService;
+                    const UA_BUCKET_SECS: i64 = 300;
+                    const UA_CLEANUP_BATCH: i64 = 500;
+                    const UA_CLEANUP_MAX_BATCHES: usize = 10;
+                    let age_secs = (age_minutes as i64).saturating_mul(60);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    // A bucket is deletable when its whole window
+                    // [bucket_start, bucket_start + 300) sits before the
+                    // cutoff.
+                    let cutoff = now.saturating_sub(age_secs).saturating_sub(UA_BUCKET_SECS);
+                    let ua_service = UserAgentService::new_from_pgpool(cleanup_pool.clone());
+                    match ua_service
+                        .cleanup_expired_buckets(cutoff, UA_CLEANUP_BATCH, UA_CLEANUP_MAX_BATCHES)
+                        .await
+                    {
+                        Ok((deleted, pending)) => {
+                            if deleted > 0 {
+                                debug!("UA cleanup: removed {} aggregate rows", deleted);
+                            }
+                            crate::api::metrics::UA_CLEANUP_BACKLOG.set(pending as i64);
+                        }
+                        Err(e) => {
+                            crate::api::metrics::UA_BUCKET_CLEANUP_FAILURES.inc();
+                            warn!("UA bucket cleanup failed (retries next tick): {}", e);
+                        }
+                    }
                 }
 
                 // Capacity over-subscription alert: reservations can exceed
@@ -532,6 +571,7 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
             .app_data(l7_service.clone())
+            .app_data(ua_service.clone())
             .app_data(updater.clone())
             .app_data(control_data.clone())
             .app_data(broadcaster.clone())

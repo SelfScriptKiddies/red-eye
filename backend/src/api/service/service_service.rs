@@ -126,6 +126,39 @@ impl ServiceService {
         .await?;
         tx.commit().await?;
 
+        // Aggregate User-Agent rows outlive the service row (no FK), so
+        // the deletion finishes them in bounded batches. A leftover only
+        // delays the space reclaim (counted); it never blocks anything.
+        const UA_CLEANUP_BATCH: i64 = 1000;
+        const UA_CLEANUP_MAX_BATCHES: usize = 100;
+        let ua = crate::api::l7::user_agent_service::UserAgentService::new_from_pgpool(
+            self.repository.pool().clone(),
+        );
+        match ua
+            .cleanup_service_buckets(id, UA_CLEANUP_BATCH, UA_CLEANUP_MAX_BATCHES)
+            .await
+        {
+            Ok((deleted, pending)) => {
+                if pending > 0 {
+                    log::warn!(
+                        "UA bucket cleanup for deleted service {} incomplete: {} rows pending",
+                        id,
+                        pending
+                    );
+                } else if deleted > 0 {
+                    log::info!(
+                        "UA bucket cleanup for deleted service {}: {} rows removed",
+                        id,
+                        deleted
+                    );
+                }
+            }
+            Err(e) => {
+                crate::api::metrics::UA_BUCKET_CLEANUP_FAILURES.inc();
+                log::warn!("UA bucket cleanup for deleted service {} failed: {}", id, e);
+            }
+        }
+
         let sync = self.publish_service_op(&existing, UpdateKind::Remove).await;
         Ok(MutationResult {
             service: existing,
