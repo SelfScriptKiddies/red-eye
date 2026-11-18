@@ -14,6 +14,8 @@ import { usePages } from '../../PagesProvider';
 import { UserAgentsDrawer } from '../../components/UserAgentsDrawer';
 import { buildUaDrilldownUrl } from '../../lib/userAgents';
 import { AI_SETTING_ROWS, fetchAiStatus, putAiSetting, type AiStatus } from '../../lib/aiVerdict';
+import { McpTokensBlock } from './McpTokensBlock';
+import { SocAnalysisBlock } from './SocAnalysisBlock';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -1263,6 +1265,20 @@ export function SettingsPage() {
                             <div className="card-content">
                                 <h4>AI-анализ стримов (JEV)</h4>
                                 <AiAnalysisBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>LLM-SOC триаж</h4>
+                                <SocAnalysisBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>MCP токены</h4>
+                                <McpTokensBlock />
                             </div>
                         </div>
 

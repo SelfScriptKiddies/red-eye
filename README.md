@@ -107,6 +107,103 @@ The script:
 3. This sets up harpoon proxy + nftables redirect automatically
 4. Block filters are synced to all agents
 
+## LLM-SOC and MCP
+
+Two optional, OFF-by-default services extend Red Eye with AI triage and a
+remote MCP interface. Deploy order matters and mirrors the design doc
+(docs/superpowers/specs/): backend first, then read-only MCP, then the
+queue and manual jobs, then the worker, then automatic triage, and full
+control only as a separate explicit redeployment after mutation safety
+tests.
+
+### red-eye-mcp (remote MCP interface)
+
+Streamable HTTP MCP at `/mcp`. Read-only is the only secure default: the
+process refuses to expose mutations unless it was started with BOTH
+`MCP_MODE=full_control` and `MCP_ALLOW_FULL_CONTROL=true`, AND the caller
+holds a `full_control` token, AND the backend service credential carries
+`full_control` scope. Changing MCP mode is a between-games redeployment,
+not a runtime setting.
+
+1. `docker compose up -d red-eye-mcp` (starts fail-closed: no tokens, no
+   access)
+2. Settings -> MCP: generate the **service token** once, put it into
+   `.env` as `MCP_SERVICE_TOKEN`, `docker compose up -d red-eye-mcp`
+3. Create an MCP token per harness (name + capability + optional expiry);
+   the plaintext is shown ONCE
+4. Point clients at `https://<central>/mcp` behind the central nginx,
+   which must terminate TLS and proxy `/mcp` with `proxy_buffering off`,
+   a bounded `client_max_body_size` and timeouts. Plaintext public
+   exposure is invalid.
+
+Token validation runs on initialization and every tool call; revocation
+bites immediately. Tokens in query strings are rejected. The service has
+no PostgreSQL/NATS access and no arbitrary backend proxy: every tool maps
+to a bounded backend endpoint.
+
+Full-control mutations additionally require `expected_revision`
+(optimistic concurrency against the control-plane revision),
+`confirm=true`, an audit `reason`, and for delete/block/proxy/agent
+operations a prior `dry_run=true` call whose `operation_id` the mutation
+must reference. Every audit record carries ids and statuses only.
+
+#### fetch_url (opt-in network egress)
+
+The `fetch_url` MCP tool lets an MCP client hand the service a public
+http(s) URL (exported-stream links, advisory docs) and get back extracted
+readable text instead of raw HTML. It is the only network egress the
+service makes besides its backend connection, and the original service
+spec banned arbitrary HTTP forwarding - so it ships DISABLED and exists
+only when `MCP_ENABLE_FETCH_URL=true` (or `1`) was set at startup. With
+the flag off the tool is unknown: it is not listed and calls fail as an
+unknown tool. Warning: enabling it lets MCP clients make the service
+fetch public urls only.
+
+Hardening, all fixed compile-time caps:
+
+- Scheme is `http`/`https` only; URLs with embedded credentials are
+  rejected; URL length <= 2048; any authenticated token may call it
+  (read-only or full-control - it mutates nothing), subject to a tight
+  per-token fetch rate limit on top of the global limits.
+- SSRF policy: the host is resolved and EVERY resolved address must be
+  public - loopback, RFC1918, link-local (incl. cloud metadata),
+  unique-local, CGNAT, unspecified, multicast/broadcast and documentation
+  ranges are refused, and one refused address refuses the request. The
+  connection is pinned to a validated address (per-request DNS override,
+  env proxies disabled), so DNS rebinding between check and connect cannot
+  reach a private network. Redirects are followed manually (max 3), and
+  every hop re-runs the same URL + address validation.
+- Download cap 2 MiB, wall-clock 15 s, output capped at 60000 characters
+  with an explicit truncation marker. HTML is rendered to text (title,
+  meta description, body with inline links); JSON/XML/text pass through;
+  binary content types are never returned.
+
+### soc-worker (LLM triage)
+
+Persistent queue (`soc_job`) in PostgreSQL, leased workers, bounded
+retries and a daily job limit. The worker holds no database credentials:
+it claims jobs over the backend API and reads evidence through read-only
+MCP only. The model never controls the investigation sequence and every
+attack verdict must cite packet/message ids that the MCP service actually
+fetched for that job.
+
+1. Deploy the LLM endpoint yourself (see the commented `llm` example in
+   docker-compose.yaml); default `soc_base_url` is `http://llm:8080/v1`
+2. Settings -> SOC: generate the **worker token** into `.env` as
+   `SOC_WORKER_TOKEN`, create a read-only **MCP token** for evidence
+   access into `.env` as `MCP_TOKEN`, `docker compose up -d soc-worker`
+3. Configure the SOC card (endpoint, model, thresholds, compute limits)
+   and enable SOC
+4. Manual triage: "Triage with SOC" on any stream, works without JEV
+5. Automatic triage: only after manual triage passed validation, enable
+   SOC auto mode; qualifying NEW JEV verdicts (is_attack, severity >=
+   `soc_auto_min_jev_severity`) enqueue exactly one job each
+
+Every combination of JEV/SOC configuration and outage has explicit
+non-looping behavior shown in Settings. SOC alerts and recommended
+actions are informational only: nothing is ever blocked, filtered or
+reconfigured automatically.
+
 ## Features
 
 ### Traffic Capture
@@ -197,6 +294,14 @@ python3 test_grpc_service.py http://YOUR_IP:31337
 | `AGENT_ID` | Agent identifier | hostname |
 | `DATA_DIR` | CA certs directory | `/var/lib/red-eye-agent` |
 | `LOGGING_LEVEL` | Log level | `info` |
+
+### LLM-SOC / MCP (.env, all optional)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MCP_SERVICE_TOKEN` | red-eye-mcp service credential for backend API calls | empty (MCP fail-closed) |
+| `MCP_ENABLE_FETCH_URL` | enable the fetch_url MCP tool (network egress to public hosts only) | `false` |
+| `SOC_WORKER_TOKEN` | soc-worker job credential for backend API calls | empty (worker retries) |
+| `MCP_TOKEN` | read-only MCP token the worker uses for evidence | empty |
 
 ## API Documentation
 

@@ -1,0 +1,1 @@
+export { SocTriagePanel } from './SocTriagePanel';

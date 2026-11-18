@@ -6,6 +6,7 @@ pub mod blocks;
 pub mod download;
 pub mod favorite;
 pub mod l7;
+pub mod mcp;
 pub mod metrics;
 pub(crate) mod packet;
 pub mod protect;
@@ -13,6 +14,7 @@ pub mod proto;
 pub mod realtime;
 pub mod service;
 pub mod settings;
+pub mod soc;
 pub mod special_triggers;
 pub mod stats;
 pub(crate) mod stream;
@@ -76,6 +78,10 @@ pub fn api_config(cfg: &mut web::ServiceConfig) {
                 .configure(l7::config)
                 .configure(settings::config)
                 .configure(ai::config)
+                .configure(soc::config)
+                .configure(mcp::tokens::config)
+                .configure(mcp::resources::config)
+                .configure(mcp::control::config)
                 .configure(protect::config)
                 .configure(blocks::config)
                 .configure(proto::config)

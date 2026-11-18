@@ -549,6 +549,10 @@ pub async fn run() -> std::io::Result<()> {
         api::ai::scheduler::spawn(pool.clone(), broadcaster_tx.clone(), jev_transport);
     let jev_scheduler_data = web::Data::new(jev_scheduler.clone());
 
+    // SOC maintenance: queue gauges and terminal-job trimming in bounded
+    // batches. Off-by-default feature; the loop never touches ingestion.
+    api::soc::spawn_maintenance(pool.clone());
+
     // Favorite retention workers: bounded archive batches (live + saved
     // unions) and bounded post-unstar saved cleanup. Failures back off
     // without touching ingestion or the star state. Pre-feature favorite

@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 
 use crate::api::ai::settings::AI_API_KEY;
+use crate::api::soc::settings::{SOC_ENABLED, mask_soc_secrets_in_map};
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct SettingUpdate {
@@ -43,6 +44,7 @@ async fn get_all_settings(
             map.entry("max_selected_streams".to_string())
                 .or_insert_with(|| config.max_selected_streams.to_string());
             mask_ai_key_in_map(&mut map);
+            mask_soc_secrets_in_map(&mut map);
             HttpResponse::Ok().json(map)
         }
         Err(e) => crate::api::sqlx_error_response(&e),
@@ -76,6 +78,29 @@ async fn update_setting(
             crate::api::ai::validate_setting(key.as_str(), &body.value, pool.get_ref()).await
         {
             return HttpResponse::BadRequest().json(serde_json::json!({"error": msg}));
+        }
+    }
+    // SOC settings share the contract: typed bounds, previous value kept
+    // on rejection, generated credentials read-only. Disabling SOC is
+    // significant state: the enablement generation advances on every
+    // false->true transition.
+    if key.starts_with("soc_") || key.starts_with("mcp_") {
+        if let Err(msg) =
+            crate::api::soc::settings::validate_setting(key.as_str(), &body.value, pool.get_ref())
+                .await
+        {
+            return HttpResponse::BadRequest().json(serde_json::json!({"error": msg}));
+        }
+    }
+    // soc_enabled false->true bumps the settings generation so late
+    // results queued before a disable are rejected after re-enable.
+    if key.as_str() == SOC_ENABLED && body.value.trim().eq_ignore_ascii_case("true") {
+        let was = crate::api::settings::get_setting(pool.get_ref(), SOC_ENABLED)
+            .await
+            .map(|v| v.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !was {
+            crate::api::soc::advance_generation(pool.get_ref()).await;
         }
     }
     match sqlx::query(
