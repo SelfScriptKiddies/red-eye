@@ -7,7 +7,9 @@ RUN cargo install cargo-chef --locked
 
 # proto/ is the shared wire contract
 COPY proto/ ./proto/
+COPY filter-dsl/ /usr/src/filter-dsl/
 COPY backend/ .
+
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -27,6 +29,11 @@ RUN rustup target add x86_64-unknown-linux-musl
 COPY --from=planner /usr/src/app/recipe.json recipe.json
 
 # Build dependencies - this layer will be cached
+# Cook resolves and builds the path dep from a stub, so source changes
+# do not bust the cached dependency layer.
+COPY filter-dsl/Cargo.toml /usr/src/filter-dsl/Cargo.toml
+RUN mkdir -p /usr/src/filter-dsl/src && touch /usr/src/filter-dsl/src/lib.rs
+
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 # Stamp the built binary with the building commit and release version
@@ -41,7 +48,11 @@ ENV RED_EYE_VERSION=${RED_EYE_VERSION}
 
 # Copy source code and build application
 COPY proto/ ./proto/
+COPY filter-dsl/ /usr/src/filter-dsl/
 COPY backend/ .
+# COPY preserves context mtimes; without the touch cargo considers the
+# real source older than the stub it built during cook and links the stub.
+RUN touch /usr/src/filter-dsl/src/lib.rs
 
 RUN cargo build --target x86_64-unknown-linux-musl --release
 
@@ -56,6 +67,7 @@ RUN cargo install cargo-chef --locked
 # proto/ explicitly (the agent/proto symlink is .dockerignored — same
 # pattern as the backend stages below).
 COPY proto/ ./proto/
+COPY filter-dsl/ /usr/src/filter-dsl/
 COPY agent/ .
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -68,6 +80,11 @@ RUN cargo install cargo-chef --locked
 RUN rustup target add x86_64-unknown-linux-musl
 
 COPY --from=agent-planner /usr/src/agent/recipe.json recipe.json
+# Cook resolves and builds the path dep from a stub, so source changes
+# do not bust the cached dependency layer.
+COPY filter-dsl/Cargo.toml /usr/src/filter-dsl/Cargo.toml
+RUN mkdir -p /usr/src/filter-dsl/src && touch /usr/src/filter-dsl/src/lib.rs
+
 RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 # Below the cook layer on purpose — see the builder stage note above.
@@ -77,7 +94,12 @@ ARG RED_EYE_VERSION=""
 ENV RED_EYE_VERSION=${RED_EYE_VERSION}
 
 COPY proto/ ./proto/
+COPY filter-dsl/ /usr/src/filter-dsl/
 COPY agent/ .
+# COPY preserves context mtimes; without the touch cargo considers the
+# real source older than the stub it built during cook and links the stub.
+RUN touch /usr/src/filter-dsl/src/lib.rs
+
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 
