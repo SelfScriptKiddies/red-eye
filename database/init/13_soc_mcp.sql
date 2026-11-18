@@ -1,8 +1,6 @@
 -- LLM-SOC triage queue + MCP token management (fresh-init twin of
 -- database/migrations/add_soc_and_mcp.sql).
-
--- Filter toggle target for the MCP set_filter_enabled tool.
-ALTER TABLE tag_name ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;
+-- tag_name.enabled comes from 11_unified_filter_model.sql.
 
 CREATE TABLE IF NOT EXISTS mcp_token (
     id BIGSERIAL PRIMARY KEY,
