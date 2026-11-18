@@ -71,3 +71,64 @@ export function copyText(text: string) {
         document.body.removeChild(ta);
     }
 }
+
+// Starred-stream retention (favorites)
+
+/** Mirrors FavoriteStateResponse in backend/src/api/favorite/favorite_dto.rs */
+export interface FavoriteState {
+    id: number;
+    favorite: boolean;
+    favorite_revision: number;
+    retention_state: string;
+    segment_index: number;
+    retention_bytes: number;
+    archived_through_packet_id: number;
+    archive_error?: string | null;
+}
+
+/** Mirrors FavoriteUsageResponse in backend/src/api/favorite/favorite_dto.rs */
+export interface FavoriteUsage {
+    max_total_bytes: number;
+    segment_bytes: number;
+    disk_reserve_bytes: number;
+    saved_bytes: number;
+    reserved_bytes: number;
+    starred_streams: number;
+    active_starred_streams: number;
+    pending_cleanup_streams: number;
+}
+
+/** 409 favorite_capacity_exceeded: no retention guarantee was created. */
+export class FavoriteCapacityError extends Error {
+    readonly reservedBytes: number;
+    readonly maxTotalBytes: number;
+    readonly requiredReservation: number;
+
+    constructor(body: any) {
+        super('favorite_capacity_exceeded');
+        this.reservedBytes = Number(body?.reserved_bytes ?? 0);
+        this.maxTotalBytes = Number(body?.max_total_bytes ?? 0);
+        this.requiredReservation = Number(body?.required_reservation ?? 0);
+    }
+}
+
+/**
+ * Server-confirmed star/unstar. The caller must not optimistically show a
+ * successful star: a 409 rejection means the stream stays unstarred.
+ */
+export async function setStreamFavorite(
+    streamId: number,
+    favorite: boolean
+): Promise<FavoriteState> {
+    const response = await fetch(`/api/stream/${streamId}/favorite`, {
+        method: favorite ? 'POST' : 'DELETE',
+    });
+    const body = await response.json().catch(() => null);
+    if (response.status === 409) throw new FavoriteCapacityError(body);
+    if (!response.ok) throw new ApiError(response.status);
+    return body as FavoriteState;
+}
+
+export function fetchFavoriteUsage(signal?: AbortSignal): Promise<FavoriteUsage> {
+    return apiFetch<FavoriteUsage>('/api/favorite/usage', signal);
+}

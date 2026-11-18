@@ -40,6 +40,16 @@ async fn update_setting(
     key: web::Path<String>,
     body: web::Json<SettingUpdate>,
 ) -> impl Responder {
+    // Favorite capacity keys are byte budgets: reject non-positive or
+    // non-numeric values instead of silently breaking the star admission.
+    if key.starts_with("favorite_") {
+        let parsed = body.value.trim().parse::<i64>().ok().filter(|v| *v > 0);
+        if parsed.is_none() {
+            return HttpResponse::BadRequest().json(serde_json::json!(
+                {"error": "favorite settings are byte budgets and must be positive integers"}
+            ));
+        }
+    }
     match sqlx::query(
         "INSERT INTO app_settings (key, value) VALUES ($1, $2)
          ON CONFLICT (key) DO UPDATE SET value = $2",

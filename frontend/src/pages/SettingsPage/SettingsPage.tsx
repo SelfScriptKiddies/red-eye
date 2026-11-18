@@ -1,7 +1,8 @@
 import './SettingsPage.css'
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AgentContainerInfo, AgentListItem, apiFetch, fetchAgentContainers } from '../../lib/api';
+import { AgentContainerInfo, AgentListItem, apiFetch, fetchAgentContainers, fetchFavoriteUsage, FavoriteUsage } from '../../lib/api';
+import { capacityPercent, formatBytes } from '../../lib/favoriteRetention';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -15,6 +16,114 @@ interface VersionsResponse {
     frontend?: ServiceVersionInfo;
     agents?: { agent_id: string; online: boolean; version?: string | null }[];
     cache?: { ttl_secs: number; age_secs: number };
+}
+
+interface FavoriteLimitRow {
+    key: string;
+    label: string;
+    hint: string;
+}
+
+/** The three favorite byte budgets (see favorite_max_total_bytes et al in
+ * app_settings). Workers re-read them without restarts. */
+const FAVORITE_LIMIT_ROWS: FavoriteLimitRow[] = [
+    { key: 'favorite_max_total_bytes', label: 'Общий лимит хранимого', hint: 'Максимальный суммарный объём сохранённого содержимого избранных' },
+    { key: 'favorite_segment_bytes', label: 'Лимит сегмента', hint: 'Сегмент избранного сверх этого объёма закрывается и продолжается новым стримом' },
+    { key: 'favorite_disk_reserve_bytes', label: 'Резерв диска', hint: 'Свободное место, которое должен гарантировать резерв избранных' },
+];
+
+/** Favorite storage: the three byte limits, current saved/reserved usage
+ * and validation errors. Saves go through PUT /api/settings/{key}; a
+ * rejected value surfaces instead of silently breaking star admission. */
+function FavoriteStorageBlock() {
+    const [usage, setUsage] = useState<FavoriteUsage | null>(null);
+    const [values, setValues] = useState<Record<string, string>>({});
+    const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+
+    const reload = async () => {
+        try {
+            const [u, s] = await Promise.all([
+                fetchFavoriteUsage(),
+                apiFetch<Record<string, string>>('/api/settings'),
+            ]);
+            setUsage(u);
+            setValues({
+                favorite_max_total_bytes: String(s.favorite_max_total_bytes ?? ''),
+                favorite_segment_bytes: String(s.favorite_segment_bytes ?? ''),
+                favorite_disk_reserve_bytes: String(s.favorite_disk_reserve_bytes ?? ''),
+            });
+        } catch (e) {
+            setError(`Не удалось загрузить состояние хранилища: ${e}`);
+        }
+    };
+
+    useEffect(() => { reload(); }, []);
+
+    const save = async (key: string) => {
+        setError(null);
+        setNotice(null);
+        const raw = (values[key] ?? '').trim();
+        const parsed = Number(raw);
+        if (!raw || !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+            setError(`${key}: значение должно быть целым числом байт больше нуля`);
+            return;
+        }
+        try {
+            const resp = await fetch(`/api/settings/${key}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: String(parsed) }),
+            });
+            if (!resp.ok) {
+                const body = await resp.text().catch(() => '');
+                setError(`${key}: сервер отклонил значение (${resp.status}) ${body.slice(0, 160)}`);
+                return;
+            }
+            setNotice(`${key} сохранено, применяется без перезапуска`);
+            await reload();
+        } catch (e) {
+            setError(`${key}: ошибка сохранения ${e}`);
+        }
+    };
+
+    return (
+        <div>
+            {usage && (
+                <div className="favorite-usage">
+                    <div className="favorite-usage-row">
+                        <span>Сохранено: {formatBytes(usage.saved_bytes)}</span>
+                        <span>Зарезервировано: {formatBytes(usage.reserved_bytes)} из {formatBytes(usage.max_total_bytes)} ({capacityPercent(usage.reserved_bytes, usage.max_total_bytes)}%)</span>
+                    </div>
+                    <div className="favorite-usage-row">
+                        <span>Избранных: {usage.starred_streams} (активных {usage.active_starred_streams})</span>
+                        <span>В очистке: {usage.pending_cleanup_streams}</span>
+                    </div>
+                </div>
+            )}
+            {FAVORITE_LIMIT_ROWS.map(row => (
+                <div key={row.key} className="setting-row" style={{ marginTop: '8px', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <label style={{ fontSize: '12px', color: '#ccc' }}>{row.label}</label>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            value={values[row.key] ?? ''}
+                            onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
+                            placeholder="байт"
+                            style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                        />
+                        <button className="add-btn" onClick={() => save(row.key)} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                            Сохранить
+                        </button>
+                    </div>
+                    <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>{row.hint}</p>
+                </div>
+            ))}
+            {error && <p style={{ color: '#e0606a', fontSize: '12px', margin: '8px 0 0' }}>{error}</p>}
+            {notice && !error && <p style={{ color: '#87d37c', fontSize: '12px', margin: '8px 0 0' }}>{notice}</p>}
+        </div>
+    );
 }
 
 function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo }) {
@@ -703,6 +812,13 @@ export function SettingsPage() {
                             <div className="card-content">
                                 <h4>Версии сервисов</h4>
                                 <VersionsBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Хранилище избранного</h4>
+                                <FavoriteStorageBlock />
                             </div>
                         </div>
 

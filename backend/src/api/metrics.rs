@@ -65,6 +65,33 @@ lazy_static::lazy_static! {
     pub static ref PROXY_REVISION_LAG: IntGauge = IntGauge::with_opts(
         Opts::new("red_eye_proxy_effective_revision_lag", "Max gap between desired and agent-effective proxy revision across enabled rules")
     ).unwrap();
+    pub static ref FAVORITE_STAR_REJECTIONS: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_favorite_star_rejections", "Star requests rejected by the capacity guard")
+    ).unwrap();
+    pub static ref FAVORITE_ARCHIVE_FAILURES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_favorite_archive_batch_failures", "Archive batch transactions that failed and will retry")
+    ).unwrap();
+    pub static ref FAVORITE_CLEANUP_FAILURES: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_favorite_cleanup_failures", "Saved-content cleanup batches that failed and will retry")
+    ).unwrap();
+    pub static ref FAVORITE_CLEANUP_SKIPPED: IntCounter = IntCounter::with_opts(
+        Opts::new("red_eye_favorite_cleanup_skipped", "Destructive cleanup operations skipped to protect unarchived favorites")
+    ).unwrap();
+    pub static ref FAVORITE_SAVED_BYTES: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_favorite_saved_bytes", "Catalog estimate of physical bytes stored in saved_* tables")
+    ).unwrap();
+    pub static ref FAVORITE_RESERVED_BYTES: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_favorite_reserved_bytes", "Saved bytes plus worst-case reservations of active favorites")
+    ).unwrap();
+    pub static ref FAVORITE_CAPACITY_BYTES: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_favorite_capacity_bytes", "Configured favorite_max_total_bytes")
+    ).unwrap();
+    pub static ref FAVORITE_ACTIVE_SEGMENTS: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_favorite_active_segments", "Starred segments still accepting packets")
+    ).unwrap();
+    pub static ref FAVORITE_CLEANUP_BACKLOG: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_favorite_cleanup_backlog", "Streams with saved content awaiting post-unstar deletion")
+    ).unwrap();
 }
 
 pub fn register_metrics() {
@@ -87,6 +114,15 @@ pub fn register_metrics() {
     let _ = r.register(Box::new(CAPTURE_SOURCE_CONFLICTS.clone()));
     let _ = r.register(Box::new(FORWARDER_DROPS.clone()));
     let _ = r.register(Box::new(PROXY_REVISION_LAG.clone()));
+    let _ = r.register(Box::new(FAVORITE_STAR_REJECTIONS.clone()));
+    let _ = r.register(Box::new(FAVORITE_ARCHIVE_FAILURES.clone()));
+    let _ = r.register(Box::new(FAVORITE_CLEANUP_FAILURES.clone()));
+    let _ = r.register(Box::new(FAVORITE_CLEANUP_SKIPPED.clone()));
+    let _ = r.register(Box::new(FAVORITE_SAVED_BYTES.clone()));
+    let _ = r.register(Box::new(FAVORITE_RESERVED_BYTES.clone()));
+    let _ = r.register(Box::new(FAVORITE_CAPACITY_BYTES.clone()));
+    let _ = r.register(Box::new(FAVORITE_ACTIVE_SEGMENTS.clone()));
+    let _ = r.register(Box::new(FAVORITE_CLEANUP_BACKLOG.clone()));
 }
 
 /// Refresh gauge metrics from DB and agent state.
@@ -167,6 +203,49 @@ async fn refresh_gauges(
     {
         PACKETS_TOTAL.reset();
         let _ = PACKETS_TOTAL.inc_by(row as u64);
+    }
+
+    // Favorite retention: capacity, usage and population. One catalog +
+    // stream aggregates query; failures just leave the previous values.
+    // Settings fall back to the built-in defaults (env values are seeded
+    // into app_settings at startup, so this is a cold-start guard only).
+    {
+        let limits = crate::api::favorite::favorite_service::FavoriteLimits::builtins();
+        if let Ok(row) = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
+            r#"
+            SELECT
+                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)
+                 FROM pg_class c
+                 WHERE c.relkind = 'r'
+                   AND c.relname IN ('saved_packet', 'saved_tag',
+                                     'saved_http_message', 'saved_grpc_message')),
+                (SELECT COUNT(*) FROM stream WHERE favorite AND active),
+                (SELECT COUNT(*) FROM stream WHERE favorite),
+                (SELECT COUNT(*) FROM stream
+                 WHERE NOT favorite AND retention_state IN ('archiving', 'archived')),
+                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                 WHERE favorite AND NOT active AND retention_state <> 'archived'),
+                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                 WHERE NOT favorite AND retention_state IN ('archiving', 'archived'))
+            "#,
+        )
+        .fetch_one(pool)
+        .await
+        {
+            let snapshot = crate::api::favorite::favorite_service::UsageSnapshot {
+                saved_bytes: row.0,
+                active_starred: row.1,
+                closed_unarchived_bytes: row.4,
+                pending_cleanup_bytes: row.5,
+                starred_streams: row.2,
+                pending_cleanup_streams: row.3,
+            };
+            FAVORITE_CAPACITY_BYTES.set(limits.max_total_bytes);
+            FAVORITE_SAVED_BYTES.set(snapshot.saved_bytes);
+            FAVORITE_RESERVED_BYTES.set(snapshot.reserved_bytes(limits.segment_bytes));
+            FAVORITE_ACTIVE_SEGMENTS.set(snapshot.active_starred);
+            FAVORITE_CLEANUP_BACKLOG.set(snapshot.pending_cleanup_streams);
+        }
     }
 
     // Agents online

@@ -11,6 +11,7 @@ use crate::filters::apply_filters;
 use crate::grpc_parser;
 use crate::http_parser;
 use crate::metrics;
+use crate::retention::RetentionTracker;
 use log::debug;
 use std::io::Error;
 use std::net::IpAddr;
@@ -100,6 +101,8 @@ pub struct PacketProcessor {
     config: Arc<ApplicationConfig>,
     db: DB,
     batch_tx: Arc<ShardedBatchSender>,
+    /// Starred-segment tracker for the segment rotation decision.
+    retention: Arc<RetentionTracker>,
 }
 
 impl PacketProcessor {
@@ -108,12 +111,14 @@ impl PacketProcessor {
         config: Arc<ApplicationConfig>,
         db: DB,
         batch_tx: Arc<ShardedBatchSender>,
+        retention: Arc<RetentionTracker>,
     ) -> Self {
         Self {
             cache,
             config,
             db,
             batch_tx,
+            retention,
         }
     }
 
@@ -170,6 +175,70 @@ impl PacketProcessor {
         is_syn && !(syn_pending && has_cached_stream)
     }
 
+    /// Would the incoming packet push this starred segment past its byte
+    /// limit? Unstarred streams never rotate (tracker miss).
+    fn rotation_needed(&self, stream_id: usize, incoming_bytes: usize) -> bool {
+        self.retention.rotation_needed(stream_id, incoming_bytes)
+    }
+
+    /// Finalize the over-limit starred segment and assign this packet to a
+    /// fresh unstarred continuation (same tuple, service, protocol, agent).
+    /// The triggering packet is never dropped or split; on rotation failure
+    /// the old segment keeps accepting packets (bounded over-limit growth).
+    async fn rotate_segment(
+        &self,
+        old_id: usize,
+        packet: &PacketInfo,
+        direction: &Direction,
+        service_id: usize,
+        agent_id: &str,
+    ) -> Result<usize, Error> {
+        let (src_ip, src_port, dst_ip, dst_port) = Self::normalized_tuple(packet, direction);
+        let outcome = self
+            .db
+            .rotate_star_segment(
+                old_id,
+                &src_ip,
+                src_port,
+                &dst_ip,
+                dst_port,
+                &packet.protocol,
+                service_id,
+                packet.timestamp_seconds as i64,
+                Some(agent_id),
+            )
+            .await;
+        match outcome {
+            Ok(Some(new_id)) => {
+                self.cache
+                    .streams
+                    .insert(&src_ip, src_port, &dst_ip, dst_port, new_id);
+                let total = metrics::FAVORITE_ROTATIONS.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::rate_limited_log("favorite-rotation", total, || {
+                    format!(
+                        "starred segment {} hit the byte limit; continuation segment {} opened",
+                        old_id, new_id
+                    )
+                });
+                Ok(new_id)
+            }
+            Ok(None) => {
+                // Unstarred concurrently: the old segment stays the target.
+                Ok(old_id)
+            }
+            Err(e) => {
+                let total = metrics::FAVORITE_ROTATION_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::rate_limited_log("favorite-rotation-failed", total, || {
+                    format!(
+                        "rotation of starred segment {} failed, keeping it active: {:?}",
+                        old_id, e
+                    )
+                });
+                Ok(old_id)
+            }
+        }
+    }
+
     async fn find_stream_id(
         &self,
         packet: &PacketInfo,
@@ -190,12 +259,16 @@ impl PacketProcessor {
                 .await;
         }
 
-        // Lock-free lookup
+        // Lock-free fast path: cached stream that needs no rotation. A
+        // starred segment at its byte limit falls through to the locked
+        // path below (the lock also serializes concurrent rotations).
         if let Some(id) = self.cache.streams.get_by_key(&key) {
-            return Ok(id);
+            if !self.rotation_needed(id, packet.payload.len()) {
+                return Ok(id);
+            }
         }
 
-        // Per-key lock for stream creation (prevents duplicates)
+        // Per-key lock for stream creation and rotation (prevents duplicates)
         let lock = self
             .cache
             .stream_locks
@@ -205,43 +278,60 @@ impl PacketProcessor {
 
         let _guard = lock.lock().await;
 
-        // Double-check after lock
-        if let Some(stream_id) = self.cache.streams.get_by_key(&key) {
-            return Ok(stream_id);
-        }
+        // Re-check after lock: another task may have created or rotated the
+        // segment for this tuple meanwhile.
+        let mut stream_id = self.cache.streams.get_by_key(&key);
 
         // Try database
-        if let Some(stream_id) = self
-            .db
-            .get_stream_id(&src_ip, src_port, &dst_ip, dst_port)
-            .await
-        {
-            self.cache
-                .streams
-                .insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
-            return Ok(stream_id);
+        if stream_id.is_none() {
+            if let Some(id) = self
+                .db
+                .get_stream_id(&src_ip, src_port, &dst_ip, dst_port)
+                .await
+            {
+                self.cache
+                    .streams
+                    .insert(&src_ip, src_port, &dst_ip, dst_port, id);
+                stream_id = Some(id);
+            }
         }
 
         // Create new stream
-        let stream_id = self
-            .db
-            .create_stream(
-                &src_ip,
-                src_port,
-                &dst_ip,
-                dst_port,
-                &packet.protocol,
-                &packet.ip_version,
-                service_id,
-                packet.timestamp_seconds as i64,
-                Some(agent_id),
-            )
-            .await
-            .map_err(|e| Error::other(format!("Stream creation failed: {:?}", e)))?;
+        let stream_id = match stream_id {
+            Some(id) => id,
+            None => {
+                let id = self
+                    .db
+                    .create_stream(
+                        &src_ip,
+                        src_port,
+                        &dst_ip,
+                        dst_port,
+                        &packet.protocol,
+                        &packet.ip_version,
+                        service_id,
+                        packet.timestamp_seconds as i64,
+                        Some(agent_id),
+                    )
+                    .await
+                    .map_err(|e| Error::other(format!("Stream creation failed: {:?}", e)))?;
 
-        self.cache
-            .streams
-            .insert(&src_ip, src_port, &dst_ip, dst_port, stream_id);
+                self.cache
+                    .streams
+                    .insert(&src_ip, src_port, &dst_ip, dst_port, id);
+                id
+            }
+        };
+
+        // Rotation decision under the same lock: concurrent packets of the
+        // tuple cannot both rotate; the loser re-reads the cache and lands
+        // in the fresh continuation. All later packets take the fast path.
+        if self.rotation_needed(stream_id, packet.payload.len()) {
+            return self
+                .rotate_segment(stream_id, packet, direction, service_id, agent_id)
+                .await;
+        }
+
         Ok(stream_id)
     }
 

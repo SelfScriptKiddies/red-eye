@@ -9,7 +9,8 @@ import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
 
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
-import { apiFetch, copyText } from '../../lib/api';
+import { apiFetch, copyText, setStreamFavorite, FavoriteCapacityError } from '../../lib/api';
+import { formatBytes } from '../../lib/favoriteRetention';
 import { shq, pyStr } from '../../lib/exportEscaping';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
@@ -167,6 +168,9 @@ export function PacketsPage() {
         services: streamServices,
         startTime,
         endTime,
+        // Server-side favorites filter (SQL predicate + keyset pagination
+        // over ALL matching streams), not a client-side page filter.
+        favoritesOnly: showFavoritesOnly,
         // Always enabled: the first page must load with Live OFF too, and the
         // freeze keeps background refetches from touching the visible list —
         // pending ids land on the Update badge instead. Live only switches
@@ -278,14 +282,12 @@ export function PacketsPage() {
     // selection must be re-applied client-side on top of it — otherwise
     // toggling a tag while a header search is open silently does nothing
     // (the "reset doesn't reset" bug). In 'and' mode every selected tag
-    // name AND service must match; in 'or' mode any of them.
+    // name AND service must match; in 'or' mode any of them. Favorites
+    // filtering is server-side (favoritesOnly above), never client-side.
     const filteredStreams = useMemo(() => {
         let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
         if (headerExcludeIds.size > 0) {
             streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
-        }
-        if (showFavoritesOnly) {
-            streams = streams.filter((s: any) => s.favorite);
         }
         const hasTagServiceFilters = usedTags.length > 0 || usedServices.length > 0;
         if (hasTagServiceFilters && (filterMode === 'or' || headerSearchResults)) {
@@ -303,7 +305,7 @@ export function PacketsPage() {
             });
         }
         return streams;
-    }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, showFavoritesOnly, filterMode, usedTags, usedServices, tagsArray]);
+    }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, filterMode, usedTags, usedServices, tagsArray]);
 
     // Stable callbacks so memoized rowProps (below) don't churn on every render.
     const runHeaderSearch = useCallback(async (filters: {name: string, value: string, exclude?: boolean}[]) => {
@@ -360,22 +362,56 @@ export function PacketsPage() {
         }
     };
 
+    /** Server-confirmed star/unstar for one stream: the local snapshot is
+     * updated ONLY from the server response, and a capacity rejection is
+     * surfaced instead of silently leaving a stale star. */
     const handleFavoriteToggle = useCallback(async (streamId, currentFavorite) => {
         try {
-            const response = await fetch(`/api/stream/${streamId}/favorite`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ favorite: !currentFavorite })
-            });
-            if (!response.ok) {
-                console.error('Не удалось обновить избранное:', await response.text());
-                return;
-            }
-            updateStream(streamId, (s: any) => ({ ...s, favorite: !currentFavorite }));
+            const state = await setStreamFavorite(streamId, !currentFavorite);
+            updateStream(streamId, (s: any) => ({
+                ...s,
+                favorite: state.favorite,
+                favorite_revision: state.favorite_revision,
+                retention_state: state.retention_state,
+                retention_bytes: state.retention_bytes,
+            }));
         } catch (error) {
-            console.error('Ошибка при обновлении избранного:', error);
+            if (error instanceof FavoriteCapacityError) {
+                alert(
+                    `Стрим #${streamId} НЕ взят в избранное: недостаточно ёмкости хранилища ` +
+                    `(зарезервировано ${formatBytes(error.reservedBytes)} из ${formatBytes(error.maxTotalBytes)}). ` +
+                    `Гарантия хранения не создана.`
+                );
+            } else {
+                alert(`Не удалось обновить избранное для стрима #${streamId}: ${error}`);
+            }
         }
     }, [updateStream]);
+
+    /** Bulk unstar: each stream is confirmed by the server; unstarred rows
+     * keep their saved content until bounded cleanup finishes, which the
+     * retention badge shows. */
+    const bulkUnstarSelected = useCallback(async () => {
+        const targets = selectedStreamIds.filter(id => {
+            const s = streamsArray.find((st: any) => st.id === id);
+            return s?.favorite;
+        });
+        if (targets.length === 0) return;
+        if (!confirm(`Снять избранное с ${targets.length} стримов? Сохранённые копии будут удалены фоном.`)) return;
+        for (const id of targets) {
+            try {
+                const state = await setStreamFavorite(id, false);
+                updateStream(id, (s: any) => ({
+                    ...s,
+                    favorite: state.favorite,
+                    favorite_revision: state.favorite_revision,
+                    retention_state: state.retention_state,
+                }));
+            } catch (error) {
+                alert(`Не удалось снять избранное со стрима #${id}: ${error}`);
+            }
+        }
+    }, [selectedStreamIds, streamsArray, updateStream]);
 
     // Infinite scroll callback for virtual stream list
     const handleStreamsRowsRendered = useCallback(
@@ -502,18 +538,40 @@ export function PacketsPage() {
         packetsListRef.current?.scrollToRow({ index: mergedPackets.length - 1, align: 'end', behavior: 'auto' });
     }, [mergedPackets.length, liveEnabled, packetsListRef]);
 
-    // Share: copy link + auto-favorite all selected
+    // Share: copy link + auto-favorite all selected (server-confirmed, no
+    // optimistic stars; per-stream capacity failures are reported).
     const shareStream = async () => {
         if (selectedStreamIds.length === 0) return;
         const streamParam = selectedStreamIds.join(',');
         const url = `${window.location.origin}/packets?stream=${streamParam}`;
         copyText(url);
-        // Auto-favorite all selected streams
+        const rejected: string[] = [];
         for (const id of selectedStreamIds) {
             const stream = streamsArray.find((s: any) => s.id === id);
             if (stream && !stream.favorite) {
-                handleFavoriteToggle(id, false);
+                try {
+                    const state = await setStreamFavorite(id, true);
+                    updateStream(id, (s: any) => ({
+                        ...s,
+                        favorite: state.favorite,
+                        favorite_revision: state.favorite_revision,
+                        retention_state: state.retention_state,
+                        retention_bytes: state.retention_bytes,
+                    }));
+                } catch (error) {
+                    rejected.push(
+                        error instanceof FavoriteCapacityError
+                            ? `#${id} (ёмкость исчерпана)`
+                            : `#${id} (ошибка)`
+                    );
+                }
             }
+        }
+        if (rejected.length > 0) {
+            alert(
+                `Ссылка скопирована, но гарантия хранения не создана для: ${rejected.join(', ')}. ` +
+                `Ёмкость можно увеличить в Настройках.`
+            );
         }
         setShareCopied(true);
         setTimeout(() => setShareCopied(false), 2000);
@@ -875,6 +933,15 @@ export function PacketsPage() {
                             )}
                         </div>
                         <div className="toolbar-right">
+                            {showFavoritesOnly && isMultiSelect && (
+                                <button
+                                    className="toolbar-btn"
+                                    onClick={bulkUnstarSelected}
+                                    title="Снять избранное со всех выбранных (сохранённые копии удаляются фоном)"
+                                >
+                                    ✩ Снять избранное ({selectedStreamIds.length})
+                                </button>
+                            )}
                             <button className="toolbar-btn" onClick={shareStream} title="Скопировать ссылку на стрим">
                                 {shareCopied ? '✓ Скопировано' : 'Share'}
                             </button>

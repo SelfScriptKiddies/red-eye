@@ -136,6 +136,7 @@ pub fn spawn_flushers(
     opts: FlusherOptions,
     cache: Arc<Cache>,
     ws_aggregator: SharedWsAggregator,
+    retention: Arc<crate::retention::RetentionTracker>,
 ) -> ShardedBatchSender {
     let n = flushers.max(1);
     let (sender, rxs) = sharded_channels(n, queue_capacity);
@@ -143,8 +144,9 @@ pub fn spawn_flushers(
         let db = db.clone(); // PgPool is internally Arc — one shared pool
         let cache = cache.clone();
         let ws_aggregator = ws_aggregator.clone();
+        let retention = retention.clone();
         tokio::spawn(async move {
-            run_batch_flusher(i, n, rx, db, opts, cache, ws_aggregator).await;
+            run_batch_flusher(i, n, rx, db, opts, cache, ws_aggregator, retention).await;
         });
     }
     info!(
@@ -197,6 +199,7 @@ pub async fn run_batch_flusher(
     opts: FlusherOptions,
     cache: Arc<Cache>,
     ws_aggregator: SharedWsAggregator,
+    retention: Arc<crate::retention::RetentionTracker>,
 ) {
     info!(
         "Batch flusher {}/{} started: batch_size={}, flush_interval={}ms",
@@ -225,7 +228,7 @@ pub async fn run_batch_flusher(
                         None => {
                             // Channel closed — flush remaining and exit.
                             if !buffer.is_empty() {
-                                flush_batch(&db, &mut buffer, &ws_aggregator).await;
+                                flush_batch(&db, &mut buffer, &ws_aggregator, &retention).await;
                             }
                             flush_lifecycle(&db, &cache).await;
                             info!("Batch flusher {}/{}: channel closed, shutting down", index + 1, total);
@@ -250,7 +253,7 @@ pub async fn run_batch_flusher(
                     match result {
                         Some(pkt) => Some(pkt),
                         None => {
-                            flush_batch(&db, &mut buffer, &ws_aggregator).await;
+                            flush_batch(&db, &mut buffer, &ws_aggregator, &retention).await;
                             flush_lifecycle(&db, &cache).await;
                             info!("Batch flusher {}/{}: channel closed, shutting down", index + 1, total);
                             return;
@@ -276,7 +279,7 @@ pub async fn run_batch_flusher(
             || (!buffer.is_empty() && deadline.map(|d| Instant::now() >= d).unwrap_or(false));
 
         if should_flush {
-            flush_batch(&db, &mut buffer, &ws_aggregator).await;
+            flush_batch(&db, &mut buffer, &ws_aggregator, &retention).await;
             flush_lifecycle(&db, &cache).await;
             deadline = None;
         }
@@ -309,6 +312,7 @@ async fn flush_batch(
     db: &DB,
     buffer: &mut Vec<ProcessedPacket>,
     ws_aggregator: &SharedWsAggregator,
+    retention: &Arc<crate::retention::RetentionTracker>,
 ) {
     if buffer.is_empty() {
         return;
@@ -398,22 +402,32 @@ async fn flush_batch(
         }
     }
 
-    // 4. Single set-based UPDATE stream: last_packet_time (max) + packet_count (+= delta).
-    let mut stream_stats: HashMap<usize, (i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count)
+    // 4. Single set-based UPDATE stream: last_packet_time (max),
+    //    packet_count (+= delta) and retention_bytes (+= payload bytes;
+    //    the segment-rotation estimate and star-time measurement feed on
+    //    it). Local tracker deltas apply for starred segments only.
+    let mut stream_stats: HashMap<usize, (i64, i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count, bytes)
     for pkt in buffer.iter() {
         let ts = pkt.timestamp_seconds as i64;
-        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0));
+        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0, 0));
         if ts > entry.0 {
             entry.0 = ts;
         }
         entry.1 += 1;
+        entry.2 += pkt.payload.len() as i64;
     }
-    let stats_rows: Vec<(usize, i64, i64)> = stream_stats
+    let stats_rows: Vec<(usize, i64, i64, i64)> = stream_stats
         .iter()
-        .map(|(s, (ts, c))| (*s, *ts, *c))
+        .map(|(s, (ts, c, b))| (*s, *ts, *c, *b))
         .collect();
     if let Err(e) = db.update_streams_stats_batch(&stats_rows).await {
         error!("Failed to update stream stats: {:?}", e);
+    } else {
+        // Only on commit: a failed stats update leaves the tracker ahead of
+        // the DB and could trigger rotation on phantom bytes.
+        for (sid, _, _, bytes) in &stats_rows {
+            retention.add_bytes(*sid, *bytes);
+        }
     }
 
     // 5. Maintain stream_tag INCREMENTALLY: upsert the distinct

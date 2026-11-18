@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 pub static UNKNOWN_SERVICE_DROPS: AtomicU64 = AtomicU64::new(0);
 pub static UNKNOWN_AGENT_DROPS: AtomicU64 = AtomicU64::new(0);
 pub static AMBIGUOUS_DIRECTION_DROPS: AtomicU64 = AtomicU64::new(0);
+/// Starred segment rotations at the byte limit (+ failed rotations).
+pub static FAVORITE_ROTATIONS: AtomicU64 = AtomicU64::new(0);
+pub static FAVORITE_ROTATION_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 /// Minimum spacing between rate-limited log lines (shared guard so a
 /// burst of drops cannot flood the log under game load).

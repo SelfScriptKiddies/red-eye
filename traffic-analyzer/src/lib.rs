@@ -10,6 +10,7 @@ pub mod message_broker;
 pub mod metrics;
 pub mod process_packet;
 pub mod proto_schema;
+pub mod retention;
 pub mod version;
 pub mod wire;
 pub mod ws_aggregator;
@@ -403,6 +404,13 @@ pub async fn run() {
     // Spawn the sharded batch flushers: N tasks, each owning the streams
     // whose ids hash to it (per-stream order), bounded queue per task with
     // drop+count on overflow so the NATS consumer never blocks.
+    // Starred-segment rotation: a bounded poller keeps starred segments and
+    // the segment byte limit in a tracker; the packet path consults it and
+    // rotates over-limit favorites into linked continuations. Failures are
+    // contained (stale snapshot = a delayed rotation, never lost packets).
+    let retention_tracker = Arc::new(retention::RetentionTracker::new());
+    retention::spawn_retention_poller(db.clone(), retention_tracker.clone(), 2);
+
     let flusher_db = db::DB::init(&config).await.unwrap();
     let batch_tx = batch_flusher::spawn_flushers(
         config.batch_flushers,
@@ -414,6 +422,7 @@ pub async fn run() {
         },
         cache.clone(),
         ws_aggregator,
+        retention_tracker.clone(),
     );
 
     match message_broker::consume_raw_packets(
@@ -422,6 +431,7 @@ pub async fn run() {
         Arc::new(config),
         db,
         Arc::new(batch_tx),
+        retention_tracker,
     )
     .await
     {

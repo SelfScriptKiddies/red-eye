@@ -1,7 +1,7 @@
 use crate::api::packet::packet_service::PacketService;
 use crate::health::HealthMonitor;
 use actix_identity::Identity;
-use actix_web::{HttpResponse, Responder, get, put, web};
+use actix_web::{HttpResponse, Responder, get, web};
 use log::info;
 use serde::{Deserialize, Deserializer};
 use serde_json::json;
@@ -9,16 +9,10 @@ use std::sync::Arc;
 use stream_dto::StreamResponse;
 use stream_service::StreamService;
 use utoipa::IntoParams;
-use utoipa::ToSchema;
 
 pub mod stream_dto;
 mod stream_repository;
 pub(crate) mod stream_service;
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct UpdateFavoriteRequest {
-    pub favorite: bool,
-}
 
 #[utoipa::path(
     get,
@@ -58,8 +52,11 @@ async fn get_stream_by_id(
 ) -> Result<impl Responder, actix_web::error::Error> {
     let stream_id: i64 = path.into_inner().0;
 
-    match stream_service.get_stream_by_id(stream_id).await {
-        Ok(stream) => Ok(HttpResponse::Ok().json(stream.to_response(&packet_service).await)),
+    match stream_service
+        .get_stream_detail(stream_id, &packet_service)
+        .await
+    {
+        Ok(detail) => Ok(HttpResponse::Ok().json(detail)),
         Err(sqlx::Error::RowNotFound) => {
             Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"})))
         }
@@ -89,6 +86,9 @@ struct StreamQuery {
 
     pub start_time: Option<i64>,
     pub end_time: Option<i64>,
+    /// Server-side favorites filter, applied in SQL before keyset
+    /// pagination (composes with tags/services/time).
+    pub favorite: Option<bool>,
 }
 
 fn deserialize_comma_separated_numbers<'de, D>(
@@ -154,6 +154,7 @@ async fn get_all_streams(
             query.services.clone(),
             query.start_time,
             query.end_time,
+            query.favorite,
         )
         .await;
     // Feed real query latency into the health monitor (reporting only, never gates).
@@ -164,37 +165,9 @@ async fn get_all_streams(
     }
 }
 
-#[utoipa::path(
-    put,
-    path = "/api/stream/{id}/favorite",
-    request_body = UpdateFavoriteRequest,
-    responses(
-        (status = 200, description = "Favorite flag updated", body = serde_json::Value, example = json!({"id": 1, "favorite": true})),
-        (status = 401, description = "Unauthorized", body = serde_json::Value, example = json!({"error": "non authorized"})),
-        (status = 404, description = "Stream not found", body = serde_json::Value, example = json!({"error": "Stream not found"})),
-        (status = 500, description = "Internal server error", body = serde_json::Value, example = json!({"error": "Internal server error"}))
-    ),
-    tag = "stream"
-)]
-#[put("/stream/{id}/favorite")]
-async fn update_stream_favorite(
-    _identity: Identity,
-    path: web::Path<(i64,)>,
-    payload: web::Json<UpdateFavoriteRequest>,
-    stream_service: web::Data<StreamService>,
-) -> Result<impl Responder, actix_web::error::Error> {
-    let stream_id = path.into_inner().0;
-    match stream_service
-        .set_favorite(stream_id, payload.favorite)
-        .await
-    {
-        Ok(favorite) => Ok(HttpResponse::Ok().json(json!({"id": stream_id, "favorite": favorite}))),
-        Err(sqlx::Error::RowNotFound) => {
-            Ok(HttpResponse::NotFound().json(json!({"error": "Stream not found"})))
-        }
-        Err(e) => Ok(crate::api::sqlx_error_response(&e)),
-    }
-}
+// The favorite endpoints (POST/DELETE/PUT /stream/{id}/favorite) live in
+// api/favorite/favorite.rs: starring is a capacity-checked retention
+// operation, not a flag flip.
 
 #[derive(Debug, Deserialize, IntoParams)]
 struct HistogramQuery {
@@ -228,6 +201,5 @@ async fn get_stream_histogram(
 pub fn stream_config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_stream_histogram)
         .service(get_all_streams)
-        .service(get_stream_by_id)
-        .service(update_stream_favorite);
+        .service(get_stream_by_id);
 }
