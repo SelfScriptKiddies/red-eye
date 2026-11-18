@@ -617,3 +617,18 @@
     color: #e74c3c;
     font-size: 11px;
 }
+
+/* Favorite storage usage: saved/reserved bytes and stream counts. */
+.favorite-usage {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.favorite-usage-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #aaa;
+}

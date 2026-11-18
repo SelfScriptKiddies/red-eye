@@ -16,11 +16,48 @@ interface Service {
   decrypt_tls: boolean;
 }
 
+interface NetworkSettings {
+  interface: string | null;
+  interface_source: string;
+  machine_ip: string | null;
+  machine_ip_source: string;
+  last_acked_revision: number;
+  current_revision: number;
+  sync_state: string;
+  last_sync_error?: string | null;
+}
+
+/** One row of GET /api/protect/{agent}/state: desired proxy state plus the
+ * agent-reported capture source. */
+interface ProtectionRow {
+  agent_id: string;
+  service_id: number;
+  service_name: string;
+  service_port: number;
+  protocol: string;
+  enabled: boolean;
+  listen_port: number | null;
+  target_port: number | null;
+  tls_mode: string | null;
+  http2_enabled: boolean;
+  revision: number;
+  effective: boolean;
+  effective_revision: number | null;
+  capture_source: 'passive' | 'proxy' | 'transitioning' | 'proxy_unavailable';
+  last_error?: string | null;
+}
+
 interface Agent {
   agent_id: string;
   uptime_secs: number;
   sniffer_active: boolean;
-  sniffer_ports: number[];
+  /** "8080/tcp" entries - protocol-aware since the v4 control plane */
+  sniffer_ports: string[];
+  sniffer_idle?: boolean | null;
+  applied_revision?: number | null;
+  effective_interface?: string | null;
+  effective_machine_ip?: string | null;
+  last_sync_error?: string | null;
   harpoon_rules: string[];
   active_filters: number;
   nft_redirects: NftRedirect[];
@@ -29,6 +66,8 @@ interface Agent {
   nft_available?: boolean | null;
   timestamp_ms: number;
   online: boolean;
+  /** Persistent per-agent settings from /api/agent (may be absent) */
+  network?: NetworkSettings | null;
 }
 
 interface ProxyForm {
@@ -41,14 +80,6 @@ interface ProxyForm {
   duplicate_to: string;
 }
 
-interface FilterForm {
-  name: string;
-  kind: string;
-  pattern: string;
-  direction: string;
-  action: string;
-}
-
 interface ReplayForm {
   name: string;
   listen_port: string;
@@ -59,10 +90,6 @@ interface ReplayForm {
 const defaultProxy: ProxyForm = {
   name: '', listen: '', target: '', protocol: 'tcp',
   tls_mode: '', nft_redirect_port: '', duplicate_to: ''
-};
-
-const defaultFilter: FilterForm = {
-  name: '', kind: 'substr', pattern: '', direction: 'c2s', action: 'drop'
 };
 
 const defaultReplay: ReplayForm = {
@@ -89,9 +116,6 @@ export default function AgentsPage() {
   const [proxyModal, setProxyModal] = useState(false);
   const [proxyForm, setProxyForm] = useState<ProxyForm>(defaultProxy);
 
-  const [filterModal, setFilterModal] = useState(false);
-  const [filters, setFilters] = useState<FilterForm[]>([]);
-
   const [replayModal, setReplayModal] = useState(false);
   const [replayForm, setReplayForm] = useState<ReplayForm>(defaultReplay);
 
@@ -103,6 +127,86 @@ export default function AgentsPage() {
 
   const [services, setServices] = useState<Service[]>([]);
   const [boundServices, setBoundServices] = useState<number[]>([]);
+
+  // Proxy protection desired/effective state for the selected agent.
+  const [protection, setProtection] = useState<ProtectionRow[]>([]);
+
+  // Per-agent network settings (interface / machine IP) editing
+  const [netEditing, setNetEditing] = useState(false);
+  const [netInterface, setNetInterface] = useState('');
+  const [netMachineIp, setNetMachineIp] = useState('');
+  const [netBusy, setNetBusy] = useState(false);
+
+  const openNetEditor = () => {
+    const net = selectedAgent?.network;
+    setNetInterface(net?.interface ?? '');
+    setNetMachineIp(net?.machine_ip ?? '');
+    setNetEditing(true);
+  };
+
+  const sourceBadge = (source: string) =>
+    source === 'override' ? 'option-badge' : 'info-badge';
+
+  const sourceLabel = (source: string) =>
+    source === 'override' ? 'override' : source === 'bootstrap' ? 'bootstrap' : source;
+
+  const syncStateLabel = (state: string) =>
+    state === 'ok' ? 'synced' : state === 'pending' ? 'pending sync' : 'error';
+
+  const syncStateBadge = (state: string) =>
+    state === 'ok' ? 'info-badge' : state === 'pending' ? 'badge info-badge' : 'option-badge';
+
+  const saveNetworkSettings = async () => {
+    if (!selected) return;
+    if (netInterface.trim() === '' && netMachineIp.trim() === '') {
+      // Both empty = reset to bootstrap values
+      await resetNetworkSettings();
+      return;
+    }
+    setNetBusy(true);
+    try {
+      const r = await fetch(`/api/agent/${selected}/network-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          interface: netInterface.trim() === '' ? null : netInterface.trim(),
+          machine_ip: netMachineIp.trim() === '' ? null : netMachineIp.trim(),
+        }),
+      });
+      if (!r.ok) {
+        alert(`Не сохранено (${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      const body = await r.json().catch(() => null);
+      if (body?.sync === 'pending') {
+        alert('Сохранено, но доставка агенту не удалась - снапшот будет повторён при следующем heartbeat');
+      }
+      setNetEditing(false);
+      setTimeout(fetchAgents, 1000);
+    } catch (e) {
+      alert(`Не сохранено: ${e}`);
+    } finally {
+      setNetBusy(false);
+    }
+  };
+
+  const resetNetworkSettings = async () => {
+    if (!selected) return;
+    setNetBusy(true);
+    try {
+      const r = await fetch(`/api/agent/${selected}/network-settings/reset`, { method: 'POST' });
+      if (!r.ok) {
+        alert(`Не сброшено (${r.status}): ${(await r.text()).slice(0, 300)}`);
+        return;
+      }
+      setNetEditing(false);
+      setTimeout(fetchAgents, 1000);
+    } catch (e) {
+      alert(`Не сброшено: ${e}`);
+    } finally {
+      setNetBusy(false);
+    }
+  };
 
   const fetchAgents = async (): Promise<Agent[]> => {
     try {
@@ -131,6 +235,19 @@ export default function AgentsPage() {
       .catch(() => setBoundServices([]));
   };
 
+  const fetchProtection = (agentId: string) => {
+    fetch(`/api/protect/${agentId}/state`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => setProtection(Array.isArray(data) ? data : []))
+      .catch(() => setProtection([]));
+  };
+
+  const refreshSelected = (agentId: string | null) => {
+    if (!agentId) return;
+    fetchBoundServices(agentId);
+    fetchProtection(agentId);
+  };
+
   const bindService = (serviceId: number) => {
     if (!selected) return;
     fetch(`/api/agent/${selected}/services/bind`, {
@@ -155,32 +272,38 @@ export default function AgentsPage() {
     });
   };
 
-  // Check protection status for a service on selected agent
-  const getProtectionStatus = (service: Service): 'off' | 'sniffing' | 'proxy' | 'proxy-nft' => {
-    if (!selectedAgent) return 'off';
-    const ruleName = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
-    const hasProxy = selectedAgent.harpoon_rules.includes(ruleName);
-    const hasNft = selectedAgent.nft_redirects.some(r => r.from_port === service.port);
-    const isSniffed = selectedAgent.sniffer_ports.includes(service.port);
+  // Capture source for a service on the selected agent, from the
+  // protection state API (desired + agent-reported effective state). The
+  // backend write alone is never "Proxy": only an agent ack makes it one.
+  const protectionRow = (serviceId: number): ProtectionRow | null =>
+    protection.find(p => p.service_id === serviceId) ?? null;
 
-    if (hasProxy && hasNft) return 'proxy-nft';
-    if (hasProxy) return 'proxy';
-    if (isSniffed) return 'sniffing';
-    return 'off';
+  const getProtectionStatus = (
+    service: Service
+  ): { source: ProtectionRow['capture_source']; error?: string | null } => {
+    if (!selectedAgent) return { source: 'passive' };
+    const row = protectionRow(service.id);
+    if (row) {
+      return { source: row.capture_source, error: row.last_error };
+    }
+    const isSniffed = selectedAgent.sniffer_ports.some(p =>
+      p.startsWith(`${service.port}/`)
+    );
+    return { source: isSniffed ? 'passive' : 'passive' };
   };
 
-  const statusLabel: Record<string, string> = {
-    'off': 'Off',
-    'sniffing': 'Sniffing',
+  const statusLabel: Record<ProtectionRow['capture_source'], string> = {
+    'passive': 'Passive',
     'proxy': 'Proxy',
-    'proxy-nft': 'Protected',
+    'transitioning': 'Transitioning',
+    'proxy_unavailable': 'No proxy capture',
   };
 
-  const statusStyle: Record<string, string> = {
-    'off': '',
-    'sniffing': 'info-badge',
-    'proxy': 'info-badge',
-    'proxy-nft': 'option-badge',
+  const statusStyle: Record<ProtectionRow['capture_source'], string> = {
+    'passive': 'info-badge',
+    'proxy': 'option-badge',
+    'transitioning': 'badge info-badge',
+    'proxy_unavailable': 'danger-badge',
   };
 
   const toggleProtection = async (service: Service, enable: boolean, tlsMitm: boolean = false) => {
@@ -213,21 +336,21 @@ export default function AgentsPage() {
         alert(`Ошибка ${enable ? 'включения' : 'отключения'} защиты: ${await response.text()}`);
         return;
       }
+      const body = await response.json().catch(() => null);
+      if (body?.sync === 'pending') {
+        alert(
+          'Желаемое состояние сохранено, но доставка агенту не удалась - ' +
+            'снапшот будет повторён при следующем heartbeat. ' +
+            'Состояние защиты обновится после применения агентом.'
+        );
+      }
     } catch (e) {
       alert(`Ошибка ${enable ? 'включения' : 'отключения'} защиты: ${e}`);
       return;
     }
-    // The command is fire-and-forget over NATS: verify the agent actually
-    // applied it (rule appears in harpoon_rules) before calling it done.
-    const expectedRule = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
-    setTimeout(async () => {
-      const list = await fetchAgents();
-      const updated = list.find(a => a.agent_id === selected);
-      const applied = updated?.harpoon_rules.includes(expectedRule) ?? false;
-      if (enable && !applied) {
-        alert(`Агент не подтвердил правило "${expectedRule}".\nПроверьте логи агента (nftables? порт занят?).`);
-      }
-    }, 2500);
+    // The desired state is committed; the capture source flips to Proxy
+    // only after the agent reports the effective state.
+    setTimeout(() => refreshSelected(selected), 1500);
   };
 
   useEffect(() => {
@@ -236,6 +359,16 @@ export default function AgentsPage() {
     const interval = setInterval(fetchAgents, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // Re-poll the selected agent's bound services + protection state with
+  // the same cadence so transition states stay visible.
+  useEffect(() => {
+    if (!selected) return;
+    refreshSelected(selected);
+    const interval = setInterval(() => refreshSelected(selected), 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   const selectedAgent = agents.find(a => a.agent_id === selected);
 
@@ -250,25 +383,6 @@ export default function AgentsPage() {
       if (!r.ok) {
         alert(`Команда не отправлена (${r.status}): ${(await r.text()).slice(0, 200)}`);
         return;
-      }
-      setTimeout(fetchAgents, 1000);
-    });
-  };
-
-  const broadcastCommand = (command: object, agentIds: string[] = []) => {
-    fetch('/api/agent/broadcast', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agent_ids: agentIds, ...command })
-    }).then(async r => {
-      if (!r.ok) {
-        alert(`Команда не отправлена (${r.status}): ${(await r.text()).slice(0, 200)}`);
-        return;
-      }
-      const results = await r.json().catch(() => []);
-      const failed = (Array.isArray(results) ? results : []).filter((x: any) => x.status === 'error');
-      if (failed.length > 0) {
-        alert(`Не доставлено агентам:\n${failed.map((f: any) => `  ${f.agent_id}: ${f.error}`).join('\n')}`);
       }
       setTimeout(fetchAgents, 1000);
     });
@@ -295,26 +409,6 @@ export default function AgentsPage() {
   const removeProxy = (ruleName: string) => {
     if (!selected || !confirm(`Удалить прокси "${ruleName}"?`)) return;
     sendCommand(selected, { type: 'ProxyRemove', name: ruleName });
-  };
-
-  // Filters
-  const addFilterRow = () => setFilters([...filters, { ...defaultFilter }]);
-  const removeFilterRow = (i: number) => setFilters(filters.filter((_, idx) => idx !== i));
-  const updateFilterRow = (i: number, field: string, value: string) => {
-    const updated = [...filters];
-    (updated[i] as any)[field] = value;
-    setFilters(updated);
-  };
-
-  const syncFilters = () => {
-    if (!selected) return;
-    sendCommand(selected, { type: 'FilterSync', filters });
-    setFilterModal(false);
-  };
-
-  const syncFiltersAll = () => {
-    broadcastCommand({ type: 'FilterSync', filters });
-    setFilterModal(false);
   };
 
   // Replay
@@ -378,7 +472,7 @@ export default function AgentsPage() {
               <div
                 key={agent.agent_id}
                 className={`agent-card ${selected === agent.agent_id ? 'selected' : ''} ${agent.online ? 'online' : 'offline'}`}
-                onClick={() => { setSelected(agent.agent_id); fetchBoundServices(agent.agent_id); }}
+                onClick={() => { setSelected(agent.agent_id); refreshSelected(agent.agent_id); }}
               >
                 <div className="agent-card-header">
                   <span className={`status-dot ${agent.online ? 'online' : 'offline'}`} />
@@ -429,8 +523,85 @@ export default function AgentsPage() {
                     {selectedAgent.sniffer_ports.map(p => (
                       <span key={p} className="badge info-badge">:{p}</span>
                     ))}
-                    {selectedAgent.sniffer_ports.length === 0 && <span className="text-muted">Нет портов</span>}
+                    {selectedAgent.sniffer_ports.length === 0 && (
+                      <span className="text-muted">
+                        {selectedAgent.sniffer_idle
+                          ? 'Нет назначенных сервисов - ожидание (здоров)'
+                          : 'Нет портов'}
+                      </span>
+                    )}
                   </div>
+                </div>
+
+                {/* Network settings (per-agent interface / machine IP) */}
+                <div className="detail-section">
+                  <div className="section-header">
+                    <h3>Сеть</h3>
+                    {!netEditing && (
+                      <button className="small-btn" onClick={openNetEditor}>Настроить</button>
+                    )}
+                  </div>
+                  {netEditing ? (
+                    <div>
+                      <input
+                        placeholder="Интерфейс (например eth0)"
+                        value={netInterface}
+                        onChange={e => setNetInterface(e.target.value)}
+                      />
+                      <input
+                        placeholder="Machine IP (IP или 0.0.0.0/:: - wildcard)"
+                        value={netMachineIp}
+                        onChange={e => setNetMachineIp(e.target.value)}
+                      />
+                      <div className="card-buttons">
+                        <button className="small-btn" disabled={netBusy} onClick={saveNetworkSettings}>Сохранить</button>
+                        <button className="small-btn btn-danger" disabled={netBusy} onClick={resetNetworkSettings}>Сбросить</button>
+                        <button className="small-btn" disabled={netBusy} onClick={() => setNetEditing(false)}>Отмена</button>
+                      </div>
+                      <span className="text-muted" style={{ fontSize: '11px' }}>
+                        Пустое поле = сброс к bootstrap-значению. Интерфейс проверяется на агенте.
+                      </span>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="card-row">
+                        <span className="rule-name">Интерфейс</span>
+                        <div className="card-right">
+                          <span className="port-label">{selectedAgent.network?.interface || selectedAgent.effective_interface || '—'}</span>
+                          <span className={`badge ${sourceBadge(selectedAgent.network?.interface_source || 'unknown')}`}>
+                            {sourceLabel(selectedAgent.network?.interface_source || 'unknown')}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="card-row">
+                        <span className="rule-name">Machine IP</span>
+                        <div className="card-right">
+                          <span className="port-label">{selectedAgent.network?.machine_ip || selectedAgent.effective_machine_ip || '—'}</span>
+                          <span className={`badge ${sourceBadge(selectedAgent.network?.machine_ip_source || 'unknown')}`}>
+                            {sourceLabel(selectedAgent.network?.machine_ip_source || 'unknown')}
+                          </span>
+                        </div>
+                      </div>
+                      {selectedAgent.network && (
+                        <div className="card-row">
+                          <span className="rule-name">Ревизия</span>
+                          <div className="card-right">
+                            <span className="port-label">
+                              {selectedAgent.network.last_acked_revision}/{selectedAgent.network.current_revision}
+                            </span>
+                            <span className={`badge ${syncStateBadge(selectedAgent.network.sync_state)}`}>
+                              {syncStateLabel(selectedAgent.network.sync_state)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {(selectedAgent.network?.last_sync_error || selectedAgent.last_sync_error) && (
+                        <span className="text-muted" style={{ fontSize: '11px', color: '#e8a33d' }}>
+                          Ошибка синхронизации: {selectedAgent.network?.last_sync_error || selectedAgent.last_sync_error}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Proxy Rules */}
@@ -480,8 +651,9 @@ export default function AgentsPage() {
                   </div>
                   {services.map(svc => {
                     const isBound = boundServices.includes(svc.id);
-                    const status = getProtectionStatus(svc);
-                    const hasProxy = status === 'proxy' || status === 'proxy-nft';
+                    const { source, error } = getProtectionStatus(svc);
+                    const row = protectionRow(svc.id);
+                    const hasProxy = row?.enabled ?? false;
                     return (
                       <div key={svc.id} className={`settings-card ${!isBound ? 'card-dimmed' : ''}`}>
                         <div className="card-row">
@@ -489,13 +661,22 @@ export default function AgentsPage() {
                           <div className="card-right">
                             <span className="port-label">:{svc.port}</span>
                             {isBound && (
-                              <span className={`badge ${statusStyle[status]}`}
-                                style={status === 'off' ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
-                                {statusLabel[status]}
+                              <span className={`badge ${statusStyle[source]}`}
+                                title={error ?? undefined}>
+                                {statusLabel[source]}
                               </span>
                             )}
                           </div>
                         </div>
+                        {isBound && (source === 'transitioning' || source === 'proxy_unavailable') && (
+                          <div className="card-row">
+                            <span className="text-muted" style={{ fontSize: '11px', color: source === 'proxy_unavailable' ? '#e8a33d' : undefined }}>
+                              {source === 'transitioning'
+                                ? 'Переключение источника захвата...'
+                                : error ?? 'Proxy desired, but no proxy capture is running'}
+                            </span>
+                          </div>
+                        )}
                         <div className="card-buttons">
                           {isBound ? (
                             <>
@@ -537,11 +718,24 @@ export default function AgentsPage() {
             <div className="action-group">
               <h3>Для выбранного</h3>
               <button className="action-btn" disabled={!selected} onClick={() => setReplayModal(true)}>Port Forward</button>
-              <button className="action-btn" disabled={!selected} onClick={() => { setFilters([]); setFilterModal(true); }}>Firewall</button>
+              <button
+                className="action-btn"
+                disabled={!selected}
+                title="Фильтры теперь управляются централизованно (Настройки -> Фильтры)"
+                onClick={() => window.location.assign('/settings')}
+              >
+                Firewall
+              </button>
             </div>
             <div className="action-group">
               <h3>Для всех агентов</h3>
-              <button className="action-btn broadcast" onClick={() => { setFilters([]); setFilterModal(true); }}>Firewall (все агенты)</button>
+              <button
+                className="action-btn broadcast"
+                title="Фильтры теперь управляются централизованно (Настройки -> Фильтры)"
+                onClick={() => window.location.assign('/settings')}
+              >
+                Firewall (все агенты)
+              </button>
             </div>
           </div>
         </div>
@@ -582,53 +776,6 @@ export default function AgentsPage() {
             <div className="modal-footer">
               <button onClick={() => setProxyModal(false)}>Отмена</button>
               <button onClick={saveProxy}>Добавить</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Filter Modal */}
-      {filterModal && (
-        <div className="modal-overlay" onClick={() => setFilterModal(false)}>
-          <div className="modal-content wide" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Фильтры файервола</h3>
-              <button className="close-btn" onClick={() => setFilterModal(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              {filters.map((f, i) => (
-                <div key={i} className="filter-row">
-                  <input placeholder="Имя" value={f.name}
-                    onChange={e => updateFilterRow(i, 'name', e.target.value)} />
-                  <select className="select-input" value={f.kind}
-                    onChange={e => updateFilterRow(i, 'kind', e.target.value)}>
-                    <option value="substr">Substr</option>
-                    <option value="regex">Regex</option>
-                    <option value="bsubstr">Binary</option>
-                  </select>
-                  <input placeholder="Паттерн" value={f.pattern}
-                    onChange={e => updateFilterRow(i, 'pattern', e.target.value)} />
-                  <select className="select-input" value={f.direction}
-                    onChange={e => updateFilterRow(i, 'direction', e.target.value)}>
-                    <option value="c2s">C→S</option>
-                    <option value="s2c">S→C</option>
-                    <option value="both">Both</option>
-                  </select>
-                  <select className="select-input" value={f.action}
-                    onChange={e => updateFilterRow(i, 'action', e.target.value)}>
-                    <option value="drop">Drop Packet</option>
-                    <option value="drop_connection">Drop Connection</option>
-                    <option value="alert">Alert</option>
-                  </select>
-                  <button className="remove-btn" onClick={() => removeFilterRow(i)}>✕</button>
-                </div>
-              ))}
-              <button className="add-row-btn" onClick={addFilterRow}>+ Добавить фильтр</button>
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setFilterModal(false)}>Отмена</button>
-              {selected && <button onClick={syncFilters}>Применить к {selected}</button>}
-              <button onClick={syncFiltersAll}>Применить ко всем</button>
             </div>
           </div>
         </div>

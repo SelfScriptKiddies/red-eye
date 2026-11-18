@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { subscribeWs } from '../../lib/wsBus';
+import { isAiVerdictEvent } from '../../lib/aiVerdict';
+import { isSocTriageEvent } from '../../lib/socTriage';
 import './AlertToast.css';
 
 interface AlertEvent {
@@ -12,14 +14,29 @@ interface AlertEvent {
 interface Toast {
     id: number;
     tag_name: string;
-    packet_id: number;
-    stream_id: number;
+    detail: string;
+    link: string;
     timestamp: number;
 }
 
 export default function AlertToast() {
     const [toasts, setToasts] = useState<Toast[]>([]);
     const nextId = useRef(0);
+
+    const pushToast = (tag_name: string, detail: string, link: string) => {
+        const toast: Toast = {
+            id: nextId.current++,
+            tag_name,
+            detail,
+            link,
+            timestamp: Date.now(),
+        };
+        setToasts(prev => [...prev.slice(-9), toast]); // Keep max 10
+        // Auto-remove after 6 seconds
+        setTimeout(() => {
+            setToasts(prev => prev.filter(t => t.id !== toast.id));
+        }, 6000);
+    };
 
     useEffect(() => {
         // Reuse the shared per-tab /api/ws socket (wsBus) instead of opening a
@@ -29,19 +46,35 @@ export default function AlertToast() {
         const unsubscribe = subscribeWs({
             onMessage: (data) => {
                 const alert = data as AlertEvent;
-                if (!alert || alert.type !== 'alert') return;
-                const toast: Toast = {
-                    id: nextId.current++,
-                    tag_name: alert.tag_name,
-                    packet_id: alert.packet_id,
-                    stream_id: alert.stream_id,
-                    timestamp: Date.now(),
-                };
-                setToasts(prev => [...prev.slice(-9), toast]); // Keep max 10
-                // Auto-remove after 6 seconds
-                setTimeout(() => {
-                    setToasts(prev => prev.filter(t => t.id !== toast.id));
-                }, 6000);
+                if (alert && alert.type === 'alert') {
+                    pushToast(
+                        alert.tag_name,
+                        `стрим #${alert.stream_id}: пакет #${alert.packet_id}`,
+                        `/packets?stream=${alert.stream_id}`
+                    );
+                    return;
+                }
+                // JEV attack verdicts reuse the toast; non-attack verdicts
+                // stay badge-only (they never reach this branch). The link
+                // pins the exact verdict revision in the URL.
+                if (isAiVerdictEvent(data) && data.is_attack) {
+                    pushToast(
+                        data.attack_class,
+                        `JEV: стрим #${data.stream_id}: ревизия до пакета #${data.last_packet_id}`,
+                        `/packets?stream=${data.stream_id}&verdict=${data.verdict_id}`
+                    );
+                    return;
+                }
+                // SOC likely_attack above the operator threshold. The toast
+                // links to the exact stream revision; the recommendation is
+                // informational and nothing is executed automatically.
+                if (isSocTriageEvent(data)) {
+                    pushToast(
+                        `SOC: ${data.verdict}`,
+                        `стрим #${data.stream_id}: ревизия #${data.stream_revision}, conf ${Math.round(data.confidence * 100)}%`,
+                        `/packets?stream=${data.stream_id}&result=${data.result_id}`
+                    );
+                }
             },
         });
         return unsubscribe;
@@ -57,12 +90,12 @@ export default function AlertToast() {
         <div className="alert-toast-container">
             {toasts.map(t => (
                 <div key={t.id} className="alert-toast" onClick={() => {
-                    window.location.href = `/packets?stream=${t.stream_id}`;
+                    window.location.href = t.link;
                 }}>
                     <div className="alert-toast-icon">!</div>
                     <div className="alert-toast-content">
                         <span className="alert-toast-tag">{t.tag_name}</span>
-                        <span className="alert-toast-detail">стрим #{t.stream_id} — пакет #{t.packet_id}</span>
+                        <span className="alert-toast-detail">{t.detail}</span>
                     </div>
                     <button className="alert-toast-close" onClick={(e) => { e.stopPropagation(); removeToast(t.id); }}>✕</button>
                 </div>

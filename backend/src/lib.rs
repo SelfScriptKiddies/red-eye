@@ -1,6 +1,7 @@
 use crate::api::{
-    agent::agent_service::{
-        AgentService, spawn_docker_containers_listener, spawn_heartbeat_listener,
+    agent::agent_service::AgentService,
+    agent::{
+        agent_config::ControlPlane, spawn_docker_containers_listener, spawn_heartbeat_listener,
     },
     l7::l7_service::L7Service,
     packet::packet_service::PacketService,
@@ -22,7 +23,7 @@ use actix_web::{App, HttpServer, web};
 use api::auth;
 use async_nats::ConnectOptions;
 use config_manager::ConfigInit;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -34,6 +35,18 @@ mod health;
 mod version;
 mod wire;
 mod ws_activity;
+
+/// Critical favorite-retention alert to WebSocket clients (same channel as
+/// special-trigger alerts). Delivery is best effort: no consumers means the
+/// message is dropped, the metric and log line remain.
+fn send_favorite_alert(broadcaster: &broadcast::Sender<String>, message: String) {
+    let event = serde_json::json!({
+        "type": "favorite_alert",
+        "severity": "critical",
+        "message": message,
+    });
+    let _ = broadcaster.send(event.to_string());
+}
 
 /// Ensure DEFAULT partitions exist for all partitioned tables (idempotent).
 /// Inlined SQL twin of ensure_default_partitions() from
@@ -125,11 +138,16 @@ pub async fn run() -> std::io::Result<()> {
     let config = init();
     let configuration_data = web::Data::new(config.clone());
     let pool = establish_connection(&config).await;
+    // Favorite retention limits: env values seed app_settings once; the
+    // settings API owns runtime changes from here on.
+    api::favorite::favorite_service::seed_favorite_settings(&pool, &config).await;
     let packet_service = web::Data::new(PacketService::new_from_pgpool(pool.clone()));
     let stream_service = web::Data::new(StreamService::new_from_pgpool(pool.clone()));
     let tag_service = web::Data::new(TagService::new_from_pgpool(pool.clone()));
-    let service_service = web::Data::new(ServiceService::new_from_pgpool(pool.clone()));
     let l7_service = web::Data::new(L7Service::new_from_pgpool(pool.clone()));
+    let ua_service = web::Data::new(
+        api::l7::user_agent_service::UserAgentService::new_from_pgpool(pool.clone()),
+    );
     let pg_pool = web::Data::new(pool.clone());
 
     health::init_start_time();
@@ -147,15 +165,23 @@ pub async fn run() -> std::io::Result<()> {
     let updater_arc = Arc::new(UpdateAgent::new(&config).await);
     let updater = web::Data::from(updater_arc.clone());
 
+    // Control plane: owns the revision counter, per-agent configuration
+    // state and snapshot publication (see api/agent/agent_config.rs).
+    let control_plane = Arc::new(ControlPlane::new(pool.clone(), updater_arc.clone()));
+    let control_data = web::Data::new(control_plane.clone());
+
+    // Service CRUD commits its revision bump in the same transaction.
+    let service_service = web::Data::new(ServiceService::new_from_pgpool(
+        pool.clone(),
+        control_plane.clone(),
+    ));
+
     debug!("{:?}", &config);
 
-    // Запускаем периодическую синхронизацию конфигурации каждые 5 минут
-    let service_service_arc = Arc::new(ServiceService::new_from_pgpool(pool.clone()));
-    let tag_service_arc = Arc::new(TagService::new_from_pgpool(pool.clone()));
-
-    tokio::spawn(async move {
-        start_config_sync_scheduler(updater_arc, service_service_arc, tag_service_arc).await;
-    });
+    // WebSocket broadcaster: created BEFORE the cleanup loop so the
+    // favorite guard can emit capacity alerts to connected operators.
+    let (tx, _) = broadcast::channel::<String>(1000);
+    let broadcaster_tx = Arc::new(tx);
 
     // Partition management + cleanup via partition drops
     {
@@ -163,9 +189,15 @@ pub async fn run() -> std::io::Result<()> {
         let age_minutes = config.cleanup_stream_age_minutes;
         let interval_minutes = config.cleanup_interval_minutes;
         let max_disk_mb = config.cleanup_max_disk_mb;
+        let cleanup_config = config.clone();
+        let broadcaster = broadcaster_tx.clone();
         tokio::spawn(async move {
-            use tokio::time::{Duration, interval, sleep};
+            use tokio::time::{Duration, interval};
             let mut ticker = interval(Duration::from_secs(interval_minutes * 60));
+            // Critical favorite alerts are rate-limited: one per minute per
+            // kind, so a persistently blocked cleanup cannot flood the WS.
+            let mut last_guard_alert: Option<std::time::Instant> = None;
+            let mut last_capacity_alert: Option<std::time::Instant> = None;
 
             // Partitioned tables managed here (kept in sync with
             // database/init/06_partitions.sql).
@@ -203,21 +235,118 @@ pub async fn run() -> std::io::Result<()> {
                     error!("Failed to ensure DEFAULT partitions: {}", e);
                 }
 
-                // Drop old partitions + prune DEFAULT partitions + orphaned streams
-                match sqlx::query_as::<_, (i32, i64)>("SELECT * FROM cleanup_old_data($1)")
+                // Drop old partitions + prune DEFAULT partitions + orphaned
+                // streams. guard_skipped counts partitions/operations the
+                // favorite-safety guard retained (unarchived starred rows
+                // inside); those rows are NEVER deleted under pressure.
+                match sqlx::query_as::<_, (i32, i32, i64)>("SELECT * FROM cleanup_old_data($1)")
                     .bind(age_minutes as i32)
                     .fetch_one(&cleanup_pool)
                     .await
                 {
-                    Ok((partitions, streams)) => {
+                    Ok((partitions, skipped, streams)) => {
                         if partitions > 0 || streams > 0 {
                             info!(
                                 "Cleanup: dropped {} partitions, removed {} streams",
                                 partitions, streams
                             );
                         }
+                        if skipped > 0 {
+                            crate::api::metrics::FAVORITE_CLEANUP_SKIPPED.inc_by(skipped as u64);
+                            let now = std::time::Instant::now();
+                            let allowed = last_guard_alert
+                                .map(|t| now.duration_since(t) >= Duration::from_secs(60))
+                                .unwrap_or(true);
+                            if allowed {
+                                last_guard_alert = Some(now);
+                                send_favorite_alert(
+                                    &broadcaster,
+                                    format!(
+                                        "Favorite guard retained {} cleanup operations: \
+                                         starred streams have unarchived rows; archive backlog \
+                                         blocks retention cleanup",
+                                        skipped
+                                    ),
+                                );
+                                warn!(
+                                    "Favorite guard skipped {} cleanup operations (unarchived favorites)",
+                                    skipped
+                                );
+                            }
+                        }
                     }
                     Err(e) => error!("Cleanup failed: {}", e),
+                }
+
+                // User-Agent bucket retention: drop aggregate buckets whose
+                // ENTIRE 5-minute window is older than the ordinary HTTP
+                // retention horizon. Bounded batches, online; failure only
+                // delays the cleanup (counted), never blocks ingestion.
+                {
+                    use crate::api::l7::user_agent_service::UserAgentService;
+                    const UA_BUCKET_SECS: i64 = 300;
+                    const UA_CLEANUP_BATCH: i64 = 500;
+                    const UA_CLEANUP_MAX_BATCHES: usize = 10;
+                    let age_secs = (age_minutes as i64).saturating_mul(60);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    // A bucket is deletable when its whole window
+                    // [bucket_start, bucket_start + 300) sits before the
+                    // cutoff.
+                    let cutoff = now.saturating_sub(age_secs).saturating_sub(UA_BUCKET_SECS);
+                    let ua_service = UserAgentService::new_from_pgpool(cleanup_pool.clone());
+                    match ua_service
+                        .cleanup_expired_buckets(cutoff, UA_CLEANUP_BATCH, UA_CLEANUP_MAX_BATCHES)
+                        .await
+                    {
+                        Ok((deleted, pending)) => {
+                            if deleted > 0 {
+                                debug!("UA cleanup: removed {} aggregate rows", deleted);
+                            }
+                            crate::api::metrics::UA_CLEANUP_BACKLOG.set(pending as i64);
+                        }
+                        Err(e) => {
+                            crate::api::metrics::UA_BUCKET_CLEANUP_FAILURES.inc();
+                            warn!("UA bucket cleanup failed (retries next tick): {}", e);
+                        }
+                    }
+                }
+
+                // Capacity over-subscription alert: reservations can exceed
+                // the budget after an operator shrinks favorite_max_total_bytes.
+                // Star admission rejects new stars but existing favorites are
+                // never deleted, so the violation persists until operators act.
+                {
+                    let limits = api::favorite::favorite_service::FavoriteLimits::load(
+                        &cleanup_pool,
+                        &cleanup_config,
+                    )
+                    .await;
+                    if let Ok(usage) =
+                        api::favorite::favorite_service::favorite_usage_snapshot(&cleanup_pool)
+                            .await
+                    {
+                        let reserved = usage.reserved_bytes(limits.segment_bytes);
+                        if reserved > limits.max_total_bytes {
+                            let now = std::time::Instant::now();
+                            let allowed = last_capacity_alert
+                                .map(|t| now.duration_since(t) >= Duration::from_secs(60))
+                                .unwrap_or(true);
+                            if allowed {
+                                last_capacity_alert = Some(now);
+                                send_favorite_alert(
+                                    &broadcaster,
+                                    format!(
+                                        "Favorite capacity exceeded: {} reserved > {} budget; \
+                                         new stars are rejected, existing favorites stay protected",
+                                        reserved, limits.max_total_bytes
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 }
 
                 // Disk pressure check: free space WITHOUT ever taking the
@@ -242,7 +371,6 @@ pub async fn run() -> std::io::Result<()> {
                     // (flush buffer headroom; batches hold at most seconds
                     // of packets).
                     const KEEP_WINDOW_SECS: i64 = 300;
-                    const DELETE_CHUNK: i64 = 10_000;
 
                     loop {
                         let total_mb: Option<i64> = sqlx::query_scalar(
@@ -272,54 +400,67 @@ pub async fn run() -> std::io::Result<()> {
                                     (now_ts / PARTITION_INTERVAL_SECS) * PARTITION_INTERVAL_SECS;
 
                                 for table in PARTITIONED_TABLES {
-                                    // (1) clamped partition drops
-                                    let _ = sqlx::query("SELECT drop_old_partitions($1, $2)")
-                                        .bind(table)
-                                        .bind(protected_from)
-                                        .execute(&cleanup_pool)
-                                        .await;
+                                    // (1) clamped partition drops; the
+                                    // favorite guard inside retains any
+                                    // partition holding unarchived starred
+                                    // rows and reports the skip count.
+                                    let skipped = sqlx::query_as::<_, (i32, i32)>(
+                                        "SELECT dropped, guard_skipped FROM drop_old_partitions($1, $2)",
+                                    )
+                                    .bind(table)
+                                    .bind(protected_from)
+                                    .fetch_one(&cleanup_pool)
+                                    .await
+                                    .map(|(_, skipped)| skipped)
+                                    .unwrap_or(0);
+                                    if skipped > 0 {
+                                        crate::api::metrics::FAVORITE_CLEANUP_SKIPPED
+                                            .inc_by(skipped as u64);
+                                        let now = std::time::Instant::now();
+                                        let allowed = last_guard_alert
+                                            .map(|t| {
+                                                now.duration_since(t) >= Duration::from_secs(60)
+                                            })
+                                            .unwrap_or(true);
+                                        if allowed {
+                                            last_guard_alert = Some(now);
+                                            send_favorite_alert(
+                                                &broadcaster,
+                                                format!(
+                                                    "Favorite guard retained {} partitions of {} \
+                                                     under disk pressure: unarchived starred rows",
+                                                    skipped, table
+                                                ),
+                                            );
+                                        }
+                                    }
 
                                     // (2) old skewed rows in DEFAULT
                                     // (exists by now: ensured earlier this
-                                    // tick; table name is from the const
-                                    // array, not user input)
-                                    let _ = sqlx::query(&format!(
-                                        "DELETE FROM {table}_default WHERE timestamp < $1"
-                                    ))
-                                    .bind(protected_from)
-                                    .execute(&cleanup_pool)
-                                    .await;
+                                    // tick; the favorite guard excludes
+                                    // unarchived starred rows per chunk).
+                                    let _ =
+                                        sqlx::query("SELECT delete_old_rows_batched($1, true, $2)")
+                                            .bind(table)
+                                            .bind(protected_from)
+                                            .execute(&cleanup_pool)
+                                            .await;
                                 }
 
                                 // (3) trim old rows from the current write
-                                // window in bounded chunks; keep the fresh
-                                // landing zone intact.
+                                // window in bounded, favorite-guarded
+                                // chunks; the fresh landing zone stays
+                                // intact and unarchived favorites are
+                                // excluded row by row.
                                 let trim_before = now_ts - KEEP_WINDOW_SECS;
                                 for table in PARTITIONED_TABLES {
-                                    loop {
-                                        let chunk_sql = format!(
-                                            "DELETE FROM {table} WHERE ctid IN \
-                                             (SELECT ctid FROM {table} WHERE timestamp < $1 LIMIT {DELETE_CHUNK})"
-                                        );
-                                        match sqlx::query(&chunk_sql)
-                                            .bind(trim_before)
-                                            .execute(&cleanup_pool)
-                                            .await
-                                        {
-                                            Ok(res)
-                                                if res.rows_affected() >= DELETE_CHUNK as u64 =>
-                                            {
-                                                // full chunk deleted — pause to
-                                                // stay friendly to the writer
-                                                sleep(Duration::from_millis(50)).await;
-                                            }
-                                            Ok(_) => break,
-                                            Err(e) => {
-                                                error!("Pressure trim of {} failed: {}", table, e);
-                                                break;
-                                            }
-                                        }
-                                    }
+                                    let _ = sqlx::query(
+                                        "SELECT delete_old_rows_batched($1, false, $2)",
+                                    )
+                                    .bind(table)
+                                    .bind(trim_before)
+                                    .execute(&cleanup_pool)
+                                    .await;
                                 }
                             }
                             _ => break,
@@ -348,23 +489,77 @@ pub async fn run() -> std::io::Result<()> {
     let agent_service = Arc::new(AgentService::new(agent_nats_client.clone()));
     let agent_service_data = web::Data::new(agent_service.clone());
 
-    // Subscribe to agent heartbeats (syncs block filters on new agent connect)
+    // Subscribe to agent heartbeats: persist reported network state and
+    // boot ids, publish snapshots on new boot / stale revision; block
+    // filters are pushed on first contact.
     spawn_heartbeat_listener(
         agent_nats_client.clone(),
         agent_service.clone(),
-        pool.clone(),
+        control_plane.clone(),
     );
+
+    // Periodic config sync (analyzers) + agent snapshot reconciliation
+    {
+        let updater_arc = updater_arc.clone();
+        let control_plane = control_plane.clone();
+        let agent_service = agent_service.clone();
+        let service_service_arc = Arc::new(ServiceService::new_from_pgpool(
+            pool.clone(),
+            control_plane.clone(),
+        ));
+        let tag_service_arc = Arc::new(TagService::new_from_pgpool(pool.clone()));
+        tokio::spawn(async move {
+            start_config_sync_scheduler(
+                updater_arc,
+                service_service_arc,
+                tag_service_arc,
+                control_plane,
+                agent_service,
+            )
+            .await;
+        });
+    }
 
     // Subscribe to agent Docker container listings (UI "add by container")
     spawn_docker_containers_listener(agent_nats_client.clone(), agent_service.clone());
 
-    // Create broadcaster for WebSocket connections
-    let (tx, _) = broadcast::channel::<String>(1000);
-    let broadcaster_tx = Arc::new(tx);
+    // Create broadcaster for WebSocket connections (tx was created earlier,
+    // before the cleanup loop, so the favorite guard can emit alerts).
     let broadcaster = web::Data::new(broadcaster_tx.clone());
 
     // Spawn special trigger handler (flag farm + alert notifications)
     api::special_triggers::spawn_special_trigger_handler(pool.clone(), broadcaster_tx.clone());
+
+    // Active-block expiry cleanup: blocks expire even if the analyzer that
+    // created them is offline (agents unban locally at expiry as well).
+    api::block_sync::spawn_block_cleanup(pool.clone());
+
+    // JEV scheduler: supervised poller, OFF by default (ai_enabled=false).
+    // Re-reads settings every tick; a transport that cannot initialize
+    // leaves the scheduler idle-rejecting instead of aborting the backend.
+    let jev_transport: Arc<dyn api::ai::openrouter::DecisionsTransport> =
+        match api::ai::openrouter::ReqwestTransport::new() {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                warn!("JEV transport unavailable ({}), analysis stays disabled", e);
+                Arc::new(api::ai::openrouter::UnavailableTransport)
+            }
+        };
+    let jev_scheduler =
+        api::ai::scheduler::spawn(pool.clone(), broadcaster_tx.clone(), jev_transport);
+    let jev_scheduler_data = web::Data::new(jev_scheduler.clone());
+
+    // SOC maintenance: queue gauges and terminal-job trimming in bounded
+    // batches. Off-by-default feature; the loop never touches ingestion.
+    api::soc::spawn_maintenance(pool.clone());
+
+    // Favorite retention workers: bounded archive batches (live + saved
+    // unions) and bounded post-unstar saved cleanup. Failures back off
+    // without touching ingestion or the star state. Pre-feature favorite
+    // rows migrate first: with content -> archiving, empty closed rows ->
+    // incomplete shells (never synthetic saved data).
+    api::favorite::favorite_service::migrate_legacy_favorites(&pool).await;
+    api::favorite::favorite_service::spawn_retention_workers(pool.clone());
 
     // Subscribe to NATS per-packet events and broadcast ONE aggregated
     // "activity" frame per second to WebSocket clients (see ws_activity.rs
@@ -395,10 +590,13 @@ pub async fn run() -> std::io::Result<()> {
             .app_data(tag_service.clone())
             .app_data(service_service.clone())
             .app_data(l7_service.clone())
+            .app_data(ua_service.clone())
             .app_data(updater.clone())
+            .app_data(control_data.clone())
             .app_data(broadcaster.clone())
             .app_data(agent_service_data.clone())
             .app_data(version_service_data.clone())
+            .app_data(jev_scheduler_data.clone())
             .app_data(health_data.clone())
             .wrap(ErrorHandlers::new().handler(StatusCode::UNAUTHORIZED, auth::add_error_body))
             .wrap(Logger::default())

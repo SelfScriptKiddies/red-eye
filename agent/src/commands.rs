@@ -8,33 +8,12 @@ use tokio::sync::Mutex;
 
 use harpoon_core::types::endpoint::Protocol;
 
-use crate::harpoon::{self, HarpoonEngine, ProxyRuleSpec};
+use crate::harpoon::{HarpoonEngine, ProxyRuleSpec};
 use crate::nats::NatsClient;
 use crate::nftables::RedirectRule;
-use crate::updates::{PortsCache, RestartNotifier};
-
-#[derive(Debug, Deserialize)]
-pub struct FilterDef {
-    pub name: String,
-    /// "substr", "bsubstr", "regex"
-    pub kind: String,
-    /// Pattern string (or hex for bsubstr)
-    pub pattern: String,
-    /// "c2s", "s2c", "both"
-    #[serde(default = "default_direction")]
-    pub direction: String,
-    /// "drop", "alert", "pass"
-    #[serde(default = "default_action")]
-    pub action: String,
-}
-
-fn default_direction() -> String {
-    "both".to_string()
-}
-
-fn default_action() -> String {
-    "drop".to_string()
-}
+use crate::proxy_state::ProxyDesired;
+use crate::supervisor::ProxySupervisor;
+use crate::updates::{AppState, TransportProto};
 
 fn default_tcp() -> String {
     "tcp".to_string()
@@ -44,9 +23,6 @@ fn default_tcp() -> String {
 #[serde(tag = "type")]
 #[allow(dead_code)]
 pub enum AgentCommand {
-    SnifferConfig {
-        ports: Vec<u16>,
-    },
     Shutdown,
 
     // Proxy management
@@ -60,6 +36,11 @@ pub enum AgentCommand {
         duplicate_to: Option<String>,
         #[serde(default)]
         http2: bool,
+        #[serde(default)]
+        service_id: Option<u64>,
+        /// Desired revision (0 = legacy command without revision).
+        #[serde(default)]
+        revision: u64,
     },
     ProxyUpdate {
         name: String,
@@ -71,9 +52,15 @@ pub enum AgentCommand {
         duplicate_to: Option<String>,
         #[serde(default)]
         http2: bool,
+        #[serde(default)]
+        service_id: Option<u64>,
+        #[serde(default)]
+        revision: u64,
     },
     ProxyRemove {
         name: String,
+        #[serde(default)]
+        service_id: Option<u64>,
     },
 
     // nftables manual management
@@ -81,11 +68,6 @@ pub enum AgentCommand {
         rules: Vec<RedirectRule>,
     },
     NftablesClear,
-
-    // Firewall filters
-    FilterSync {
-        filters: Vec<FilterDef>,
-    },
 
     // Replay: forward to another team
     ReplayForward {
@@ -114,9 +96,9 @@ pub enum AgentCommand {
 
 pub fn spawn_command_listener(
     nats: NatsClient,
-    ports_cache: PortsCache,
-    restart_tx: RestartNotifier,
+    state: Arc<AppState>,
     harpoon: Arc<Mutex<HarpoonEngine>>,
+    supervisor: Arc<ProxySupervisor>,
 ) {
     tokio::spawn(async move {
         let mut sub = match nats.subscribe_commands().await {
@@ -139,7 +121,7 @@ pub fn spawn_command_listener(
             };
 
             debug!("Received command: {:?}", cmd);
-            handle_command(cmd, &nats, &ports_cache, &restart_tx, &harpoon).await;
+            handle_command(cmd, &nats, &state, &harpoon, &supervisor).await;
         }
     });
 }
@@ -147,18 +129,11 @@ pub fn spawn_command_listener(
 async fn handle_command(
     cmd: AgentCommand,
     nats: &NatsClient,
-    ports_cache: &PortsCache,
-    restart_tx: &RestartNotifier,
+    _state: &Arc<AppState>,
     harpoon: &Arc<Mutex<HarpoonEngine>>,
+    supervisor: &Arc<ProxySupervisor>,
 ) {
     match cmd {
-        AgentCommand::SnifferConfig { ports } => {
-            info!("Updating sniffer ports: {:?}", ports);
-            let mut cache = ports_cache.write().unwrap();
-            *cache = ports.into_iter().collect();
-            let _ = restart_tx.send(());
-        }
-
         AgentCommand::Shutdown => {
             info!("Shutdown command received");
             // Shared with SIGTERM/SIGINT: bounded cleanup + exit(0).
@@ -174,7 +149,26 @@ async fn handle_command(
             nft_redirect_port,
             duplicate_to,
             http2,
+            service_id,
+            revision,
         } => {
+            if let Some(service_id) = service_id {
+                match desired_from_command(
+                    service_id,
+                    &name,
+                    &listen,
+                    &target,
+                    &protocol,
+                    tls_mode.as_deref(),
+                    nft_redirect_port,
+                    http2,
+                    revision,
+                ) {
+                    Ok(desired) => supervisor.command_set_desired(desired),
+                    Err(e) => error!("Invalid desired ProxyAdd for service {}: {}", service_id, e),
+                }
+                return;
+            }
             let spec = match parse_proxy_spec(
                 &name,
                 &listen,
@@ -191,7 +185,7 @@ async fn handle_command(
                     return;
                 }
             };
-            if let Err(e) = harpoon.lock().await.add_rule(spec).await {
+            if let Err(e) = harpoon.lock().await.add_adhoc_rule(spec).await {
                 error!("Failed to add proxy '{}': {}", name, e);
             }
         }
@@ -205,7 +199,29 @@ async fn handle_command(
             nft_redirect_port,
             duplicate_to,
             http2,
+            service_id,
+            revision,
         } => {
+            if let Some(service_id) = service_id {
+                match desired_from_command(
+                    service_id,
+                    &name,
+                    &listen,
+                    &target,
+                    &protocol,
+                    tls_mode.as_deref(),
+                    nft_redirect_port,
+                    http2,
+                    revision,
+                ) {
+                    Ok(desired) => supervisor.command_set_desired(desired),
+                    Err(e) => error!(
+                        "Invalid desired ProxyUpdate for service {}: {}",
+                        service_id, e
+                    ),
+                }
+                return;
+            }
             let spec = match parse_proxy_spec(
                 &name,
                 &listen,
@@ -222,13 +238,17 @@ async fn handle_command(
                     return;
                 }
             };
-            if let Err(e) = harpoon.lock().await.update_rule(spec).await {
+            if let Err(e) = harpoon.lock().await.update_adhoc_rule(spec).await {
                 error!("Failed to update proxy '{}': {}", name, e);
             }
         }
 
-        AgentCommand::ProxyRemove { name } => {
-            if let Err(e) = harpoon.lock().await.remove_rule(&name).await {
+        AgentCommand::ProxyRemove { name, service_id } => {
+            if let Some(service_id) = service_id {
+                supervisor.command_remove_desired(service_id);
+                return;
+            }
+            if let Err(e) = harpoon.lock().await.remove_adhoc_rule(&name).await {
                 error!("Failed to remove proxy '{}': {}", name, e);
             }
         }
@@ -244,37 +264,6 @@ async fn handle_command(
             info!("Clearing all nftables rules");
             if let Err(e) = harpoon.lock().await.clear_nft_rules() {
                 error!("Failed to clear nftables rules: {}", e);
-            }
-        }
-
-        AgentCommand::FilterSync { filters } => {
-            info!("Syncing {} firewall filters", filters.len());
-            let mut parsed = Vec::new();
-            let mut errors = 0;
-            for f in &filters {
-                match harpoon::parse_filter(&f.kind, &f.pattern, &f.direction, &f.action) {
-                    Ok(filter) => {
-                        debug!(
-                            "Filter '{}': {} {} -> {}",
-                            f.name, f.kind, f.direction, f.action
-                        );
-                        parsed.push(filter);
-                    }
-                    Err(e) => {
-                        error!("Invalid filter '{}': {}", f.name, e);
-                        errors += 1;
-                    }
-                }
-            }
-            if errors > 0 {
-                warn!(
-                    "{} filters failed to parse, applying {} valid ones",
-                    errors,
-                    parsed.len()
-                );
-            }
-            if let Err(e) = harpoon.lock().await.sync_filters(parsed).await {
-                error!("Failed to sync filters: {}", e);
             }
         }
 
@@ -298,7 +287,13 @@ async fn handle_command(
             };
             let spec = ProxyRuleSpec {
                 name: format!("replay-{}", name),
-                listen: format!("0.0.0.0:{}", listen_port).parse().unwrap(),
+                listen: match format!("0.0.0.0:{}", listen_port).parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        error!("Invalid replay listen port {}: {}", listen_port, e);
+                        return;
+                    }
+                },
                 target,
                 protocol: proto,
                 tls_mode: None,
@@ -310,7 +305,7 @@ async fn handle_command(
                 "Starting replay forward '{}' ({}): :{} -> {}",
                 name, protocol, listen_port, target_addr
             );
-            if let Err(e) = harpoon.lock().await.add_rule(spec).await {
+            if let Err(e) = harpoon.lock().await.add_adhoc_rule(spec).await {
                 error!("Failed to start replay '{}': {}", name, e);
             }
         }
@@ -318,7 +313,7 @@ async fn handle_command(
         AgentCommand::ReplayStop { name } => {
             let rule_name = format!("replay-{}", name);
             info!("Stopping replay forward '{}'", name);
-            if let Err(e) = harpoon.lock().await.remove_rule(&rule_name).await {
+            if let Err(e) = harpoon.lock().await.remove_adhoc_rule(&rule_name).await {
                 error!("Failed to stop replay '{}': {}", name, e);
             }
         }
@@ -364,6 +359,15 @@ mod tests {
         assert!(matches!(cmd, AgentCommand::DockerListContainers));
     }
 
+    /// Service ports no longer travel through commands
+    #[test]
+    fn sniffer_config_command_is_gone() {
+        assert!(
+            serde_json::from_str::<AgentCommand>(r#"{"type":"SnifferConfig","ports":[80]}"#)
+                .is_err()
+        );
+    }
+
     // The command listener feeds raw bytes straight into from_slice
     // garbage on the subject must be a clean Err (warn + drop),
     // never a panic or a misapplied command.
@@ -405,13 +409,118 @@ mod tests {
     /// Known variant carrying extra fields from a newer backend still parses
     #[test]
     fn command_with_unknown_fields_still_parses() {
-        let cmd: AgentCommand =
-            serde_json::from_str(r#"{"type":"SnifferConfig","ports":[80],"future":true}"#)
-                .expect("parses with extra fields");
-        assert!(matches!(cmd, AgentCommand::SnifferConfig { ports } if ports == vec![80]));
+        let cmd: AgentCommand = serde_json::from_str(r#"{"type":"NftablesClear","future":true}"#)
+            .expect("parses with extra fields");
+        assert!(matches!(cmd, AgentCommand::NftablesClear));
+    }
+
+    /// The protect flow dispatches service-keyed commands: they parse and
+    /// carry the original port + revision for the desired-state ledger.
+    #[test]
+    fn backend_protect_json_parses_as_desired_command() {
+        let wire = r#"{
+            "type": "ProxyAdd",
+            "service_id": 42,
+            "revision": 7,
+            "name": "protect-42-team-site",
+            "listen": "0.0.0.0:18080",
+            "target": "127.0.0.1:8080",
+            "protocol": "tcp",
+            "nft_redirect_port": 8080,
+            "http2": true
+        }"#;
+        let cmd: AgentCommand = serde_json::from_str(wire).expect("parse protect dispatch");
+        let AgentCommand::ProxyAdd {
+            service_id,
+            revision,
+            ..
+        } = cmd
+        else {
+            panic!("wrong variant");
+        };
+        assert_eq!(service_id, Some(42));
+        assert_eq!(revision, 7);
+    }
+
+    /// Desired commands without the original port are rejected: exclusion
+    /// and redirect both depend on it.
+    #[test]
+    fn desired_command_without_original_port_is_rejected() {
+        let parsed: AgentCommand =
+            serde_json::from_str(r#"{"type":"ProxyAdd","service_id":1,"name":"x","listen":"0.0.0.0:10080","target":"127.0.0.1:80","protocol":"tcp"}"#)
+                .expect("parses");
+        let AgentCommand::ProxyAdd {
+            service_id,
+            name,
+            listen,
+            target,
+            protocol,
+            tls_mode,
+            nft_redirect_port,
+            http2,
+            revision,
+            ..
+        } = parsed
+        else {
+            panic!("wrong variant");
+        };
+        assert!(desired_from_command(
+            service_id.unwrap(),
+            &name,
+            &listen,
+            &target,
+            &protocol,
+            tls_mode.as_deref(),
+            nft_redirect_port,
+            http2,
+            revision
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn desired_command_parses_into_desired_state() {
+        let parsed: AgentCommand = serde_json::from_str(
+            r#"{"type":"ProxyAdd","service_id":3,"name":"protect-3-dns","listen":"0.0.0.0:10053","target":"127.0.0.1:53","protocol":"udp","nft_redirect_port":53,"revision":9}"#,
+        )
+        .expect("parses");
+        let AgentCommand::ProxyAdd {
+            service_id,
+            name,
+            listen,
+            target,
+            protocol,
+            tls_mode,
+            nft_redirect_port,
+            http2,
+            revision,
+            ..
+        } = parsed
+        else {
+            panic!("wrong variant");
+        };
+        let desired = desired_from_command(
+            service_id.unwrap(),
+            &name,
+            &listen,
+            &target,
+            &protocol,
+            tls_mode.as_deref(),
+            nft_redirect_port,
+            http2,
+            revision,
+        )
+        .expect("valid desired");
+        assert_eq!(desired.service_id, 3);
+        assert_eq!(desired.protocol, TransportProto::Udp);
+        assert_eq!(desired.original_port, 53);
+        assert_eq!(desired.listen.port(), 10053);
+        assert_eq!(desired.revision, 9);
+        assert_eq!(desired.tls_mode, None);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_proxy_spec(
     name: &str,
     listen: &str,
@@ -439,5 +548,53 @@ fn parse_proxy_spec(
         nft_redirect_port,
         duplicate_to,
         http2,
+    })
+}
+
+/// Parse a service-keyed command into desired proxy state
+#[allow(clippy::too_many_arguments)]
+fn desired_from_command(
+    service_id: u64,
+    name: &str,
+    listen: &str,
+    target: &str,
+    protocol: &str,
+    tls_mode: Option<&str>,
+    nft_redirect_port: Option<u16>,
+    http2: bool,
+    revision: u64,
+) -> anyhow::Result<ProxyDesired> {
+    let Some(original_port) = nft_redirect_port else {
+        anyhow::bail!(
+            "desired proxy for service {} needs nft_redirect_port (the original service port)",
+            service_id
+        );
+    };
+    if original_port == 0 {
+        anyhow::bail!("desired proxy original port must not be 0");
+    }
+    let spec = parse_proxy_spec(
+        name,
+        listen,
+        target,
+        protocol,
+        tls_mode.map(String::from),
+        Some(original_port),
+        None,
+        http2,
+    )?;
+    Ok(ProxyDesired {
+        service_id,
+        name: spec.name,
+        listen: spec.listen,
+        target: spec.target,
+        protocol: match spec.protocol {
+            Protocol::Tcp => TransportProto::Tcp,
+            Protocol::Udp => TransportProto::Udp,
+        },
+        original_port,
+        tls_mode: spec.tls_mode,
+        http2: spec.http2,
+        revision,
     })
 }

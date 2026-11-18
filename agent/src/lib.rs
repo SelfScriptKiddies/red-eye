@@ -10,12 +10,15 @@ mod commands;
 mod config;
 /// Public for the `list_containers` live-verification example.
 pub mod docker;
+mod enforce;
 mod harpoon;
 mod heartbeat;
 mod nats;
 mod nftables;
 mod packet_synthesis;
+mod proxy_state;
 mod sniffer;
+mod supervisor;
 mod tls_certs;
 mod updates;
 pub mod version;
@@ -24,7 +27,7 @@ mod wire;
 use config::AgentConfig;
 use harpoon::HarpoonEngine;
 use nats::NatsClient;
-use updates::{create_ports_cache, create_restart_notifier};
+use updates::create_restart_notifier;
 
 fn init_logging(level: &str) {
     use tracing_subscriber::{fmt, EnvFilter};
@@ -43,8 +46,13 @@ pub async fn run() {
     // Initialize rustls crypto provider (required by rustls 0.23+)
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let agent_id = config.resolved_agent_id();
-    info!("Starting Red Eye Agent '{}'", agent_id);
+    // Stable identity: AGENT_ID wins, else a persistent id under DATA_DIR
+    // (survives machine-IP changes and restarts).
+    let agent_id = config.stable_agent_id();
+    // Boot identifier: fresh per process start, so the backend can detect
+    // restarts of the same agent id and re-send a full snapshot.
+    let boot_id = uuid::Uuid::new_v4().to_string();
+    info!("Starting Red Eye Agent '{}' (boot {})", agent_id, boot_id);
     debug!("Config: {:?}", config);
 
     // Initialize TLS CA certificates
@@ -72,45 +80,90 @@ pub async fn run() {
     };
     info!("Connected to NATS at {}", config.nats_host);
 
-    // Shared port state and sniffer health (reported via heartbeat)
-    let ports_cache = create_ports_cache(config.ports.clone());
+    // Shared control-plane state. Passive capture keys start EMPTY and
+    // are populated only by supervisor recomputes (assigned services
+    // minus proxied originals): a proxied key can never enter passive
+    // capture, not even briefly at boot. Network settings start from the
+    // env/CLI bootstrap values.
     let (restart_tx, restart_rx) = create_restart_notifier();
     let sniffer_health = Arc::new(sniffer::SnifferHealth::default());
-
-    // Harpoon engine with TLS certs and nftables manager
-    let tls_available = tls_certs.is_some();
-    let harpoon_engine = HarpoonEngine::new(ports_cache.clone(), restart_tx.clone(), tls_certs);
-    let harpoon = Arc::new(Mutex::new(harpoon_engine));
-
-    // Capture forwarder: harpoon packets → NATS (same format as sniffer)
-    let capture_mgr = harpoon.lock().await.capture_manager();
-    let machine_ip: std::net::IpAddr = config.machine_ip.parse().unwrap_or_else(|_| {
-        warn!("Invalid machine_ip '{}', using 0.0.0.0", config.machine_ip);
-        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+    let applied_revision = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let last_sync_error: Arc<std::sync::RwLock<Option<String>>> =
+        Arc::new(std::sync::RwLock::new(None));
+    // Enforcement plans flow from the update listener to the engine owner.
+    let (enforce_tx, enforce_rx) = tokio::sync::mpsc::channel(8);
+    let state = Arc::new(updates::AppState {
+        ports: updates::create_ports_cache(),
+        excluded_ports: updates::create_ports_cache(),
+        ports_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        config: Arc::new(std::sync::RwLock::new(updates::EffectiveConfig {
+            interface: config.interface.clone(),
+            machine_ip: config.machine_ip.parse().unwrap_or_else(|_| {
+                warn!("Invalid machine_ip '{}', using 0.0.0.0", config.machine_ip);
+                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+            }),
+        })),
+        restart_tx: restart_tx.clone(),
+        health: sniffer_health.clone(),
+        services: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        acker: Arc::new(updates::RevisionAcker::new(
+            applied_revision.clone(),
+            last_sync_error.clone(),
+        )),
+        applied_revision,
+        last_sync_error,
+        enforce_tx,
+        enforcement_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        last_enforcement_error: Arc::new(std::sync::RwLock::new(None)),
+        agent_id: agent_id.clone(),
+        boot_id: boot_id.clone(),
+        config_source: config.clone(),
     });
-    harpoon::spawn_capture_forwarder(capture_mgr, nats.clone(), machine_ip);
+
+    // Harpoon engine with TLS certs and nftables manager.
+    let tls_available = tls_certs.is_some();
+    let harpoon = Arc::new(Mutex::new(HarpoonEngine::new(tls_certs)));
+
+    // Proxy supervisor: desired/effective ledger, supervised transitions,
+    // recovery. Constructed BEFORE any capture starts, so the first
+    // snapshot reconciles proxies and passive exclusions in one pass.
+    let supervisor =
+        supervisor::spawn_proxy_supervisor(harpoon.clone(), state.clone(), tls_available);
+
+    // Capture forwarder: harpoon packets -> NATS (reads per-packet machine
+    // IP and rule protocol from the shared state). Exactly one forwarder
+    // for ALL proxy rules; rule updates never create additional ones.
+    let capture_mgr = harpoon.lock().await.capture_manager();
+    let rule_protocols = harpoon.lock().await.rule_protocols();
+    let forwarder_counters = harpoon::new_forwarder_counters();
+    harpoon::spawn_capture_forwarder(
+        capture_mgr,
+        nats.clone(),
+        rule_protocols,
+        state.config.clone(),
+        forwarder_counters.clone(),
+    );
 
     // Start background subsystems
-    updates::spawn_updates_listener(
-        nats.clone(),
-        &config,
-        ports_cache.clone(),
-        restart_tx.clone(),
-    );
+    updates::spawn_updates_listener(nats.clone(), state.clone(), supervisor.clone());
     heartbeat::spawn_heartbeat(
         nats.clone(),
-        &config,
-        ports_cache.clone(),
         harpoon.clone(),
+        state.clone(),
+        supervisor.clone(),
+        forwarder_counters.clone(),
         tls_available,
-        sniffer_health.clone(),
     );
     commands::spawn_command_listener(
         nats.clone(),
-        ports_cache.clone(),
-        restart_tx.clone(),
+        state.clone(),
         harpoon.clone(),
+        supervisor.clone(),
     );
+
+    // Snapshot enforcement: filter hot-swaps + nftables bans with expiry,
+    // fed by the update listener through a bounded plan channel.
+    enforce::spawn_enforcement(harpoon.clone(), state.clone(), enforce_rx);
 
     // SIGTERM (systemctl restart/stop) and SIGINT must clean up nftables
     // before exit, otherwise the table keeps redirecting traffic to a dead
@@ -118,7 +171,18 @@ pub async fn run() {
     spawn_signal_handler(harpoon.clone(), nats.clone());
 
     // Run sniffer (blocks until shutdown)
-    sniffer::run_sniffer_loop(nats, &config, ports_cache, restart_rx, sniffer_health).await;
+    sniffer::run_sniffer_loop(
+        nats,
+        state.ports.clone(),
+        state.excluded_ports.clone(),
+        state.ports_generation.clone(),
+        restart_rx,
+        sniffer_health,
+        state.config.clone(),
+        state.last_sync_error.clone(),
+        state.acker.clone(),
+    )
+    .await;
 
     // Cleanup: stop harpoon + nftables
     harpoon.lock().await.shutdown().await;

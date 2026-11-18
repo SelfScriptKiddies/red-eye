@@ -114,6 +114,63 @@ services:
     depends_on:
       - backend
 
+  # --- LLM-SOC and MCP (all restrictive defaults: MCP read-only, SOC off) ---
+
+  # Remote MCP interface. Read-only unless the operator redeploys with
+  # MCP_MODE=full_control AND MCP_ALLOW_FULL_CONTROL=true. Holds no
+  # database/NATS credentials; talks only to the backend API. MCP_SERVICE_TOKEN
+  # and MCP_TOKEN: generate in Red Eye Settings (MCP section), never bake into
+  # the image. Remote access must terminate TLS at the central nginx proxying
+  # /mcp with buffering disabled and bounded body size/timeouts.
+  red-eye-mcp:
+    build:
+      context: .
+      dockerfile: red-eye-mcp/Dockerfile
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      - RED_EYE_BACKEND_URL=http://backend:8000
+      - MCP_SERVICE_TOKEN=${MCP_SERVICE_TOKEN:-}
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-}
+      - MCP_MODE=read_only
+      - MCP_ALLOW_FULL_CONTROL=false
+      - MCP_BIND=0.0.0.0:8081
+    depends_on:
+      - backend
+
+  # LLM-SOC triage worker. Talks ONLY to the backend job API and the
+  # read-only MCP service; no DB/NATS credentials, no volumes. SOC stays
+  # disabled (soc_enabled=false) until an operator enables it in Settings.
+  soc-worker:
+    build:
+      context: .
+      dockerfile: soc-worker/Dockerfile
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      - RED_EYE_BACKEND_URL=http://backend:8000
+      - RED_EYE_MCP_URL=http://red-eye-mcp:8081/mcp
+      - SOC_WORKER_TOKEN=${SOC_WORKER_TOKEN:-}
+      - MCP_TOKEN=${MCP_TOKEN:-}
+      - WORKER_ID=soc-worker-1
+
+  # The self-hosted LLM endpoint is operator-managed and NOT shipped here:
+  # point soc_base_url at it in Settings (default http://llm:8080/v1).
+  # Example (vLLM serving a small quantized model on the compose network):
+  # llm:
+  #   image: vllm/vllm-openai:latest
+  #   command: --model /models/qwen3.8-flash-next-iq3 --port 8080
+  #   volumes:
+  #     - ./volume/llm-models:/models:ro
+
   # --- Monitoring (optional) ---
 
   prometheus:

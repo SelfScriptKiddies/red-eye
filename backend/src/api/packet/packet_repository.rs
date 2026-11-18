@@ -12,11 +12,24 @@ impl PacketRepository {
     }
 
     pub async fn get_packet_by_id(&self, packet_id: i64) -> Result<Packet, sqlx::Error> {
+        // Union live + saved: a starred packet stays readable after its
+        // partition is dropped. DISTINCT ON (id) keeps the live copy while
+        // both exist (archival window); saved storage failure surfaces as
+        // an explicit error, never as a silently missing packet.
         sqlx::query_as::<_, Packet>(
             r#"
             SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
-            FROM packets
-            WHERE id = $1
+            FROM (
+                SELECT DISTINCT ON (id) id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
+                FROM (
+                    SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data, 0 AS src
+                    FROM packets WHERE id = $1
+                    UNION ALL
+                    SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data, 1 AS src
+                    FROM saved_packet WHERE id = $1
+                ) u
+                ORDER BY id, src
+            ) d
             "#,
         )
         .bind(packet_id)
@@ -29,12 +42,25 @@ impl PacketRepository {
         stream_id: i64,
         limit: i64,
     ) -> Result<Vec<Packet>, sqlx::Error> {
+        // Live + saved union deduplicated by original id, preserving the
+        // (timestamp, microseconds, id) ordering the UI relies on. Body
+        // offsets keep referencing the original packet bytes (saved rows
+        // are verbatim copies).
         sqlx::query_as::<_, Packet>(
             r#"
             SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
-            FROM packets
-            WHERE stream_id = $1
-            ORDER BY timestamp, timestamp_microseconds
+            FROM (
+                SELECT DISTINCT ON (id) id, timestamp, timestamp_microseconds, direction, stream_id, packet_data
+                FROM (
+                    SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data, 0 AS src
+                    FROM packets WHERE stream_id = $1
+                    UNION ALL
+                    SELECT id, timestamp, timestamp_microseconds, direction, stream_id, packet_data, 1 AS src
+                    FROM saved_packet WHERE stream_id = $1
+                ) u
+                ORDER BY id, src
+            ) d
+            ORDER BY timestamp, timestamp_microseconds, id
             LIMIT $2
             "#,
         )

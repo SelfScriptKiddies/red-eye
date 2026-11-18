@@ -12,7 +12,16 @@ CREATE TABLE IF NOT EXISTS service (
     decrypt_tls BOOLEAN NOT NULL DEFAULT FALSE, -- Автоматически расшифровывать TLS-трафик
     http_parse BOOLEAN NOT NULL DEFAULT FALSE, -- HTTP/1.1 L7 парсинг и автосклейка пакетов
     http2_parse BOOLEAN NOT NULL DEFAULT FALSE, -- HTTP/2 парсинг через harpoon proxy
-    CONSTRAINT unique_service_port UNIQUE (name, port) -- Уникальность сочетания имени сервиса и порта
+    alert_flag_leak BOOLEAN NOT NULL DEFAULT FALSE, -- Алерт при утечке флага в трафике
+    -- Транспортный протокол сервиса: TCP или UDP. TCP и UDP сервисы могут
+    -- делить одно имя и порт как отдельные строки.
+    protocol TEXT NOT NULL DEFAULT 'TCP' CHECK (protocol IN ('TCP', 'UDP')),
+    -- TRUE = сервис применяется ко всем текущим и будущим агентам;
+    -- FALSE = agent_service содержит полный явный набор агентов.
+    is_global BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Уникальность сочетания имени, порта и протокола (TCP и UDP сервисы
+    -- могут делить имя и порт)
+    CONSTRAINT unique_service_name_port_protocol UNIQUE (name, port, protocol)
 );
 
 -- Создание индекса на поле port для ускорения поиска по порту

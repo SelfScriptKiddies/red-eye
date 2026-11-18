@@ -805,6 +805,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "filter-dsl"
+version = "0.1.0"
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3130,6 +3134,7 @@ dependencies = [
  "config 0.15.9",
  "config-manager",
  "dashmap",
+ "filter-dsl",
  "futures",
  "hex",
  "httparse",

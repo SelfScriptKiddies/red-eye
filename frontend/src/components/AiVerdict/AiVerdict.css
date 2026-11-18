@@ -1,0 +1,236 @@
+/* JEV verdict badge, history and detail modal. All content is text;
+   colors only distinguish classes. */
+
+.jev-panel {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+}
+
+.jev-panel-empty {
+    font-size: 11px;
+    color: var(--re-text-muted, #888);
+}
+
+.jev-badge {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    background: #1a1a1a;
+    color: #ddd;
+    text-align: left;
+}
+
+.jev-badge-class {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.jev-badge-meta {
+    font-size: 10px;
+    font-weight: 400;
+    opacity: 0.85;
+}
+
+.jev-attack {
+    border-color: #e0606a;
+    background: rgba(224, 96, 106, 0.12);
+    color: #ff8f96;
+}
+
+.jev-benign {
+    border-color: #3d5a3d;
+    color: #9fc79f;
+}
+
+.jev-truncated-flag {
+    color: #e0a060;
+}
+
+/* Attack-class accent: a small left border tint per class. */
+.jev-badge-sqli { border-left: 3px solid #e0606a; }
+.jev-badge-xss { border-left: 3px solid #e0a060; }
+.jev-badge-command_injection { border-left: 3px solid #d070e0; }
+.jev-badge-path_traversal { border-left: 3px solid #60b0e0; }
+.jev-badge-scanner { border-left: 3px solid #e0d060; }
+.jev-badge-bruteforce { border-left: 3px solid #e08060; }
+.jev-badge-exfil { border-left: 3px solid #60e0b0; }
+.jev-badge-exploit_attempt { border-left: 3px solid #e05050; }
+.jev-badge-benign { border-left: 3px solid #3d5a3d; }
+.jev-badge-other { border-left: 3px solid #888; }
+
+.jev-history-toggle {
+    background: none;
+    border: none;
+    color: var(--re-text-muted, #888);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+
+.jev-history {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 30;
+    background: #161616;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 260px;
+    overflow-y: auto;
+    min-width: 280px;
+}
+
+.jev-history-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    color: #ccc;
+    font-size: 11px;
+    padding: 4px 6px;
+    cursor: pointer;
+    text-align: left;
+    border-radius: 4px;
+}
+
+.jev-history-row:hover {
+    background: #222;
+}
+
+.jev-history-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+}
+
+.jev-history-dot.jev-attack { background: #e0606a; }
+.jev-history-dot.jev-benign { background: #3d5a3d; }
+
+.jev-history-class { text-transform: uppercase; font-weight: 600; }
+.jev-history-range { color: #999; }
+.jev-history-time { margin-left: auto; color: #777; }
+
+.jev-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.jev-modal {
+    background: #161616;
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 16px;
+    width: min(640px, 92vw);
+    max-height: 86vh;
+    overflow-y: auto;
+    color: #ddd;
+    font-size: 12px;
+}
+
+.jev-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.jev-modal-title {
+    flex: 1;
+    color: #aaa;
+}
+
+.jev-modal-close {
+    background: none;
+    border: none;
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.jev-modal-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.jev-sha code {
+    color: #888;
+    font-size: 10px;
+}
+
+.jev-section {
+    margin: 10px 0;
+}
+
+.jev-section h5 {
+    margin: 0 0 6px;
+    color: #aaa;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.jev-noul-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 3px;
+}
+
+.jev-noul-name {
+    width: 170px;
+    flex: none;
+    color: #bbb;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jev-noul-bar-wrap {
+    flex: 1;
+    height: 8px;
+    background: #222;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.jev-noul-bar {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #6090e0, #e0606a);
+    border-radius: 4px;
+}
+
+.jev-noul-value {
+    width: 84px;
+    flex: none;
+    text-align: right;
+    color: #999;
+}
+
+.jev-disclaimer {
+    color: #777;
+    font-size: 10px;
+    margin: 12px 0 0;
+}

@@ -1,7 +1,21 @@
 import './SettingsPage.css'
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AgentContainerInfo, AgentListItem, apiFetch, fetchAgentContainers } from '../../lib/api';
+import { AgentContainerInfo, AgentListItem, apiFetch, copyText, fetchAgentContainers, fetchFavoriteUsage, FavoriteUsage } from '../../lib/api';
+import { capacityPercent, formatBytes } from '../../lib/favoriteRetention';
+import {
+    buildSanityCheck,
+    buildStreamsScopeLink,
+    expressionUsesPayload,
+    filterInspectsPayload,
+    validateFilterForm,
+} from '../../lib/filterSanity';
+import { usePages } from '../../PagesProvider';
+import { UserAgentsDrawer } from '../../components/UserAgentsDrawer';
+import { buildUaDrilldownUrl } from '../../lib/userAgents';
+import { AI_SETTING_ROWS, fetchAiStatus, putAiSetting, type AiStatus } from '../../lib/aiVerdict';
+import { McpTokensBlock } from './McpTokensBlock';
+import { SocAnalysisBlock } from './SocAnalysisBlock';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -15,6 +29,114 @@ interface VersionsResponse {
     frontend?: ServiceVersionInfo;
     agents?: { agent_id: string; online: boolean; version?: string | null }[];
     cache?: { ttl_secs: number; age_secs: number };
+}
+
+interface FavoriteLimitRow {
+    key: string;
+    label: string;
+    hint: string;
+}
+
+/** The three favorite byte budgets (see favorite_max_total_bytes et al in
+ * app_settings). Workers re-read them without restarts. */
+const FAVORITE_LIMIT_ROWS: FavoriteLimitRow[] = [
+    { key: 'favorite_max_total_bytes', label: 'Общий лимит хранимого', hint: 'Максимальный суммарный объём сохранённого содержимого избранных' },
+    { key: 'favorite_segment_bytes', label: 'Лимит сегмента', hint: 'Сегмент избранного сверх этого объёма закрывается и продолжается новым стримом' },
+    { key: 'favorite_disk_reserve_bytes', label: 'Резерв диска', hint: 'Свободное место, которое должен гарантировать резерв избранных' },
+];
+
+/** Favorite storage: the three byte limits, current saved/reserved usage
+ * and validation errors. Saves go through PUT /api/settings/{key}; a
+ * rejected value surfaces instead of silently breaking star admission. */
+function FavoriteStorageBlock() {
+    const [usage, setUsage] = useState<FavoriteUsage | null>(null);
+    const [values, setValues] = useState<Record<string, string>>({});
+    const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+
+    const reload = async () => {
+        try {
+            const [u, s] = await Promise.all([
+                fetchFavoriteUsage(),
+                apiFetch<Record<string, string>>('/api/settings'),
+            ]);
+            setUsage(u);
+            setValues({
+                favorite_max_total_bytes: String(s.favorite_max_total_bytes ?? ''),
+                favorite_segment_bytes: String(s.favorite_segment_bytes ?? ''),
+                favorite_disk_reserve_bytes: String(s.favorite_disk_reserve_bytes ?? ''),
+            });
+        } catch (e) {
+            setError(`Не удалось загрузить состояние хранилища: ${e}`);
+        }
+    };
+
+    useEffect(() => { reload(); }, []);
+
+    const save = async (key: string) => {
+        setError(null);
+        setNotice(null);
+        const raw = (values[key] ?? '').trim();
+        const parsed = Number(raw);
+        if (!raw || !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+            setError(`${key}: значение должно быть целым числом байт больше нуля`);
+            return;
+        }
+        try {
+            const resp = await fetch(`/api/settings/${key}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: String(parsed) }),
+            });
+            if (!resp.ok) {
+                const body = await resp.text().catch(() => '');
+                setError(`${key}: сервер отклонил значение (${resp.status}) ${body.slice(0, 160)}`);
+                return;
+            }
+            setNotice(`${key} сохранено, применяется без перезапуска`);
+            await reload();
+        } catch (e) {
+            setError(`${key}: ошибка сохранения ${e}`);
+        }
+    };
+
+    return (
+        <div>
+            {usage && (
+                <div className="favorite-usage">
+                    <div className="favorite-usage-row">
+                        <span>Сохранено: {formatBytes(usage.saved_bytes)}</span>
+                        <span>Зарезервировано: {formatBytes(usage.reserved_bytes)} из {formatBytes(usage.max_total_bytes)} ({capacityPercent(usage.reserved_bytes, usage.max_total_bytes)}%)</span>
+                    </div>
+                    <div className="favorite-usage-row">
+                        <span>Избранных: {usage.starred_streams} (активных {usage.active_starred_streams})</span>
+                        <span>В очистке: {usage.pending_cleanup_streams}</span>
+                    </div>
+                </div>
+            )}
+            {FAVORITE_LIMIT_ROWS.map(row => (
+                <div key={row.key} className="setting-row" style={{ marginTop: '8px', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <label style={{ fontSize: '12px', color: '#ccc' }}>{row.label}</label>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            value={values[row.key] ?? ''}
+                            onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
+                            placeholder="байт"
+                            style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                        />
+                        <button className="add-btn" onClick={() => save(row.key)} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                            Сохранить
+                        </button>
+                    </div>
+                    <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>{row.hint}</p>
+                </div>
+            ))}
+            {error && <p style={{ color: '#e0606a', fontSize: '12px', margin: '8px 0 0' }}>{error}</p>}
+            {notice && !error && <p style={{ color: '#87d37c', fontSize: '12px', margin: '8px 0 0' }}>{notice}</p>}
+        </div>
+    );
 }
 
 function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo }) {
@@ -33,6 +155,202 @@ function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo })
             ) : (
                 <span className="version-error">нет данных</span>
             )}
+        </div>
+    );
+}
+
+/** AI stream analysis (JEV). Off by default: enabling requires an explicit
+ * acknowledgement that plaintext (TLS-MITM content, credentials, flags,
+ * exploit payloads) leaves the game network to OpenRouter/TypeSafe. The
+ * API key is write-only: GET /api/settings masks it, so the field starts
+ * empty and clearing sends an empty string. */
+function AiAnalysisBlock() {
+    const [status, setStatus] = useState<AiStatus | null>(null);
+    const [values, setValues] = useState<Record<string, string>>({});
+    const [apiKey, setApiKey] = useState('');
+    const [acknowledged, setAcknowledged] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+
+    const reload = useCallback(async () => {
+        try {
+            const [st, settings] = await Promise.all([
+                fetchAiStatus(),
+                apiFetch<Record<string, string>>('/api/settings'),
+            ]);
+            setStatus(st);
+            setValues({
+                ai_model: String(settings.ai_model ?? ''),
+                ai_threshold: String(settings.ai_threshold ?? ''),
+                ai_max_per_tick: String(settings.ai_max_per_tick ?? ''),
+                ai_stream_debounce_ms: String(settings.ai_stream_debounce_ms ?? ''),
+                ai_stream_min_interval_secs: String(settings.ai_stream_min_interval_secs ?? ''),
+                ai_stream_max_bytes: String(settings.ai_stream_max_bytes ?? ''),
+                ai_stream_max_entries: String(settings.ai_stream_max_entries ?? ''),
+                ai_entry_max_bytes: String(settings.ai_entry_max_bytes ?? ''),
+                ai_daily_cost_limit: String(settings.ai_daily_cost_limit ?? ''),
+                ai_verdict_retention_days: String(settings.ai_verdict_retention_days ?? ''),
+            });
+        } catch (e) {
+            setError(`Не удалось загрузить состояние JEV: ${e}`);
+        }
+    }, []);
+
+    useEffect(() => { reload(); }, [reload]);
+
+    const save = async (key: string, value: string) => {
+        setError(null);
+        setNotice(null);
+        try {
+            await putAiSetting(key, value);
+            setNotice(`${key} сохранено, применяется без перезапуска`);
+            await reload();
+        } catch (e) {
+            setError(`${key}: отклонено (${e})`);
+        }
+    };
+
+    const validateAndSave = (row: { key: string; type?: string }) => {
+        const raw = (values[row.key] ?? '').trim();
+        if (row.type === 'float') {
+            const n = Number(raw);
+            if (!raw || !Number.isFinite(n)) {
+                setError(`${row.key}: нужно число`);
+                return;
+            }
+        } else if (row.type === 'int') {
+            if (!raw || !Number.isInteger(Number(raw))) {
+                setError(`${row.key}: нужно целое число`);
+                return;
+            }
+        } else if (row.key === 'ai_model' && !raw) {
+            setError('ai_model не может быть пустым');
+            return;
+        }
+        save(row.key, raw);
+    };
+
+    const toggleEnabled = () => {
+        if (!status) return;
+        if (status.enabled) {
+            save('ai_enabled', 'false');
+            return;
+        }
+        if (!status.configured) {
+            setError('Сначала сохраните API-ключ OpenRouter');
+            return;
+        }
+        if (!acknowledged) {
+            setError('Подтвердите предупреждение о приватности, чтобы включить анализ');
+            return;
+        }
+        save('ai_enabled', 'true');
+    };
+
+    const stateLabel = (st: AiStatus): string => {
+        if (!st.enabled) return 'выключен';
+        if (!st.configured) return 'нет ключа';
+        switch (st.run_state) {
+            case 'active': return 'активен';
+            case 'backoff': return 'пауза (ошибки провайдера)';
+            case 'cost_limited': return 'лимит стоимости (до завтра)';
+            case 'unconfigured': return 'не настроен';
+            default: return st.run_state;
+        }
+    };
+
+    return (
+        <div>
+            {status && (
+                <div className="favorite-usage">
+                    <div className="favorite-usage-row">
+                        <span>Состояние: {stateLabel(status)}</span>
+                        <span>Модель: {status.model}</span>
+                    </div>
+                    <div className="favorite-usage-row">
+                        <span>Расход сегодня: ${status.cost_spent_today.toFixed(4)} из ${status.cost_limit}</span>
+                        <span>Очередь: {status.backlog} · в полёте: {status.in_flight}</span>
+                    </div>
+                    <div className="favorite-usage-row">
+                        <span>Вердикты: {status.verdicts_total} (атак: {status.attack_verdicts_total})</span>
+                        <span>Ошибки: {status.calls_failed} / невалидные: {status.invalid_responses}</span>
+                    </div>
+                </div>
+            )}
+
+            <div className="jev-warning" style={{
+                border: '1px solid #a05050', borderRadius: '8px', padding: '10px',
+                margin: '10px 0', background: 'rgba(160, 80, 80, 0.12)', fontSize: '12px',
+            }}>
+                <b>Приватность.</b> При включении содержимое трафика уходит наружу в открытом виде:
+                расшифрованный TLS-MITM текст, учётные данные, флаги и эксплойты покидают игровую
+                сеть и передаются в OpenRouter / TypeSafe. Данные нельзя отозвать после отправки.
+                Анализ только для информации: ничего не блокируется автоматически.
+                <label className="checkbox-label" style={{ display: 'block', marginTop: '8px' }}>
+                    <input
+                        type="checkbox"
+                        checked={acknowledged}
+                        onChange={(e) => setAcknowledged(e.target.checked)}
+                    />
+                    Я понимаю, что plaintext покидает сеть
+                </label>
+            </div>
+
+            <div className="setting-row">
+                <button
+                    className={`add-btn ${status?.enabled ? '' : acknowledged && status?.configured ? '' : 'disabled'}`}
+                    onClick={toggleEnabled}
+                    style={{ fontSize: '12px', padding: '6px 14px' }}
+                >
+                    {status?.enabled ? 'Выключить AI-анализ' : 'Включить AI-анализ'}
+                </button>
+                <span style={{ fontSize: '11px', color: '#888' }}>
+                    {status?.configured ? 'ключ сохранён' : 'ключ не задан'}
+                </span>
+            </div>
+
+            <div className="setting-row" style={{ marginTop: '10px', flexDirection: 'column', alignItems: 'stretch' }}>
+                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ OpenRouter (запись-только)</label>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                    <input
+                        type="password"
+                        autoComplete="off"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder={status?.configured ? 'ключ скрыт; введите новый для замены' : 'sk-or-...'}
+                        style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                    />
+                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', apiKey); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                        Сохранить
+                    </button>
+                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', ''); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                        Удалить
+                    </button>
+                </div>
+                <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>
+                    Ключ никогда не возвращается через API и не попадает в логи.
+                </p>
+            </div>
+
+            {AI_SETTING_ROWS.map(row => (
+                <div key={row.key} className="setting-row" style={{ marginTop: '8px', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <label style={{ fontSize: '12px', color: '#ccc' }}>{row.label}</label>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                        <input
+                            type="text"
+                            value={values[row.key] ?? ''}
+                            onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
+                            style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                        />
+                        <button className="add-btn" onClick={() => validateAndSave(row)} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                            Сохранить
+                        </button>
+                    </div>
+                    <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>{row.hint}</p>
+                </div>
+            ))}
+            {error && <p style={{ color: '#e0606a', fontSize: '12px', margin: '8px 0 0' }}>{error}</p>}
+            {notice && !error && <p style={{ color: '#87d37c', fontSize: '12px', margin: '8px 0 0' }}>{notice}</p>}
         </div>
     );
 }
@@ -86,6 +404,12 @@ interface Service {
     id?: number;
     name: string;
     port: number;
+    /** Transport protocol: "TCP" | "UDP" (required on create) */
+    protocol: string;
+    /** true = applies to all agents; false = explicit agent_ids set */
+    is_global: boolean;
+    /** Explicit agent set when not global */
+    agent_ids: string[];
     chunked_transfer_encoding: boolean;
     urldecode: boolean;
     merge_adjacent_packets: boolean;
@@ -96,7 +420,20 @@ interface Service {
     alert_flag_leak?: boolean;
 }
 
-interface Filter {
+interface AgentForAssignment {
+    agent_id: string;
+    online: boolean;
+}
+
+interface Threshold {
+    threshold_count: number | null;
+    threshold_window_secs: number | null;
+    threshold_group_by: string | null;
+    threshold_cooldown_secs: number | null;
+    threshold_block_secs: number | null;
+}
+
+interface Filter extends Threshold {
     id?: number;
     name: string;
     color: number;
@@ -104,9 +441,64 @@ interface Filter {
     template: string;
     direction: string;
     special_type: string | null;
+    action: string;
+    enabled: boolean;
+    ip_network: string | null;
+    ip_endpoint: string | null;
+    expression_source: string | null;
+    service_targets_global: boolean;
+    agent_targets_global: boolean;
+    service_ids: number[];
+    agent_ids: string[];
+    expires_at: string | null;
+    revision: number;
 }
 
+interface ActiveBlock {
+    id: number;
+    filter_id: number;
+    filter_name: string;
+    agent_id: string;
+    remote_ip: string;
+    remaining_secs: number;
+}
+
+interface FilterEventRow {
+    id: number;
+    filter_id: number;
+    agent_id: string;
+    remote_ip: string | null;
+    kind: string;
+    created_at: number;
+}
+
+const emptyFilter = (): Filter => ({
+    name: '',
+    color: 0,
+    template_type: 'regex',
+    template: '',
+    direction: 'both',
+    special_type: null,
+    action: 'tag',
+    enabled: true,
+    ip_network: null,
+    ip_endpoint: 'src',
+    expression_source: null,
+    service_targets_global: true,
+    agent_targets_global: true,
+    service_ids: [],
+    agent_ids: [],
+    threshold_count: null,
+    threshold_window_secs: null,
+    threshold_group_by: null,
+    threshold_cooldown_secs: null,
+    threshold_block_secs: null,
+    expires_at: null,
+    revision: 0,
+});
+
 export function SettingsPage() {
+    const { navigate } = usePages();
     // Settings state
     const [farmUrl, setFarmUrl] = useState('');
     const [farmEnabled, setFarmEnabled] = useState(false);
@@ -119,6 +511,9 @@ export function SettingsPage() {
     const [serviceForm, setServiceForm] = useState<Service>({
         name: '',
         port: 8080,
+        protocol: 'TCP',
+        is_global: true,
+        agent_ids: [],
         chunked_transfer_encoding: false,
         urldecode: false,
         merge_adjacent_packets: false,
@@ -128,19 +523,28 @@ export function SettingsPage() {
         http2_parse: false,
         alert_flag_leak: false
     });
+    // Known agents for the explicit-assignment editor (online + offline)
+    const [agentsForAssignment, setAgentsForAssignment] = useState<AgentForAssignment[]>([]);
+    // "pending sync" notice from the last save (publication failure)
+    const [serviceSyncNotice, setServiceSyncNotice] = useState<string | null>(null);
+    // Open User-Agent listing drawer (one HTTP service at a time).
+    const [uaService, setUaService] = useState<Service | null>(null);
     
     // Filters state
     const [filters, setFilters] = useState<Filter[]>([]);
     const [filterModalOpen, setFilterModalOpen] = useState(false);
     const [editingFilter, setEditingFilter] = useState<Filter | null>(null);
-    const [filterForm, setFilterForm] = useState<Filter>({ 
-        name: '', 
-        color: 0,
-        template_type: 'regex',
-        template: '',
-        direction: 'both',
-        special_type: null
-    });
+    const [filterForm, setFilterForm] = useState<Filter>(emptyFilter());
+    const [filterError, setFilterError] = useState<string | null>(null);
+    // Active blocks + recent threshold events (Settings refresh both)
+    const [activeBlocks, setActiveBlocks] = useState<ActiveBlock[]>([]);
+    const [filterEvents, setFilterEvents] = useState<FilterEventRow[]>([]);
+    // Sanity check state (test payload + generated curl)
+    const [sanitySample, setSanitySample] = useState('');
+    const [sanityHost, setSanityHost] = useState('');
+    const [sanityServiceId, setSanityServiceId] = useState('');
+    const [sanityAgentId, setSanityAgentId] = useState('');
+    const [sanityResult, setSanityResult] = useState<{ curl: string; resultLink: string; nonce: string } | null>(null);
 
     // "Add by container" state
     const [containerModalOpen, setContainerModalOpen] = useState(false);
@@ -244,6 +648,9 @@ export function SettingsPage() {
             setServiceForm({
                 name: '',
                 port: 8080,
+                protocol: 'TCP',
+                is_global: true,
+                agent_ids: [],
                 chunked_transfer_encoding: false,
                 urldecode: false,
                 merge_adjacent_packets: false,
@@ -254,6 +661,12 @@ export function SettingsPage() {
                 alert_flag_leak: false
             });
         }
+        // Refresh the agent list the operator assigns to (online + offline)
+        fetch(`${API_URL}/agent`)
+            .then(r => (r.ok ? r.json() : []))
+            .then(data => setAgentsForAssignment(Array.isArray(data) ? data : Object.values(data)))
+            .catch(() => {});
+        setServiceSyncNotice(null);
         setServiceModalOpen(true);
     };
 
@@ -264,19 +677,27 @@ export function SettingsPage() {
 
     const saveService = async () => {
         if (!serviceForm.name.trim()) return;
-        
+        const port = Number(serviceForm.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            setServiceSyncNotice('Порт должен быть в диапазоне 1-65535');
+            return;
+        }
+
         try {
-            const url = editingService 
-                ? `${API_URL}/service/${editingService.id}` 
+            const url = editingService
+                ? `${API_URL}/service/${editingService.id}`
                 : `${API_URL}/service`;
             const method = editingService ? 'PUT' : 'POST';
-            
+
             const response = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name: serviceForm.name,
-                    port: serviceForm.port,
+                    port,
+                    protocol: serviceForm.protocol,
+                    is_global: serviceForm.is_global,
+                    agent_ids: serviceForm.is_global ? [] : serviceForm.agent_ids,
                     chunked_transfer_encoding: serviceForm.chunked_transfer_encoding,
                     urldecode: serviceForm.urldecode,
                     merge_adjacent_packets: serviceForm.merge_adjacent_packets,
@@ -287,13 +708,25 @@ export function SettingsPage() {
                     alert_flag_leak: serviceForm.alert_flag_leak ?? false
                 })
             });
-            
+
             if (response.ok) {
+                const body = await response.json().catch(() => null);
+                // A committed write with failed NATS publication stays
+                // visible as pending sync; agents converge later via
+                // reconciliation, so the operator must see it.
+                if (body?.sync === 'pending') {
+                    setServiceSyncNotice('Сохранено, но публикация не удалась — синхронизация агентов в ожидании');
+                } else {
+                    closeServiceModal();
+                }
                 await fetchServices();
-                closeServiceModal();
+            } else {
+                const text = await response.text().catch(() => '');
+                setServiceSyncNotice(`Ошибка сохранения (${response.status}): ${text.slice(0, 200)}`);
             }
         } catch (error) {
             console.error('Error saving service:', error);
+            setServiceSyncNotice(`Ошибка сохранения: ${error}`);
         }
     };
 
@@ -419,6 +852,11 @@ export function SettingsPage() {
     const saveContainerService = async () => {
         if (!containerServiceName.trim() || !containerPort) return;
         setCreatingFromContainer(true);
+        // Protocol follows the container port report (tcp | udp | sctp);
+        // anything but udp degrades to TCP, sctp is not serviceable.
+        const selectedContainer = containers?.find(x => x.name === selectedContainerName);
+        const preferredPort = selectedContainer?.ports.find(p => p.port === containerPort);
+        const protocol = preferredPort?.protocol.toLowerCase() === 'udp' ? 'UDP' : 'TCP';
         try {
             // Same create API and defaults as the manual "add by port" form
             const response = await fetch(`${API_URL}/service`, {
@@ -427,6 +865,9 @@ export function SettingsPage() {
                 body: JSON.stringify({
                     name: containerServiceName,
                     port: containerPort,
+                    protocol,
+                    is_global: true,
+                    agent_ids: [],
                     chunked_transfer_encoding: false,
                     urldecode: false,
                     merge_adjacent_packets: false,
@@ -438,8 +879,15 @@ export function SettingsPage() {
                 })
             });
             if (response.ok) {
+                const body = await response.json().catch(() => null);
+                if (body?.sync === 'pending') {
+                    alert('Сервис сохранён, но публикация не удалась — синхронизация агентов в ожидании');
+                }
                 await fetchServices();
                 closeContainerModal();
+            } else {
+                const text = await response.text().catch(() => '');
+                alert(`Ошибка создания сервиса (${response.status}): ${text.slice(0, 200)}`);
             }
         } catch (error) {
             console.error('Error creating service from container:', error);
@@ -456,26 +904,37 @@ export function SettingsPage() {
                 const data = await response.json();
                 setFilters(Object.values(data));
             }
+            const [blocksResp, eventsResp] = await Promise.all([
+                fetch(`${API_URL}/blocks?limit=50`),
+                fetch(`${API_URL}/filter-events?limit=20`),
+            ]);
+            if (blocksResp.ok) setActiveBlocks(await blocksResp.json());
+            if (eventsResp.ok) setFilterEvents(await eventsResp.json());
         } catch (error) {
             console.error('Error fetching filters:', error);
         }
     };
 
     const openFilterModal = (filter?: Filter) => {
+        setFilterError(null);
+        setSanityResult(null);
+        setSanitySample('');
         if (filter) {
             setEditingFilter(filter);
-            setFilterForm(filter);
+            setFilterForm({ ...emptyFilter(), ...filter });
+            // Substring matchers prefill the sanity sample from the pattern.
+            if (filter.template_type === 'substr' || filter.template_type === 'bsubstr') {
+                setSanitySample(filter.template);
+            }
         } else {
             setEditingFilter(null);
-            setFilterForm({
-                name: '',
-                color: 0,
-                template_type: 'regex',
-                template: '',
-                direction: 'both',
-                special_type: null
-            });
+            setFilterForm(emptyFilter());
         }
+        // Agents for the explicit target editor and the sanity target.
+        fetch(`${API_URL}/agent`)
+            .then(r => (r.ok ? r.json() : []))
+            .then(data => setAgentsForAssignment(Array.isArray(data) ? data : Object.values(data)))
+            .catch(() => {});
         setFilterModalOpen(true);
     };
 
@@ -484,38 +943,76 @@ export function SettingsPage() {
         setEditingFilter(null);
     };
 
+    const buildFilterPayload = (form: Filter) => ({
+        name: form.name,
+        color: form.color,
+        template_type: form.template_type,
+        template: form.template_type === 'ip_cidr' || form.template_type === 'expression' ? '' : form.template,
+        direction: form.direction,
+        special_type: null,
+        action: form.action,
+        enabled: form.enabled,
+        ip_network: form.template_type === 'ip_cidr' ? form.ip_network : null,
+        ip_endpoint: form.template_type === 'ip_cidr' ? form.ip_endpoint : null,
+        expression_source: form.template_type === 'expression' ? form.expression_source : null,
+        service_targets_global: form.service_targets_global,
+        service_ids: form.service_targets_global ? [] : form.service_ids,
+        agent_targets_global: form.agent_targets_global,
+        agent_ids: form.agent_targets_global ? [] : form.agent_ids,
+        threshold_count: form.threshold_count,
+        threshold_window_secs: form.threshold_window_secs,
+        threshold_group_by: form.threshold_group_by,
+        threshold_cooldown_secs: form.threshold_cooldown_secs,
+        threshold_block_secs: form.threshold_block_secs,
+        expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+    });
+
     const saveFilter = async () => {
-        if (!filterForm.name.trim() || !filterForm.template.trim()) return;
-        
+        const validationError = validateFilterForm(filterForm);
+        if (validationError) {
+            setFilterError(validationError);
+            return;
+        }
+
         try {
-            const url = editingFilter 
-                ? `${API_URL}/tag/names/${editingFilter.id}` 
+            const url = editingFilter
+                ? `${API_URL}/tag/names/${editingFilter.id}`
                 : `${API_URL}/tag/names`;
             const method = editingFilter ? 'PUT' : 'POST';
-            
+
             const response = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: filterForm.name,
-                    color: filterForm.color,
-                    template_type: filterForm.template_type,
-                    template: filterForm.template,
-                    direction: filterForm.direction,
-                    special_type: filterForm.special_type || null
-                })
+                body: JSON.stringify(buildFilterPayload(filterForm))
             });
-            
+
             if (response.ok) {
+                const body = await response.json().catch(() => null);
+                if (body?.revision && body?.action) {
+                    // ok - revision stamped server-side
+                }
                 await fetchFilters();
                 closeFilterModal();
             } else {
                 const text = await response.text().catch(() => '');
-                alert(`Не удалось сохранить фильтр (${response.status}): ${text || response.statusText}`);
+                setFilterError(`Не удалось сохранить фильтр (${response.status}): ${text.slice(0, 200) || response.statusText}`);
             }
         } catch (error) {
             console.error('Error saving filter:', error);
-            alert(`Не удалось сохранить фильтр: ${error}`);
+            setFilterError(`Не удалось сохранить фильтр: ${error}`);
+        }
+    };
+
+    const toggleFilterEnabled = async (filter: Filter) => {
+        try {
+            await fetch(`${API_URL}/tag/names/${filter.id}/enabled`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: !filter.enabled })
+            });
+            fetchFilters();
+        } catch (error) {
+            console.error('Error toggling filter:', error);
         }
     };
 
@@ -539,6 +1036,43 @@ export function SettingsPage() {
         }
     };
 
+    const unbanBlock = async (id: number) => {
+        try {
+            const response = await fetch(`${API_URL}/blocks/${id}`, { method: 'DELETE' });
+            if (!response.ok && response.status !== 404) {
+                const text = await response.text().catch(() => '');
+                alert(`Не удалось разблокировать (${response.status}): ${text || response.statusText}`);
+            }
+            fetchFilters();
+        } catch (error) {
+            console.error('Error unbanning:', error);
+        }
+    };
+
+    // Sanity check: generate the replay curl + scoped result link. The
+    // command is DISPLAY ONLY - the operator runs it from a suitable host.
+    const generateSanity = () => {
+        if (!editingFilter && !filters.length) return;
+        const filterId = editingFilter?.id;
+        const service = services.find(s => String(s.id) === sanityServiceId);
+        if (!filterId || !service || !sanityAgentId) {
+            setFilterError('Выберите агента и сервис и сохраните фильтр перед проверкой');
+            return;
+        }
+        const host = sanityHost.trim() || '10.10.<team>.<host>';
+        const result = buildSanityCheck(
+            { id: filterId, template_type: filterForm.template_type, template: filterForm.template, expression_source: filterForm.expression_source, ip_network: filterForm.ip_network },
+            sanitySample,
+            { agentId: sanityAgentId, serviceName: service.name, serviceHost: host, servicePort: service.port, https: false },
+            ''
+        );
+        setSanityResult(result);
+    };
+
+    const streamsScope = editingFilter && !filterInspectsPayload(editingFilter)
+        ? buildStreamsScopeLink(editingFilter, sanityAgentId || null, '')
+        : null;
+
     return (
         <div className="SettingsPage">
             <div className="settings-columns">
@@ -556,8 +1090,20 @@ export function SettingsPage() {
                             <div key={service.id} className="settings-card">
                                 <div className="card-content">
                                     <h4>{service.name}</h4>
-                                    <p className="port-info">Порт: {service.port}</p>
+                                    <p className="port-info">
+                                        Порт: {service.port}/{(service.protocol || 'TCP').toLowerCase()}
+                                        {' · '}
+                                        {service.is_global
+                                            ? 'Все агенты'
+                                            : `Агентов: ${service.agent_ids?.length ?? 0}`}
+                                    </p>
                                     <div className="service-options">
+                                        {!service.is_global && (service.agent_ids ?? []).slice(0, 3).map(a => (
+                                            <span key={a} className="info-badge" title={a}>{a}</span>
+                                        ))}
+                                        {!service.is_global && (service.agent_ids?.length ?? 0) > 3 && (
+                                            <span className="info-badge">+{(service.agent_ids?.length ?? 0) - 3}</span>
+                                        )}
                                         {service.chunked_transfer_encoding && <span className="option-badge">Chunked</span>}
                                         {service.urldecode && <span className="option-badge">URLdecode</span>}
                                         {service.merge_adjacent_packets && <span className="option-badge">Merge</span>}
@@ -570,6 +1116,9 @@ export function SettingsPage() {
                                 </div>
                                 <div className="card-actions">
                                     <button onClick={() => openServiceModal(service)}>✎ Изменить</button>
+                                    {service.http_parse && (
+                                        <button onClick={() => setUaService(service)}>UA</button>
+                                    )}
                                     <button onClick={() => deleteService(service.id!)}>✕ Удалить</button>
                                 </div>
                             </div>
@@ -585,7 +1134,7 @@ export function SettingsPage() {
                     </div>
                     <div className="items-list">
                         {filters.map((filter) => (
-                            <div key={filter.id} className="settings-card">
+                            <div key={filter.id} className="settings-card" style={{ opacity: filter.enabled ? 1 : 0.55 }}>
                                 <div className="card-content">
                                     <div className="filter-header">
                                         <h4>{filter.name}</h4>
@@ -597,23 +1146,96 @@ export function SettingsPage() {
                                             }}
                                         ></div>
                                     </div>
-                                    <p className="pattern-text">{filter.template}</p>
+                                    <p className="pattern-text">
+                                        {filter.template_type === 'ip_cidr'
+                                            ? `${filter.ip_endpoint === 'dst' ? 'dst' : 'src'} ${filter.ip_network ?? ''}`
+                                            : filter.template_type === 'expression'
+                                                ? (filter.expression_source ?? '')
+                                                : filter.template}
+                                    </p>
                                     <div className="filter-info">
                                         <span className="info-badge">{filter.template_type}</span>
                                         <span className="info-badge">
                                             {filter.direction === 'in' ? 'In' : filter.direction === 'out' ? 'Out' : 'Both'}
                                         </span>
-                                        {filter.special_type && (
-                                            <span className="option-badge">{filter.special_type}</span>
+                                        <span className="option-badge">{filter.action}</span>
+                                        {!filter.enabled && <span className="option-badge">Выключен</span>}
+                                        <span className="info-badge" title="Ревизия конфигурации">rev {filter.revision}</span>
+                                        <span className="info-badge">
+                                            {filter.service_targets_global
+                                                ? 'Все сервисы'
+                                                : `Сервисов: ${filter.service_ids.length}`}
+                                            {' / '}
+                                            {filter.agent_targets_global
+                                                ? 'Все агенты'
+                                                : `Агентов: ${filter.agent_ids.length}`}
+                                        </span>
+                                        {!filter.service_targets_global && filter.service_ids.length === 0 && (
+                                            <span className="option-badge" title="Явные цели пусты - фильтр отключён">Требует целей</span>
+                                        )}
+                                        {filter.threshold_count != null && (
+                                            <span className="option-badge" title="Порог: count N в окне T секунд">
+                                                {filter.threshold_count}/{filter.threshold_window_secs}s
+                                            </span>
+                                        )}
+                                        {filter.expires_at && new Date(filter.expires_at) < new Date() && (
+                                            <span className="option-badge">Истёк</span>
                                         )}
                                     </div>
                                 </div>
                                 <div className="card-actions">
+                                    <button onClick={() => toggleFilterEnabled(filter)}>
+                                        {filter.enabled ? '⏸ Выключить' : '▶ Включить'}
+                                    </button>
                                     <button onClick={() => openFilterModal(filter)}>✎ Изменить</button>
                                     <button onClick={() => deleteFilter(filter.id!)}>✕ Удалить</button>
                                 </div>
                             </div>
                         ))}
+
+                        {/* Active blocks: remote ip, agent, source filter,
+                            remaining duration, unban control */}
+                        {activeBlocks.length > 0 && (
+                            <div className="settings-card">
+                                <div className="card-content">
+                                    <h4>Активные блокировки ({activeBlocks.length})</h4>
+                                    {activeBlocks.map((block) => (
+                                        <div key={block.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #333', fontSize: '13px' }}>
+                                            <span>
+                                                <span style={{ color: '#e05555' }}>{block.remote_ip}</span>
+                                                {' на '}
+                                                <span style={{ color: '#888' }}>{block.agent_id}</span>
+                                                {' - '}
+                                                {block.filter_name}
+                                                {' ('}
+                                                {block.remaining_secs}s{')'}
+                                            </span>
+                                            <button
+                                                style={{ background: 'none', border: '1px solid #555', color: '#ccc', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', padding: '2px 8px' }}
+                                                onClick={() => unbanBlock(block.id)}
+                                            >
+                                                Разблокировать
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Recent threshold alerts/blocks (audit view) */}
+                        {filterEvents.length > 0 && (
+                            <div className="settings-card">
+                                <div className="card-content">
+                                    <h4>Пороговые события</h4>
+                                    {filterEvents.map((event) => (
+                                        <div key={event.id} style={{ fontSize: '12px', color: '#999', padding: '2px 0' }}>
+                                            [{event.kind}] фильтр #{event.filter_id} на {event.agent_id}
+                                            {event.remote_ip ? ` от ${event.remote_ip}` : ''}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 
@@ -629,6 +1251,34 @@ export function SettingsPage() {
                             <div className="card-content">
                                 <h4>Версии сервисов</h4>
                                 <VersionsBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>Хранилище избранного</h4>
+                                <FavoriteStorageBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>AI-анализ стримов (JEV)</h4>
+                                <AiAnalysisBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>LLM-SOC триаж</h4>
+                                <SocAnalysisBlock />
+                            </div>
+                        </div>
+
+                        <div className="settings-card">
+                            <div className="card-content">
+                                <h4>MCP токены</h4>
+                                <McpTokensBlock />
                             </div>
                         </div>
 
@@ -735,6 +1385,48 @@ export function SettingsPage() {
                                 value={serviceForm.port}
                                 onChange={(e) => setServiceForm({ ...serviceForm, port: parseInt(e.target.value) || 0 })}
                             />
+                            <select
+                                className="select-input"
+                                value={serviceForm.protocol || 'TCP'}
+                                onChange={(e) => setServiceForm({ ...serviceForm, protocol: e.target.value })}
+                            >
+                                <option value="TCP">TCP</option>
+                                <option value="UDP">UDP</option>
+                            </select>
+                            <label className="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    checked={serviceForm.is_global}
+                                    onChange={(e) => setServiceForm({ ...serviceForm, is_global: e.target.checked })}
+                                />
+                                Применять ко всем агентам
+                            </label>
+                            {!serviceForm.is_global && (
+                                <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid #333', borderRadius: '6px', padding: '6px', margin: '4px 0' }}>
+                                    {agentsForAssignment.map(a => (
+                                        <label key={a.agent_id} className="checkbox-label" title={a.online ? 'онлайн' : 'офлайн'}>
+                                            <input
+                                                type="checkbox"
+                                                checked={serviceForm.agent_ids.includes(a.agent_id)}
+                                                onChange={(e) => {
+                                                    const ids = e.target.checked
+                                                        ? [...serviceForm.agent_ids, a.agent_id]
+                                                        : serviceForm.agent_ids.filter(id => id !== a.agent_id);
+                                                    setServiceForm({ ...serviceForm, agent_ids: ids });
+                                                }}
+                                            />
+                                            {a.agent_id}
+                                            {!a.online && <span className="text-muted"> (офлайн)</span>}
+                                        </label>
+                                    ))}
+                                    {agentsForAssignment.length === 0 && (
+                                        <span className="text-muted">Нет известных агентов</span>
+                                    )}
+                                </div>
+                            )}
+                            {serviceSyncNotice && (
+                                <p style={{ color: '#e8a33d', fontSize: '12px', margin: '6px 0' }}>{serviceSyncNotice}</p>
+                            )}
                             <div className="checkbox-group">
                                 <label className="checkbox-label">
                                     <input
@@ -927,10 +1619,10 @@ export function SettingsPage() {
                 </div>
             )}
 
-            {/* Filter Modal */}
+            {/* Filter Modal - unified model editor */}
             {filterModalOpen && (
                 <div className="modal-overlay" onClick={closeFilterModal}>
-                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
                         <div className="modal-header">
                             <h3>{editingFilter ? 'Редактировать фильтр' : 'Добавить фильтр'}</h3>
                             <button className="close-btn" onClick={closeFilterModal}>✕</button>
@@ -942,41 +1634,204 @@ export function SettingsPage() {
                                 value={filterForm.name}
                                 onChange={(e) => setFilterForm({ ...filterForm, name: e.target.value })}
                             />
-                            <select 
-                                value={filterForm.template_type}
-                                onChange={(e) => setFilterForm({ ...filterForm, template_type: e.target.value })}
-                                className="select-input"
-                            >
-                                <option value="regex">Regex</option>
-                                <option value="substr">Substring</option>
-                                <option value="bsubstr">Binary Substring</option>
-                            </select>
-                            <input
-                                type="text"
-                                placeholder="Шаблон"
-                                value={filterForm.template}
-                                onChange={(e) => setFilterForm({ ...filterForm, template: e.target.value })}
-                            />
-                            <select 
-                                value={filterForm.direction}
-                                onChange={(e) => setFilterForm({ ...filterForm, direction: e.target.value })}
-                                className="select-input"
-                            >
-                                <option value="in">Входящие</option>
-                                <option value="out">Исходящие</option>
-                                <option value="both">Оба направления</option>
-                            </select>
-                            <select
-                                value={filterForm.special_type || ''}
-                                onChange={(e) => setFilterForm({ ...filterForm, special_type: e.target.value || null })}
-                                className="select-input"
-                            >
-                                <option value="">Без спец.типа</option>
-                                <option value="flag">Flag (отправка в ферму)</option>
-                                <option value="alert">Alert (уведомление)</option>
-                                <option value="block">Block (drop data)</option>
-                                <option value="block_conn">Block (kill connection)</option>
-                            </select>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <select
+                                    value={filterForm.template_type}
+                                    onChange={(e) => {
+                                        const kind = e.target.value;
+                                        const next: Filter = { ...filterForm, template_type: kind };
+                                        // Substring matchers prefill the sanity sample.
+                                        if (kind === 'substr' || kind === 'bsubstr') {
+                                            setSanitySample(next.template);
+                                        }
+                                        setFilterForm(next);
+                                    }}
+                                    className="select-input"
+                                    style={{ flex: 1 }}
+                                >
+                                    <option value="regex">Regex</option>
+                                    <option value="substr">Substring</option>
+                                    <option value="bsubstr">Binary Substring (HEX)</option>
+                                    <option value="ip_cidr">IP / CIDR</option>
+                                    <option value="expression">Expression (CEL)</option>
+                                </select>
+                                <select
+                                    value={filterForm.action}
+                                    onChange={(e) => setFilterForm({ ...filterForm, action: e.target.value })}
+                                    className="select-input"
+                                    style={{ flex: 1 }}
+                                >
+                                    <option value="tag">Tag (метка)</option>
+                                    <option value="flag">Flag (в ферму)</option>
+                                    <option value="alert">Alert (уведомление)</option>
+                                    <option value="block">Block (drop data)</option>
+                                    <option value="block_connection">Block connection</option>
+                                </select>
+                            </div>
+
+                            {/* Matcher-specific controls */}
+                            {(filterForm.template_type === 'regex' || filterForm.template_type === 'substr' || filterForm.template_type === 'bsubstr') && (
+                                <input
+                                    type="text"
+                                    placeholder={filterForm.template_type === 'bsubstr' ? 'HEX-шаблон (например deadbeef)' : 'Шаблон'}
+                                    value={filterForm.template}
+                                    onChange={(e) => setFilterForm({ ...filterForm, template: e.target.value })}
+                                />
+                            )}
+                            {filterForm.template_type === 'ip_cidr' && (
+                                <>
+                                    <input
+                                        type="text"
+                                        placeholder="IP или CIDR (10.0.0.5 или 10.0.0.0/8)"
+                                        value={filterForm.ip_network ?? ''}
+                                        onChange={(e) => setFilterForm({ ...filterForm, ip_network: e.target.value })}
+                                    />
+                                    <select
+                                        value={filterForm.ip_endpoint ?? 'src'}
+                                        onChange={(e) => setFilterForm({ ...filterForm, ip_endpoint: e.target.value })}
+                                        className="select-input"
+                                    >
+                                        <option value="src">src - адрес источника пакета</option>
+                                        <option value="dst">dst - адрес получателя пакета</option>
+                                    </select>
+                                </>
+                            )}
+                            {filterForm.template_type === 'expression' && (
+                                <textarea
+                                    placeholder={'CEL-выражение, напр.:\nprotocol == "TCP" && ip_in_cidr(remote_ip, "10.0.0.0/8") && payload.contains(b"flag{")'}
+                                    value={filterForm.expression_source ?? ''}
+                                    onChange={(e) => setFilterForm({ ...filterForm, expression_source: e.target.value })}
+                                    rows={3}
+                                    style={{ fontFamily: 'monospace', fontSize: '12px', width: 'calc(100% - 24px)', padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', resize: 'vertical' }}
+                                />
+                            )}
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <select
+                                    value={filterForm.direction}
+                                    onChange={(e) => setFilterForm({ ...filterForm, direction: e.target.value })}
+                                    className="select-input"
+                                    style={{ flex: 1 }}
+                                >
+                                    <option value="in">Входящие</option>
+                                    <option value="out">Исходящие</option>
+                                    <option value="both">Оба направления</option>
+                                </select>
+                                <label className="checkbox-label" style={{ flex: 1 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={filterForm.enabled}
+                                        onChange={(e) => setFilterForm({ ...filterForm, enabled: e.target.checked })}
+                                    />
+                                    Включён
+                                </label>
+                            </div>
+
+                            {/* Independent service / agent targets */}
+                            <div style={{ borderTop: '1px solid #333', marginTop: '6px', paddingTop: '6px' }}>
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={filterForm.service_targets_global}
+                                        onChange={(e) => setFilterForm({ ...filterForm, service_targets_global: e.target.checked })}
+                                    />
+                                    Все сервисы (вкл. будущие)
+                                </label>
+                                {!filterForm.service_targets_global && (
+                                    <select
+                                        multiple
+                                        className="select-input"
+                                        value={filterForm.service_ids.map(String)}
+                                        onChange={(e) => {
+                                            const ids = Array.from(e.target.selectedOptions, (o) => Number(o.value));
+                                            setFilterForm({ ...filterForm, service_ids: ids });
+                                        }}
+                                        style={{ height: '100px', width: '100%' }}
+                                    >
+                                        {services.map((svc) => (
+                                            <option key={svc.id} value={String(svc.id)}>
+                                                {svc.name} :{svc.port}/{(svc.protocol || 'TCP').toLowerCase()}
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+                                <label className="checkbox-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={filterForm.agent_targets_global}
+                                        onChange={(e) => setFilterForm({ ...filterForm, agent_targets_global: e.target.checked })}
+                                    />
+                                    Все агенты (вкл. будущие)
+                                </label>
+                                {!filterForm.agent_targets_global && (
+                                    <div style={{ maxHeight: '120px', overflowY: 'auto', border: '1px solid #333', borderRadius: '6px', padding: '6px', margin: '4px 0' }}>
+                                        {agentsForAssignment.map((a) => (
+                                            <label key={a.agent_id} className="checkbox-label">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={filterForm.agent_ids.includes(a.agent_id)}
+                                                    onChange={(e) => {
+                                                        const ids = e.target.checked
+                                                            ? [...filterForm.agent_ids, a.agent_id]
+                                                            : filterForm.agent_ids.filter((id) => id !== a.agent_id);
+                                                        setFilterForm({ ...filterForm, agent_ids: ids });
+                                                    }}
+                                                />
+                                                {a.agent_id}
+                                            </label>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Threshold controls only for alert/block */}
+                            {(filterForm.action === 'alert' || filterForm.action === 'block') && (
+                                <div style={{ borderTop: '1px solid #333', marginTop: '6px', paddingTop: '6px' }}>
+                                    <label className="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            checked={filterForm.threshold_count != null}
+                                            onChange={(e) =>
+                                                setFilterForm(e.target.checked
+                                                    ? { ...filterForm, threshold_count: 5, threshold_window_secs: 10, threshold_group_by: 'remote_ip', threshold_cooldown_secs: 30, threshold_block_secs: 60 }
+                                                    : { ...filterForm, threshold_count: null, threshold_window_secs: null, threshold_group_by: null, threshold_cooldown_secs: null, threshold_block_secs: null })
+                                            }
+                                        />
+                                        Порог: сработать после N совпадений за окно
+                                    </label>
+                                    {filterForm.threshold_count != null && (
+                                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                            <input type="number" min="1" placeholder="N" value={filterForm.threshold_count ?? ''} onChange={(e) => setFilterForm({ ...filterForm, threshold_count: parseInt(e.target.value) || null })} style={{ width: '70px' }} />
+                                            <input type="number" min="1" placeholder="окно, сек" value={filterForm.threshold_window_secs ?? ''} onChange={(e) => setFilterForm({ ...filterForm, threshold_window_secs: parseInt(e.target.value) || null })} style={{ width: '90px' }} />
+                                            <input type="number" min="0" placeholder="cooldown, сек" value={filterForm.threshold_cooldown_secs ?? ''} onChange={(e) => setFilterForm({ ...filterForm, threshold_cooldown_secs: parseInt(e.target.value) || 0 })} style={{ width: '110px' }} />
+                                            <select
+                                                className="select-input"
+                                                value={filterForm.threshold_group_by ?? 'remote_ip'}
+                                                onChange={(e) => setFilterForm({ ...filterForm, threshold_group_by: e.target.value })}
+                                                style={{ flex: 1 }}
+                                            >
+                                                <option value="remote_ip">по remote IP</option>
+                                                <option value="stream">по потоку</option>
+                                                <option value="service">по сервису</option>
+                                            </select>
+                                            {filterForm.action === 'block' && (
+                                                <input type="number" min="1" placeholder="блок, сек" value={filterForm.threshold_block_secs ?? ''} onChange={(e) => setFilterForm({ ...filterForm, threshold_block_secs: parseInt(e.target.value) || null })} style={{ width: '90px' }} />
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Expiry */}
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <label className="text-muted" style={{ fontSize: '12px' }}>Истекает:</label>
+                                <input
+                                    type="datetime-local"
+                                    value={filterForm.expires_at ? filterForm.expires_at.slice(0, 16) : ''}
+                                    onChange={(e) => setFilterForm({ ...filterForm, expires_at: e.target.value || null })}
+                                    style={{ flex: 1, background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', color: 'white', padding: '6px' }}
+                                />
+                            </div>
+
                             <div className="color-picker-wrapper">
                                 <label>Цвет (Hue): {filterForm.color}°</label>
                                 <input
@@ -987,14 +1842,108 @@ export function SettingsPage() {
                                     onChange={(e) => setFilterForm({ ...filterForm, color: parseInt(e.target.value) })}
                                     className="color-slider"
                                 />
-                                <div 
+                                <div
                                     className="color-preview"
-                                    style={{ 
+                                    style={{
                                         backgroundColor: `hsl(${filterForm.color}, 100%, 50%)`,
                                         color: `hsl(${filterForm.color}, 100%, 50%)`
                                     }}
                                 ></div>
                             </div>
+
+                            {/* Sanity check */}
+                            <div style={{ borderTop: '1px solid #333', marginTop: '6px', paddingTop: '6px' }}>
+                                <h4 style={{ margin: '4px 0' }}>Проверка (sanity check)</h4>
+                                {filterInspectsPayload({ id: editingFilter?.id, template_type: filterForm.template_type, template: filterForm.template }) &&
+                                    (filterForm.template_type !== 'expression' || expressionUsesPayload(filterForm.expression_source ?? '')) ? (
+                                    <>
+                                        <p className="text-muted" style={{ fontSize: '11px', margin: '2px 0' }}>
+                                            Подставьте тестовый payload: он уходит curl-ом на выбранный сервис (команда только отображается - запускайте с подходящего хоста). Уникальный nonce добавляется автоматически.
+                                        </p>
+                                        <textarea
+                                            placeholder="Тестовый payload (префиксован шаблоном для substr)"
+                                            value={sanitySample}
+                                            onChange={(e) => setSanitySample(e.target.value)}
+                                            rows={2}
+                                            style={{ fontFamily: 'monospace', fontSize: '12px', width: 'calc(100% - 24px)', padding: '8px 12px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', color: 'white', resize: 'vertical' }}
+                                        />
+                                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '4px 0' }}>
+                                            <select className="select-input" value={sanityAgentId} onChange={(e) => setSanityAgentId(e.target.value)}>
+                                                <option value="">Агент...</option>
+                                                {agentsForAssignment.map((a) => (
+                                                    <option key={a.agent_id} value={a.agent_id}>{a.agent_id}</option>
+                                                ))}
+                                            </select>
+                                            <select className="select-input" value={sanityServiceId} onChange={(e) => setSanityServiceId(e.target.value)}>
+                                                <option value="">HTTP-сервис...</option>
+                                                {services.map((svc) => (
+                                                    <option key={svc.id} value={String(svc.id)}>{svc.name} :{svc.port}</option>
+                                                ))}
+                                            </select>
+                                            <input
+                                                type="text"
+                                                placeholder="host сервиса (например 10.10.2.4)"
+                                                value={sanityHost}
+                                                onChange={(e) => setSanityHost(e.target.value)}
+                                                style={{ flex: 1, minWidth: '160px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', color: 'white', padding: '6px' }}
+                                            />
+                                        </div>
+                                        {editingFilter?.id && (
+                                            <button className="add-btn" onClick={generateSanity} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                                                Сгенерировать curl
+                                            </button>
+                                        )}
+                                        {!editingFilter?.id && (
+                                            <p className="text-muted" style={{ fontSize: '11px' }}>Сохраните фильтр, затем сгенерируйте проверку.</p>
+                                        )}
+                                        {sanityResult && (
+                                            <div style={{ marginTop: '6px' }}>
+                                                <code style={{ display: 'block', background: '#111', padding: '8px', borderRadius: '6px', fontSize: '11px', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+                                                    {sanityResult.curl}
+                                                </code>
+                                                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                                                    <button onClick={() => copyText(sanityResult.curl)} className="add-btn" style={{ fontSize: '11px', padding: '4px 10px' }}>Копировать</button>
+                                                    <a
+                                                        href={sanityResult.resultLink}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="add-btn"
+                                                        style={{ fontSize: '11px', padding: '4px 10px', textDecoration: 'none' }}
+                                                    >
+                                                        Результат (nonce {sanityResult.nonce})
+                                                    </a>
+                                                </div>
+                                                {(filterForm.action === 'block' || filterForm.action === 'block_connection') && (
+                                                    <p className="text-muted" style={{ fontSize: '11px' }}>
+                                                        Внимание: block enforcement работает на прокси агента и не виден в пассивном replay-трафике, если сервис не за прокси.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    streamsScope && (
+                                        <div>
+                                            <p className="text-muted" style={{ fontSize: '11px' }}>{streamsScope.explanation}</p>
+                                            {editingFilter?.id && (
+                                                <a
+                                                    href={streamsScope.link}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="add-btn"
+                                                    style={{ fontSize: '11px', padding: '4px 10px', textDecoration: 'none', display: 'inline-block' }}
+                                                >
+                                                    Открыть совпадающие потоки
+                                                </a>
+                                            )}
+                                        </div>
+                                    )
+                                )}
+                            </div>
+
+                            {filterError && (
+                                <p style={{ color: '#e8a33d', fontSize: '12px', margin: '6px 0' }}>{filterError}</p>
+                            )}
                         </div>
                         <div className="modal-footer">
                             <button onClick={closeFilterModal}>Отмена</button>
@@ -1002,6 +1951,25 @@ export function SettingsPage() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* User-Agent listing drawer for one HTTP service */}
+            {uaService && uaService.id != null && (
+                <UserAgentsDrawer
+                    serviceId={uaService.id}
+                    serviceName={uaService.name}
+                    agents={agentsForAssignment}
+                    onClose={() => setUaService(null)}
+                    onDrillDown={(value, agentId) => {
+                        setUaService(null);
+                        navigate(buildUaDrilldownUrl({
+                            name: 'User-Agent',
+                            value,
+                            serviceId: uaService.id!,
+                            agentId,
+                        }));
+                    }}
+                />
             )}
         </div>
     );

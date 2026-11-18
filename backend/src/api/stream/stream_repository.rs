@@ -1,4 +1,4 @@
-use crate::api::stream::stream_dto::Stream;
+use crate::api::stream::stream_dto::{Stream, StreamListRow};
 use sqlx::PgPool;
 
 pub struct StreamRepository {
@@ -13,7 +13,8 @@ impl StreamRepository {
     pub async fn get_packet_by_id(&self, stream_id: i64) -> Result<Stream, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol, agent_id,
+                   favorite_revision, archived_through_packet_id, retention_state, continuation_of, segment_index, retention_bytes, archive_error
             FROM stream
             WHERE id = $1
             "#)
@@ -22,10 +23,19 @@ impl StreamRepository {
             .await
     }
 
+    /// The unstarred continuation created by segment rotation, if any.
+    pub async fn get_next_segment_id(&self, stream_id: i64) -> Result<Option<i64>, sqlx::Error> {
+        sqlx::query_scalar("SELECT id FROM stream WHERE continuation_of = $1 ORDER BY id LIMIT 1")
+            .bind(stream_id)
+            .fetch_optional(&self.pgpool)
+            .await
+    }
+
     pub async fn get_all_streams(&self) -> Result<Vec<Stream>, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol, agent_id,
+                   favorite_revision, archived_through_packet_id, retention_state, continuation_of, segment_index, retention_bytes, archive_error
             FROM stream
             "#)
             .fetch_all(&self.pgpool)
@@ -48,6 +58,11 @@ impl StreamRepository {
     /// expression index idx_stream_last_time_id (see
     /// database/migrations/stream_keyset_index.sql). `offset` is kept for
     /// legacy callers (deprecated) and ignored when `cursor` is set.
+    ///
+    /// `favorite` is a server-side SQL predicate applied BEFORE keyset
+    /// pagination (served by the partial idx_stream_favorite_list), so the
+    /// favorites view paginates over all matching streams, not one page.
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_streams_with_tags(
         &self,
         limit: i64,
@@ -57,22 +72,8 @@ impl StreamRepository {
         services: Option<Vec<i64>>,
         start_time: Option<i64>,
         end_time: Option<i64>,
-    ) -> Result<
-        Vec<(
-            i64,
-            Option<i64>,
-            Option<i64>,
-            i64,
-            Vec<String>,
-            Option<String>,
-            Option<i64>,
-            bool,
-            String,
-            Option<String>,
-            Option<String>,
-        )>,
-        sqlx::Error,
-    > {
+        favorite: Option<bool>,
+    ) -> Result<Vec<StreamListRow>, sqlx::Error> {
         let mut sql = String::from(
             r#"
             SELECT
@@ -86,7 +87,12 @@ impl StreamRepository {
                 favorite,
                 l7_protocol,
                 src_ip::text,
-                dst_ip::text
+                dst_ip::text,
+                agent_id,
+                retention_state,
+                segment_index,
+                retention_bytes,
+                continuation_of
             FROM (
                 SELECT
                     str.id AS stream_id,
@@ -99,7 +105,12 @@ impl StreamRepository {
                     str.favorite,
                     str.l7_protocol,
                     str.src_ip::text AS src_ip,
-                    str.dst_ip::text AS dst_ip
+                    str.dst_ip::text AS dst_ip,
+                    str.agent_id::text AS agent_id,
+                    str.retention_state AS retention_state,
+                    str.segment_index AS segment_index,
+                    str.retention_bytes AS retention_bytes,
+                    str.continuation_of AS continuation_of
                 FROM stream str
                 JOIN service s ON s.id = str.service_id
                 LEFT JOIN LATERAL (
@@ -134,6 +145,12 @@ impl StreamRepository {
                 param_idx += 1;
                 where_clauses.push(format!("service_id = ANY(${param_idx})"));
             }
+        }
+
+        // Server-side favorites filter: composed with tags/services/time
+        // and applied before keyset pagination.
+        if let Some(favorite) = favorite {
+            where_clauses.push(format!("favorite = {}", favorite));
         }
 
         // Time filtering on the view's aggregated columns
@@ -187,22 +204,7 @@ impl StreamRepository {
             offset
         );
 
-        let mut query = sqlx::query_as::<
-            _,
-            (
-                i64,
-                Option<i64>,
-                Option<i64>,
-                i64,
-                Vec<String>,
-                Option<String>,
-                Option<i64>,
-                bool,
-                String,
-                Option<String>,
-                Option<String>,
-            ),
-        >(&sql);
+        let mut query = sqlx::query_as::<_, StreamListRow>(&sql);
 
         // Bind tag IDs
         if let Some(ref tag_ids) = tags {
@@ -242,7 +244,7 @@ impl StreamRepository {
     /// per bucket (no per-service split — the timeline shows two series,
     /// packets and flags). Packets are counted from the `packets` table
     /// (idx_packets_timestamp); flags are tag triggers whose tag_name has
-    /// special_type='flag'. FULL JOIN so buckets with only flags (or only
+    /// action='flag'. FULL JOIN so buckets with only flags (or only
     /// packets) are kept.
     pub async fn get_stream_histogram(
         &self,
@@ -259,7 +261,7 @@ impl StreamRepository {
                 SELECT (t.timestamp / $1) * $1 AS bucket_ts, COUNT(*) AS cnt
                 FROM tag t
                 JOIN tag_name tn ON tn.id = t.tag_id
-                WHERE tn.special_type = 'flag'
+                WHERE tn.action = 'flag'
                 GROUP BY bucket_ts
             )
             SELECT COALESCE(p.bucket_ts, f.bucket_ts) AS bucket_ts,
@@ -272,21 +274,6 @@ impl StreamRepository {
         )
         .bind(bucket_secs as i64)
         .fetch_all(&self.pgpool)
-        .await
-    }
-
-    pub async fn set_favorite(&self, stream_id: i64, favorite: bool) -> Result<bool, sqlx::Error> {
-        sqlx::query_scalar::<_, bool>(
-            r#"
-            UPDATE stream
-            SET favorite = $2
-            WHERE id = $1
-            RETURNING favorite
-            "#,
-        )
-        .bind(stream_id)
-        .bind(favorite)
-        .fetch_one(&self.pgpool)
         .await
     }
 }

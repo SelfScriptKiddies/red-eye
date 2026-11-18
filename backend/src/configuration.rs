@@ -120,7 +120,7 @@ pub struct ApplicationConfig {
         clap(long="nats-settings-topic", short='S', help="NATS settings topic", help_heading = "NATS config"),
         env = "NATS_SETTINGS_TOPIC",
         config = "nats.settings_topic",
-        default = "updates_v3".to_string())
+        default = "updates_v4".to_string())
     ]
     pub nats_settings_topic: String,
 
@@ -239,4 +239,41 @@ pub struct ApplicationConfig {
         default = "/usr/local/share/red-eye/red-eye-agent".to_string())
     ]
     pub agent_binary_path: String,
+
+    /// Favorite retention limits. Env values seed app_settings on startup;
+    /// runtime changes go through PUT /api/settings/{key} (workers re-read
+    /// them without restart).
+    #[source(
+        clap(
+            long = "favorite-max-total-bytes",
+            help = "Total saved favorite content budget in bytes",
+            help_heading = "Favorites"
+        ),
+        env = "FAVORITE_MAX_TOTAL_BYTES",
+        config = "favorites.max_total_bytes",
+        default = 10737418240i64
+    )]
+    pub favorite_max_total_bytes: i64,
+    #[source(
+        clap(
+            long = "favorite-segment-bytes",
+            help = "Per starred stream segment byte limit (rotation threshold)",
+            help_heading = "Favorites"
+        ),
+        env = "FAVORITE_SEGMENT_BYTES",
+        config = "favorites.segment_bytes",
+        default = 268435456i64
+    )]
+    pub favorite_segment_bytes: i64,
+    #[source(
+        clap(
+            long = "favorite-disk-reserve-bytes",
+            help = "Free-disk reserve the favorite backlog must fit into",
+            help_heading = "Favorites"
+        ),
+        env = "FAVORITE_DISK_RESERVE_BYTES",
+        config = "favorites.disk_reserve_bytes",
+        default = 2147483648i64
+    )]
+    pub favorite_disk_reserve_bytes: i64,
 }

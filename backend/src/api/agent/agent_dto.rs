@@ -7,7 +7,10 @@ pub struct AgentInfo {
     pub agent_id: String,
     pub uptime_secs: u64,
     pub sniffer_active: bool,
-    pub sniffer_ports: Vec<u16>,
+    /// Monitored (protocol, port) pairs as reported, e.g. "8080/tcp";
+    /// empty when no services are assigned (sniffer_idle = healthy wait)
+    #[serde(default)]
+    pub sniffer_ports: Vec<String>,
     pub harpoon_rules: Vec<String>,
     #[serde(default)]
     pub active_filters: usize,
@@ -25,10 +28,76 @@ pub struct AgentInfo {
     /// report it yet.
     #[serde(default)]
     pub version: Option<String>,
+    /// Boot identifier: fresh UUID per agent process start. The backend
+    /// publishes a full snapshot whenever it changes (agent restarted).
+    /// None = older agent binary.
+    #[serde(default)]
+    pub boot_id: Option<String>,
+    /// Bootstrap capture interface (env/CLI value the agent runs with)
+    #[serde(default)]
+    pub interface: Option<String>,
+    /// Bootstrap machine IP (env/CLI value)
+    #[serde(default)]
+    pub machine_ip: Option<String>,
+    /// Configuration revision the agent last applied from a snapshot
+    #[serde(default)]
+    pub applied_revision: Option<u64>,
+    /// Effective interface in use (override applied or bootstrap)
+    #[serde(default)]
+    pub effective_interface: Option<String>,
+    /// Effective machine IP in use
+    #[serde(default)]
+    pub effective_machine_ip: Option<String>,
+    /// Sanitized snapshot application error (no payload or credentials)
+    #[serde(default)]
+    pub last_sync_error: Option<String>,
+    /// Filters/blocks this agent could not enforce (detection continues on
+    /// the analyzer). None = older agent binary.
+    #[serde(default)]
+    pub enforcement_failures: Option<u64>,
+    /// Sanitized last enforcement failure (absent = everything enforced)
+    #[serde(default)]
+    pub last_enforcement_error: Option<String>,
+    /// True when capture is idle because no services are assigned
+    /// (healthy, waiting for control-plane updates)
+    #[serde(default)]
+    pub sniffer_idle: Option<bool>,
+    /// Per-proxy effective state reports (desired revision applied,
+    /// capture phase). Diagnostics only: they never overwrite operator
+    /// desired state. Absent = older agent binary.
+    #[serde(default)]
+    pub proxies: Vec<AgentProxyReport>,
+    /// Frames captured by the sniffer for keys that are effectively
+    /// proxied (capture-source conflict bug detector).
+    #[serde(default)]
+    pub capture_source_conflicts: Option<u64>,
+    /// Packets the harpoon capture forwarder dropped (broadcast lag).
+    #[serde(default)]
+    pub forwarder_drops: Option<u64>,
     pub timestamp_ms: u64,
     /// Computed by the backend: is the agent currently reachable
     #[serde(default)]
     pub online: bool,
+}
+
+/// One proxy rule's effective state as reported by the agent heartbeat.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AgentProxyReport {
+    pub service_id: u64,
+    pub rule_name: String,
+    /// Desired revision the rule was issued at.
+    pub desired_revision: u64,
+    /// Desired revision the agent has actually applied (None = none yet).
+    pub effective_revision: Option<u64>,
+    /// "effective" | "transitioning" | "capture_unavailable" | "failed"
+    pub state: String,
+    /// "tcp" | "udp"
+    pub protocol: String,
+    /// Original service port (the passive key excluded while effective).
+    pub original_port: u16,
+    pub listen_port: u16,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -146,7 +215,7 @@ mod tests {
             "agent_id": "team-1",
             "uptime_secs": 60,
             "sniffer_active": true,
-            "sniffer_ports": [80, 8080],
+            "sniffer_ports": ["80/tcp", "8080/udp"],
             "harpoon_rules": ["web-mitm"],
             "timestamp_ms": 1_791_464_509_000u64,
             "future_field": 42,
@@ -154,7 +223,7 @@ mod tests {
 
         let info: AgentInfo = serde_json::from_value(json).unwrap();
         assert_eq!(info.agent_id, "team-1");
-        assert_eq!(info.sniffer_ports, vec![80, 8080]);
+        assert_eq!(info.sniffer_ports, vec!["80/tcp", "8080/udp"]);
     }
 
     #[test]

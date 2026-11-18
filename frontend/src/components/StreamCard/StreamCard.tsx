@@ -2,6 +2,7 @@ import "./StreamCard.css"
 import { memo } from 'react';
 import moment from 'moment';
 import { StreamSign } from "../StreamSign"
+import { formatBytes, retentionBadge } from '../../lib/favoriteRetention';
 
 interface StreamCardProps {
     streamObj: any;
@@ -16,6 +17,9 @@ interface StreamCardProps {
 export const StreamCard = memo(function StreamCard({ streamObj, selected, onStreamClick, onFavoriteToggle, onIpFilter, onIpBan, tagColors = {} }: StreamCardProps) {
     let containsFlag = streamObj.tags.includes("flag") || streamObj.tags.includes("Flag");
     const isFavorite = !!streamObj.favorite;
+    const badge = retentionBadge(isFavorite, streamObj.retention_state, streamObj.archive_error);
+    const segmentIndex = Number(streamObj.segment_index ?? 1);
+    const continuationOf = streamObj.continuation_of ?? null;
     const clickHandler = (event) => {
         let e = event.target;
         while(!e.dataset.streamid)
@@ -28,6 +32,11 @@ export const StreamCard = memo(function StreamCard({ streamObj, selected, onStre
     const handleFavoriteClick = (event) => {
         event.stopPropagation();
         onFavoriteToggle(streamObj.id, isFavorite);
+    }
+
+    const jumpToSegment = (event, segmentId: number) => {
+        event.stopPropagation();
+        onStreamClick(String(segmentId), event);
     }
     
     const getTagColor = (tagName) => {
@@ -119,6 +128,39 @@ export const StreamCard = memo(function StreamCard({ streamObj, selected, onStre
                         </span>
                     )}
                     <span className="stream-packet-count">{streamObj.packet_count || 0} {getPacketWord(streamObj.packet_count)}</span>
+                    {isFavorite && Number(streamObj.retention_bytes ?? 0) > 0 && (
+                        <span className="retention-size" title="Сохранено байт полезной нагрузки (оценка)">
+                            {formatBytes(streamObj.retention_bytes)}
+                        </span>
+                    )}
+                    {segmentIndex > 1 && (
+                        <span className="retention-segment" title="Номер сегмента после ротации по лимиту размера">
+                            сегмент {segmentIndex}
+                        </span>
+                    )}
+                    {continuationOf != null && (
+                        <button
+                            className="retention-continuation"
+                            onClick={(e) => jumpToSegment(e, Number(continuationOf))}
+                            title={`Предыдущий сегмент #${continuationOf}`}
+                        >
+                            ← #{continuationOf}
+                        </button>
+                    )}
+                    {Number(streamObj.next_segment_id ?? 0) > 0 && (
+                        <button
+                            className="retention-continuation"
+                            onClick={(e) => jumpToSegment(e, Number(streamObj.next_segment_id))}
+                            title={`Продолжение #${streamObj.next_segment_id}`}
+                        >
+                            #{streamObj.next_segment_id} &gt;
+                        </button>
+                    )}
+                    {badge && (
+                        <span className={`retention-badge retention-badge--${badge.tone}`} title={`Состояние хранения: ${streamObj.retention_state ?? 'live'}`}>
+                            {badge.label}
+                        </span>
+                    )}
                 </span>
             </div>
         </div>

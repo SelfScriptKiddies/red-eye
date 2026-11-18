@@ -4,8 +4,13 @@
 #
 # Examples:
 #   ./deploy-agent.sh root@10.0.0.1
-#   ./deploy-agent.sh root@10.0.0.1 --interface eth0 --ports 8080,443
+#   ./deploy-agent.sh root@10.0.0.1 --interface eth0
 #   ./deploy-agent.sh root@10.0.0.1 --nats 10.0.0.100:4222 --interface ens18
+#
+# Service ports are NOT configured here: they come from the central
+# service registry via revisioned snapshots (see PORTS removal notes in
+# README.md). A freshly deployed agent stays idle until services are
+# assigned.
 
 set -e
 
@@ -22,7 +27,6 @@ NATS_HOST=""
 NATS_LOGIN="red-eye-client"
 NATS_PASSWORD=""
 INTERFACE="eth0"
-PORTS=""
 SERVICE_NAME="red-eye-agent"
 DATA_DIR="/var/lib/red-eye-agent"
 LOGGING_LEVEL="info"
@@ -35,14 +39,13 @@ usage() {
     echo "  --nats-login USER      NATS login (default: red-eye-client)"
     echo "  --nats-password PASS   NATS password (required if not in .env)"
     echo "  --interface IFACE      Network interface (default: eth0)"
-    echo "  --ports PORTS          Comma-separated ports to sniff (required)"
     echo "  --binary PATH          Path to agent binary (default: ./agent/target/release/red-eye-agent)"
     echo "  --env-file FILE        Read settings from .env file"
     echo "  --install-nftables     Install nftables package if missing (service NOT enabled)"
     echo "  --uninstall            Remove agent from target host"
     echo ""
     echo "Example:"
-    echo "  $0 root@vuln1.ctf --nats 10.0.0.100:4222 --nats-password secret --ports 8080,443"
+    echo "  $0 root@vuln1.ctf --nats 10.0.0.100:4222 --nats-password secret"
     exit 1
 }
 
@@ -63,7 +66,6 @@ while [[ $# -gt 0 ]]; do
         --nats-login) NATS_LOGIN="$2"; shift 2 ;;
         --nats-password) NATS_PASSWORD="$2"; shift 2 ;;
         --interface) INTERFACE="$2"; shift 2 ;;
-        --ports) PORTS="$2"; shift 2 ;;
         --binary) AGENT_BINARY="$2"; shift 2 ;;
         --env-file)
             if [ -f "$2" ]; then
@@ -103,22 +105,11 @@ if [ -z "$NATS_PASSWORD" ]; then
     exit 1
 fi
 
-# An empty port list no longer means "capture everything" - the agent
-# disables its sniffer when PORTS is empty (capturing all traffic would
-# mirror the agent's own NATS connection into the analyzer). Refuse to
-# deploy a configuration that would ship a dead sniffer.
-PORTS_TRIMMED="${PORTS//[[:space:]]/}"
-if [ -z "$PORTS_TRIMMED" ]; then
-    echo -e "${RED}[!] Ports not specified. DEPLOY.md requires --ports: without it the agent's sniffer stays disabled.${NC}"
-    echo -e "${YELLOW}[*] Pass --ports 8080,4242 (comma-separated service ports) or set PORTS=... in the env file${NC}"
-    exit 1
-fi
-
 echo -e "${GREEN}[*] Deploying Red Eye Agent${NC}"
 echo -e "    Target:    ${TARGET_HOST}"
 echo -e "    NATS:      ${NATS_HOST}"
 echo -e "    Interface: ${INTERFACE}"
-echo -e "    Ports:     ${PORTS}"
+echo -e "    Ports:     (from the central service registry via snapshots)"
 echo ""
 
 # 1. Upload binary
@@ -170,15 +161,16 @@ fi
 
 # 3. Create environment file
 echo -e "${YELLOW}[3/${STEPS}] Creating configuration...${NC}"
-# PORTS is guaranteed non-empty by the validation above.
+# No PORTS: service ports arrive via revisioned snapshots from the
+# backend. MACHINE_IP stays a bootstrap default; per-agent overrides come
+# from the control plane.
 ENV_CONTENT="NATS_HOST=${NATS_HOST}
 NATS_LOGIN=${NATS_LOGIN}
 NATS_PASSWORD=${NATS_PASSWORD}
 INTERFACE=${INTERFACE}
 LOGGING_LEVEL=${LOGGING_LEVEL}
 DATA_DIR=${DATA_DIR}
-MACHINE_IP=0.0.0.0
-PORTS=${PORTS}"
+MACHINE_IP=0.0.0.0"
 
 ssh "$TARGET_HOST" "cat > ${REMOTE_DIR}/agent.env << 'ENVEOF'
 ${ENV_CONTENT}

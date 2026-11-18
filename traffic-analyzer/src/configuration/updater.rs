@@ -1,6 +1,5 @@
 use crate::cache;
 use crate::configuration::ApplicationConfig;
-use crate::filters::{add_filter, edit_filter, remove_filter, sync_filters};
 use crate::message_broker::create_consumer;
 use crate::wire::{self, SettingsEnvelope, WireConfigSync};
 use anyhow::Result;
@@ -18,27 +17,63 @@ use prost::Message as _;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-// Switched to protobuf in v3
-pub const SETTINGS_WIRE_VERSION: u32 = 3;
+// Wire v4: coordinated between-games upgrade; v3 producers/consumers are
+// unsupported and rejected by the version gate below.
+pub const SETTINGS_WIRE_VERSION: u32 = 4;
+
+/// JetStream stream carrying settings updates. New name for v4: the v4
+/// subject (updates_v4) differs from the v3 one, so history is not migrated.
+pub const SETTINGS_STREAM_NAME: &str = "SETTINGS_UPDATES_V4";
+
+/// Configuration history is bounded; snapshots are complete, so expired
+/// history is recoverable via warm-up + reconciliation instead of
+/// unbounded stream growth.
+pub const SETTINGS_STREAM_MAX_AGE_SECS: u64 = 7 * 24 * 3600;
 
 pub mod dto {
     // FilterDirection lives with the filter types (filters::filterDTO) so the
     // filters storage can use it without depending on the configuration module.
     pub use crate::filters::filterDTO::FilterDirection;
-    use crate::wire::{WireFilter, WireFilterDirection, WireService};
+    use crate::filters::spec::{
+        Action, FilterSpec, GroupBy, IpEndpointSel, MatcherSpec, Targets, ThresholdCfg,
+    };
+    use crate::wire::red_eye::wire::IpEndpoint;
+    use crate::wire::{WireFilter, WireFilterDirection, WireProtocol, WireService};
+    use log::warn;
+    use std::net::IpAddr;
 
-    #[derive(Debug, Clone)]
-    pub struct Filter {
-        pub pattern_name: String,
-        pub filter_type: String,
-        pub filter_payload: Vec<u8>,
-        pub direction: FilterDirection,
+    /// Transport protocol of a service. Unknown wire values must never
+    /// degrade into a guess (silently treating UDP as TCP would misroute
+    /// traffic), so an unrecognized protocol makes the whole service
+    /// mapping fail and the caller skips it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum TransportProto {
+        Tcp,
+        Udp,
+    }
+
+    impl TransportProto {
+        pub fn from_wire(value: i32) -> Option<Self> {
+            WireProtocol::try_from(value).ok().map(|p| match p {
+                WireProtocol::Tcp => TransportProto::Tcp,
+                WireProtocol::Udp => TransportProto::Udp,
+            })
+        }
+
+        /// DB-facing spelling (service.protocol)
+        pub fn as_str(&self) -> &'static str {
+            match self {
+                TransportProto::Tcp => "TCP",
+                TransportProto::Udp => "UDP",
+            }
+        }
     }
 
     #[derive(Debug, Clone)]
     pub struct Service {
         pub name: String,
         pub port: u16,
+        pub protocol: TransportProto,
         pub chunked_transfer_encoding: bool,
         pub decrypt_tls: bool,
         pub inflate_websockets: bool,
@@ -47,30 +82,121 @@ pub mod dto {
         pub http_parse: bool,
     }
 
-    pub fn service_from_wire(service: &WireService) -> Service {
-        Service {
+    /// None when the wire entry carries data this build cannot interpret
+    /// faithfully (unknown protocol enum, port outside 1..=65535): the
+    /// caller drops that service instead of reinterpreting it.
+    pub fn service_from_wire(service: &WireService) -> Option<Service> {
+        let protocol = TransportProto::from_wire(service.protocol)?;
+        let port = u16::try_from(service.port).ok()?;
+        if port == 0 {
+            return None;
+        }
+        Some(Service {
             name: service.name.clone(),
-            port: service.port as u16,
+            port,
+            protocol,
             chunked_transfer_encoding: service.chunked_transfer_encoding,
             decrypt_tls: service.decrypt_tls,
             inflate_websockets: service.inflate_websockets,
             merge_adjacent_packets: service.merge_adjacent_packets,
             urldecode: service.urldecode,
             http_parse: service.http_parse,
-        }
+        })
     }
 
-    pub fn filter_from_wire(filter: &WireFilter) -> Filter {
-        Filter {
-            pattern_name: filter.pattern_name.clone(),
-            filter_type: filter.filter_type.clone(),
-            filter_payload: filter.filter_payload.clone(),
-            direction: match WireFilterDirection::try_from(filter.direction) {
-                Ok(WireFilterDirection::Inbound) => FilterDirection::Inbound,
-                Ok(WireFilterDirection::Outbound) => FilterDirection::Outbound,
-                _ => FilterDirection::Both,
+    /// Map the unified wire filter (plus its op id) onto the analyzer
+    /// FilterSpec. None when the entry cannot be interpreted faithfully
+    /// (unknown action, invalid CIDR, invalid UTF-8): the caller drops it
+    /// instead of guessing, and periodic reconciliation re-reads the DB.
+    pub fn filter_spec_from_wire(id: u64, filter: &WireFilter) -> Option<FilterSpec> {
+        let direction = match WireFilterDirection::try_from(filter.direction) {
+            Ok(WireFilterDirection::Inbound) => FilterDirection::Inbound,
+            Ok(WireFilterDirection::Outbound) => FilterDirection::Outbound,
+            _ => FilterDirection::Both,
+        };
+        let action = match filter.action.as_str() {
+            "" => Action::Tag,
+            other => Action::from_wire_str(other)?,
+        };
+
+        let matcher = match filter.filter_type.as_str() {
+            "ip_cidr" => {
+                let (addr_text, prefix) = match filter.ip_network.rsplit_once('/') {
+                    Some((a, p)) => (a, p.parse::<u8>().ok()?),
+                    None => (filter.ip_network.as_str(), 0),
+                };
+                let addr: IpAddr = addr_text.parse().ok()?;
+                let max = if addr.is_ipv4() { 32 } else { 128 };
+                let prefix = if filter.ip_network.contains('/') {
+                    prefix
+                } else {
+                    max
+                };
+                if prefix > max {
+                    return None;
+                }
+                let endpoint = match IpEndpoint::try_from(filter.ip_endpoint) {
+                    Ok(IpEndpoint::Dst) => IpEndpointSel::Dst,
+                    _ => IpEndpointSel::Src,
+                };
+                MatcherSpec::IpCidr {
+                    network: addr,
+                    prefix,
+                    endpoint,
+                }
+            }
+            "expression" => MatcherSpec::Expression {
+                source: String::from_utf8(filter.filter_payload.clone()).ok()?,
             },
-        }
+            other => MatcherSpec::Payload {
+                kind: other.to_string(),
+                payload: filter.filter_payload.clone(),
+            },
+        };
+
+        let threshold = filter.threshold.as_ref().and_then(|t| {
+            let count = t.count;
+            let window = t.window_seconds;
+            if count == 0 || window == 0 {
+                warn!(
+                    "Filter {} carries an invalid threshold, ignoring it (immediate action)",
+                    filter.pattern_name
+                );
+                return None;
+            }
+            let group_by = match t.group_by.as_str() {
+                "stream" => GroupBy::Stream,
+                "service" => GroupBy::Service,
+                _ => GroupBy::RemoteIp,
+            };
+            Some(ThresholdCfg {
+                count,
+                window_secs: window,
+                group_by,
+                cooldown_secs: t.cooldown_seconds,
+                block_secs: t.block_seconds.max(1),
+            })
+        });
+
+        let targets = Targets {
+            services_all: filter.services_all,
+            service_ids: filter.service_ids.iter().copied().collect(),
+            agents_all: filter.agents_all,
+            agent_ids: filter.agent_ids.iter().cloned().collect(),
+        };
+
+        Some(FilterSpec {
+            id,
+            name: filter.pattern_name.clone(),
+            direction,
+            action,
+            enabled: filter.enabled,
+            revision: filter.revision,
+            targets,
+            threshold,
+            expires_at_ms: filter.expires_at_ms,
+            matcher,
+        })
     }
 }
 
@@ -94,13 +220,15 @@ pub struct UpdateListener {
 }
 
 impl UpdateListener {
-    pub async fn new(config: &ApplicationConfig) -> Self {
-        let client = create_consumer(config).await.unwrap();
+    /// Construction failure is contained by the caller's supervised retry
+    /// loop, never an unwrap: packet ingestion must survive NATS being down.
+    pub async fn new(config: &ApplicationConfig) -> Result<Self> {
+        let client = create_consumer(config).await?;
 
-        UpdateListener {
+        Ok(UpdateListener {
             client,
             uuid: config.service_uuid.clone(),
-        }
+        })
     }
 
     pub async fn listen_to_updates(self, subject: &str, cache: Arc<cache::Cache>) -> Result<()> {
@@ -109,7 +237,8 @@ impl UpdateListener {
         let stream = js
             .create_stream(stream::Config {
                 // Added version for loud errors
-                name: "SETTINGS_UPDATES_V3".to_string(),
+                name: SETTINGS_STREAM_NAME.to_string(),
+                max_age: std::time::Duration::from_secs(SETTINGS_STREAM_MAX_AGE_SECS),
                 subjects: vec![subject.to_string()],
                 ..Default::default()
             })
@@ -182,14 +311,12 @@ impl UpdateListener {
                                 "Received filter add: (id={}, filter={:?})",
                                 op.id, op.filter
                             );
-                            if let Some((index, filter)) = filter_op(op) {
-                                add_filter(
-                                    index,
-                                    filter.pattern_name,
-                                    filter.filter_type,
-                                    &filter.filter_payload,
-                                    filter.direction,
-                                );
+                            if let Some(spec) = op
+                                .filter
+                                .as_ref()
+                                .and_then(|f| dto::filter_spec_from_wire(op.id, f))
+                            {
+                                crate::filters::add_filter(spec);
                             }
                         }
                         Some(wire::settings_envelope::Update::FilterUpdate(op)) => {
@@ -197,22 +324,45 @@ impl UpdateListener {
                                 "Received filter update: (id={}, filter={:?})",
                                 op.id, op.filter
                             );
-                            if let Some((index, filter)) = filter_op(op) {
-                                edit_filter(
-                                    index,
-                                    filter.pattern_name,
-                                    filter.filter_type,
-                                    &filter.filter_payload,
-                                    filter.direction,
-                                );
+                            if let Some(spec) = op
+                                .filter
+                                .as_ref()
+                                .and_then(|f| dto::filter_spec_from_wire(op.id, f))
+                            {
+                                crate::filters::edit_filter(spec);
                             }
                         }
                         Some(wire::settings_envelope::Update::FilterRemove(index)) => {
                             debug!("Received filter remove: {}", index);
-                            remove_filter(index as usize);
+                            crate::filters::remove_filter(index);
                         }
                         Some(wire::settings_envelope::Update::ConfigSync(sync)) => {
                             apply_config_sync(sync, &cache);
+                        }
+                        // Per-agent snapshots feed the machine-IP registry:
+                        // the packet consumer resolves direction per agent
+                        // from it (choice documented in cache.rs). Only the
+                        // network section is needed here; the service set
+                        // for analyzers arrives via ConfigSync.
+                        Some(wire::settings_envelope::Update::AgentSnapshot(snapshot)) => {
+                            if let Some(network) = &snapshot.network {
+                                if let Ok(machine_ip) = network.machine_ip.parse() {
+                                    cache.set_agent_network(
+                                        &snapshot.agent_id,
+                                        machine_ip,
+                                        snapshot.revision,
+                                    );
+                                    debug!(
+                                        "Registry updated: agent '{}' machine_ip={} revision={}",
+                                        snapshot.agent_id, network.machine_ip, snapshot.revision
+                                    );
+                                } else {
+                                    debug!(
+                                        "Snapshot for agent '{}' carries unparseable machine_ip, ignored",
+                                        snapshot.agent_id
+                                    );
+                                }
+                            }
                         }
                         None => {
                             error!("Settings update envelope carries no update variant");
@@ -237,13 +387,9 @@ impl UpdateListener {
 }
 
 fn service_op(op: wire::WireServiceOp) -> Option<(usize, dto::Service)> {
-    op.service
-        .map(|s| (op.id as usize, dto::service_from_wire(&s)))
-}
-
-fn filter_op(op: wire::WireFilterOp) -> Option<(usize, dto::Filter)> {
-    op.filter
-        .map(|f| (op.id as usize, dto::filter_from_wire(&f)))
+    let id = usize::try_from(op.id).ok()?;
+    let service = dto::service_from_wire(op.service.as_ref()?)?;
+    Some((id, service))
 }
 
 fn apply_config_sync(sync: WireConfigSync, cache: &Arc<cache::Cache>) {
@@ -254,27 +400,29 @@ fn apply_config_sync(sync: WireConfigSync, cache: &Arc<cache::Cache>) {
     );
 
     // Sync services
-    let incoming_ids: HashSet<usize> = sync.services.iter().map(|op| op.id as usize).collect();
+    let mut incoming_ids: HashSet<usize> = HashSet::new();
+    let mut missing: Vec<(usize, dto::Service)> = Vec::new();
     {
-        let existing_ids: HashSet<usize>;
-        let missing: Vec<(usize, dto::Service)>;
-        let to_remove: Vec<usize>;
-
-        // Read lock - проверяем что есть
-        {
-            let services_cache = cache.services.read().unwrap();
-            existing_ids = services_cache.keys().cloned().collect();
-            missing = sync
-                .services
-                .into_iter()
-                .filter(|op| !existing_ids.contains(&(op.id as usize)))
-                .filter_map(|op| {
-                    op.service
-                        .map(|s| (op.id as usize, dto::service_from_wire(&s)))
-                })
-                .collect();
-            to_remove = existing_ids.difference(&incoming_ids).cloned().collect();
+        let services_cache = cache.services.read().unwrap();
+        for op in &sync.services {
+            // Entries this build cannot interpret faithfully (unknown
+            // protocol, id or port overflow) are skipped: the service
+            // degrades to unknown-service drops instead of being
+            // reinterpreted, and periodic reconciliation re-reads the DB.
+            let Some((id, service)) = service_op(op.clone()) else {
+                debug!(
+                    "Skipping service entry id={} that cannot be mapped safely",
+                    op.id
+                );
+                continue;
+            };
+            incoming_ids.insert(id);
+            if !services_cache.contains_key(&id) {
+                missing.push((id, service));
+            }
         }
+        let existing_ids: HashSet<usize> = services_cache.keys().cloned().collect();
+        let to_remove: Vec<usize> = existing_ids.difference(&incoming_ids).cloned().collect();
 
         if !missing.is_empty() || !to_remove.is_empty() {
             debug!(
@@ -296,24 +444,14 @@ fn apply_config_sync(sync: WireConfigSync, cache: &Arc<cache::Cache>) {
         }
     }
 
-    // Sync filters
-    let filters_data: Vec<(usize, String, String, Vec<u8>, dto::FilterDirection)> = sync
+    // Sync filters: a full replacement with per-id revision gates (a
+    // spec older than the registered revision keeps the registered state).
+    let specs: Vec<crate::filters::spec::FilterSpec> = sync
         .filters
         .iter()
-        .filter_map(|op| {
-            op.filter.as_ref().map(|f| {
-                let filter = dto::filter_from_wire(f);
-                (
-                    op.id as usize,
-                    filter.pattern_name,
-                    filter.filter_type,
-                    filter.filter_payload,
-                    filter.direction,
-                )
-            })
-        })
+        .filter_map(|op| dto::filter_spec_from_wire(op.id, op.filter.as_ref()?))
         .collect();
-    sync_filters(filters_data);
+    crate::filters::sync_filters(specs);
 }
 
 #[cfg(test)]
@@ -328,7 +466,7 @@ mod tests {
         .encode_to_vec()
     }
 
-    fn sample_service_op(id: u32) -> wire::WireServiceOp {
+    fn sample_service_op(id: u64) -> wire::WireServiceOp {
         wire::WireServiceOp {
             id,
             service: Some(wire::WireService {
@@ -340,6 +478,9 @@ mod tests {
                 merge_adjacent_packets: false,
                 urldecode: true,
                 http_parse: true,
+                id,
+                protocol: wire::WireProtocol::Tcp as i32,
+                is_global: true,
             }),
         }
     }
@@ -362,7 +503,7 @@ mod tests {
 
     #[test]
     fn wrong_version_is_a_clean_error() {
-        for wrong in [0u32, 1, 2] {
+        for wrong in [0u32, 1, 2, 3] {
             let bytes = SettingsEnvelope {
                 version: wrong,
                 update: None,

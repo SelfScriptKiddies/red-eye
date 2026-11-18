@@ -12,7 +12,7 @@ use pnet::packet::{
 use std::net::IpAddr;
 use strum_macros::IntoStaticStr;
 
-#[derive(Debug, Clone, IntoStaticStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]
 pub enum Protocol {
     TCP,
     UDP,

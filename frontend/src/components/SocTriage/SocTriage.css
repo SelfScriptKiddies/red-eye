@@ -1,0 +1,255 @@
+/* SOC triage panel and modal. Text only; colors distinguish verdict
+   classes. Mirrors the JEV styling conventions. */
+
+.soc-panel {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+}
+
+.soc-panel-disabled {
+    font-size: 11px;
+    color: var(--re-text-muted, #888);
+}
+
+.soc-trigger {
+    font-size: 11px;
+    padding: 4px 10px;
+    background: rgba(120, 90, 180, 0.2);
+    border: 1px solid rgba(140, 110, 200, 0.5);
+    border-radius: 8px;
+    color: #d8ccff;
+    cursor: pointer;
+}
+
+.soc-trigger.soc-busy {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.soc-verdict-badge {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-size: 11px;
+    text-align: left;
+}
+
+.soc-verdict-name {
+    font-weight: 600;
+}
+
+.soc-verdict-meta {
+    color: var(--re-text-muted, #aaa);
+    font-size: 10px;
+}
+
+.soc-verdict-benign {
+    background: rgba(90, 160, 90, 0.15);
+    border-color: rgba(90, 160, 90, 0.5);
+    color: #9fd89f;
+}
+
+.soc-verdict-suspicious {
+    background: rgba(220, 180, 70, 0.15);
+    border-color: rgba(220, 180, 70, 0.5);
+    color: #e8cd7e;
+}
+
+.soc-verdict-likely_attack {
+    background: rgba(224, 96, 106, 0.18);
+    border-color: rgba(224, 96, 106, 0.6);
+    color: #ff9aa2;
+}
+
+.soc-verdict-unknown {
+    background: rgba(130, 130, 140, 0.15);
+    border-color: rgba(130, 130, 140, 0.5);
+    color: #b9b9c4;
+}
+
+.soc-history-toggle {
+    font-size: 10px;
+    color: var(--re-text-muted, #888);
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.soc-history {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: #161616;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 4px;
+    z-index: 30;
+    min-width: 260px;
+}
+
+.soc-history-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 8px;
+    background: none;
+    border: none;
+    color: #ccc;
+    font-size: 11px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.soc-history-row:hover {
+    background: #222;
+}
+
+.soc-history-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.soc-history-dot.soc-verdict-benign { background: #6fae6f; }
+.soc-history-dot.soc-verdict-suspicious { background: #dcb446; }
+.soc-history-dot.soc-verdict-likely_attack { background: #e0606a; }
+.soc-history-dot.soc-verdict-unknown { background: #82828c; }
+
+.soc-history-rev,
+.soc-history-time {
+    color: var(--re-text-muted, #888);
+    margin-left: auto;
+}
+
+.soc-note {
+    font-size: 10px;
+    margin-left: 4px;
+}
+
+.soc-note-ok { color: #87d37c; }
+.soc-note-error { color: #e0606a; }
+
+.soc-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+}
+
+.soc-modal {
+    background: #141414;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 16px;
+    width: min(720px, 92vw);
+    max-height: 85vh;
+    overflow-y: auto;
+    color: #ddd;
+}
+
+.soc-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.soc-modal-header .soc-verdict-badge {
+    cursor: default;
+}
+
+.soc-modal-title {
+    font-size: 12px;
+    color: var(--re-text-muted, #aaa);
+    flex: 1;
+}
+
+.soc-modal-close {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.soc-modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 16px;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.soc-section {
+    margin-top: 10px;
+    border-top: 1px solid #2a2a2a;
+    padding-top: 8px;
+}
+
+.soc-section h5 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--re-text-muted, #888);
+}
+
+.soc-summary {
+    font-size: 13px;
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.soc-evidence-row {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    padding: 2px 0;
+}
+
+.soc-evidence-row a {
+    color: #8ab4ff;
+}
+
+.soc-evidence-explanation {
+    color: #bbb;
+}
+
+.soc-indicators {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.soc-indicator {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: #1e1e1e;
+    border: 1px solid #333;
+}
+
+.soc-action-note {
+    font-size: 12px;
+    margin: 0;
+    color: #ccc;
+}
+
+.soc-disclaimer {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--re-text-muted, #888);
+}

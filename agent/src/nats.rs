@@ -11,13 +11,13 @@ use crate::wire::{PacketBatch, WireRawPacket};
 
 // WIRE FORMAT - agent → analyzer, raw packets topic (protobuf):
 //   proto/wire.proto (top level of the repo, symlinked into this crate
-//   as ./proto): PacketBatch { version, repeated RawPacket packets }.
+//   as ./proto): PacketBatch { version, agent_id, repeated RawPacket packets }.
 // One NATS message carries a BATCH of packets: up to `nats_batch_size`
 // packets or `nats_batch_interval_ms` (whichever first); single packets
 // travel as one-element batches. The decoder lives in
 // traffic-analyzer/src/message_broker.rs and MUST mirror this constant
 // and the schema.
-pub const RAW_PACKET_WIRE_VERSION: u32 = 3;
+pub const RAW_PACKET_WIRE_VERSION: u32 = 4;
 
 /// One raw packet queued format: (tv_usec, tv_sec, frame).
 pub type RawPacket = (i64, i64, Vec<u8>);
@@ -48,9 +48,11 @@ impl NatsClient {
 
         let (packet_tx, packet_rx) = mpsc::channel::<RawPacket>(PACKET_QUEUE_CAPACITY);
         let batch_drops = Arc::new(AtomicU64::new(0));
+        let agent_id = agent_id.to_string();
         tokio::spawn(run_packet_batcher(
             client.clone(),
             config.nats_raw_packets_topic.clone(),
+            agent_id.clone(),
             packet_rx,
             config.nats_batch_size,
             config.nats_batch_interval_ms,
@@ -60,7 +62,7 @@ impl NatsClient {
         Ok(Self {
             client,
             raw_packets_topic: config.nats_raw_packets_topic.clone(),
-            agent_id: agent_id.to_string(),
+            agent_id,
             packet_tx,
             batch_drops,
         })
@@ -123,10 +125,13 @@ impl NatsClient {
 }
 
 /// Encode the versioned batch envelope (see RAW_PACKET_WIRE_VERSION).
-/// Public for tests; the wire contract is mirrored in the analyzer.
-pub fn encode_packet_batch(packets: Vec<RawPacket>) -> anyhow::Result<Vec<u8>> {
+/// `agent_id` is the batch-level attribution the analyzer resolves the
+/// per-agent machine IP from. Public for tests; the wire contract is
+/// mirrored in the analyzer.
+pub fn encode_packet_batch(agent_id: &str, packets: Vec<RawPacket>) -> anyhow::Result<Vec<u8>> {
     let batch = PacketBatch {
         version: RAW_PACKET_WIRE_VERSION,
+        agent_id: agent_id.to_string(),
         packets: packets
             .into_iter()
             .map(|(tv_usec, tv_sec, ethernet_frame)| WireRawPacket {
@@ -146,6 +151,7 @@ pub fn encode_packet_batch(packets: Vec<RawPacket>) -> anyhow::Result<Vec<u8>> {
 async fn run_packet_batcher(
     client: Client,
     topic: String,
+    agent_id: String,
     mut rx: mpsc::Receiver<RawPacket>,
     max_batch: usize,
     interval_ms: u64,
@@ -170,18 +176,18 @@ async fn run_packet_batcher(
                     Some(pkt) => {
                         buffer.push(pkt);
                         if buffer.len() >= max_batch {
-                            publish_batch(&client, &topic, &mut buffer, &drops).await;
+                            publish_batch(&client, &topic, &agent_id, &mut buffer, &drops).await;
                         }
                     }
                     None => {
                         // Queue closed (client dropped) — flush and exit.
-                        publish_batch(&client, &topic, &mut buffer, &drops).await;
+                        publish_batch(&client, &topic, &agent_id, &mut buffer, &drops).await;
                         return;
                     }
                 }
             }
             _ = ticker.tick() => {
-                publish_batch(&client, &topic, &mut buffer, &drops).await;
+                publish_batch(&client, &topic, &agent_id, &mut buffer, &drops).await;
             }
         }
     }
@@ -190,6 +196,7 @@ async fn run_packet_batcher(
 async fn publish_batch(
     client: &Client,
     topic: &str,
+    agent_id: &str,
     buffer: &mut Vec<RawPacket>,
     drops: &Arc<AtomicU64>,
 ) {
@@ -199,7 +206,7 @@ async fn publish_batch(
     let count = buffer.len();
     // std::mem::take leaves an (empty) Vec behind so the caller's buffer is
     // reusable even on the error path.
-    let payload = match encode_packet_batch(std::mem::take(buffer)) {
+    let payload = match encode_packet_batch(agent_id, std::mem::take(buffer)) {
         Ok(p) => p,
         Err(e) => {
             // Encode of a Vec of tuples cannot realistically fail; if it
@@ -229,7 +236,7 @@ mod tests {
             (111_111i64, 1_700_000_000i64, vec![0x00, 0x01, 0xFF, 0x0a]),
             (222_222i64, 1_700_000_001i64, vec![]),
         ];
-        let bytes = encode_packet_batch(packets.clone()).unwrap();
+        let bytes = encode_packet_batch("batcher-test", packets.clone()).unwrap();
 
         let batch = PacketBatch::decode(bytes.as_slice()).unwrap();
         assert_eq!(batch.version, RAW_PACKET_WIRE_VERSION);
@@ -240,12 +247,12 @@ mod tests {
             .collect();
         assert_eq!(decoded, packets);
         // Version must match the analyzer's constant
-        assert_eq!(RAW_PACKET_WIRE_VERSION, 3);
+        assert_eq!(RAW_PACKET_WIRE_VERSION, 4);
     }
 
     #[test]
     fn single_packet_is_a_one_element_envelope() {
-        let bytes = encode_packet_batch(vec![(1i64, 2i64, vec![9u8])]).unwrap();
+        let bytes = encode_packet_batch("batcher-test", vec![(1i64, 2i64, vec![9u8])]).unwrap();
         let batch = PacketBatch::decode(bytes.as_slice()).unwrap();
         assert_eq!(batch.version, RAW_PACKET_WIRE_VERSION);
         assert_eq!(batch.packets.len(), 1);
@@ -280,7 +287,7 @@ mod tests {
         let packets = make_packets(50_000);
         let t0 = std::time::Instant::now();
         for p in &packets {
-            let msg = encode_packet_batch(vec![p.clone()]).unwrap();
+            let msg = encode_packet_batch("batcher-test", vec![p.clone()]).unwrap();
             client.publish(topic.clone(), msg.into()).await.unwrap();
         }
         let mut received = 0usize;
@@ -299,7 +306,7 @@ mod tests {
         const K: usize = 32;
         let t0 = std::time::Instant::now();
         for chunk in packets.chunks(K) {
-            let msg = encode_packet_batch(chunk.to_vec()).unwrap();
+            let msg = encode_packet_batch("batcher-test", chunk.to_vec()).unwrap();
             client.publish(topic.clone(), msg.into()).await.unwrap();
         }
         let mut received_batches = 0usize;

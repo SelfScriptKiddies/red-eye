@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_nats::Client;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use tokio::sync::RwLock;
 
 use super::agent_dto::{AgentContainersResponse, AgentDockerStatus, AgentInfo};
@@ -36,6 +36,10 @@ struct CachedDocker {
 pub struct AgentService {
     agents: Arc<RwLock<HashMap<String, AgentInfo>>>,
     docker_containers: Arc<RwLock<HashMap<String, CachedDocker>>>,
+    /// Latest capture-source conflict counters per agent (diagnostic
+    /// gauge source; std lock: tiny values, sync heartbeat path).
+    capture_conflicts: Arc<std::sync::RwLock<HashMap<String, u64>>>,
+    forwarder_drops: Arc<std::sync::RwLock<HashMap<String, u64>>>,
     nats_client: Client,
 }
 
@@ -44,8 +48,34 @@ impl AgentService {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
             docker_containers: Arc::new(RwLock::new(HashMap::new())),
+            capture_conflicts: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            forwarder_drops: Arc::new(std::sync::RwLock::new(HashMap::new())),
             nats_client,
         }
+    }
+
+    /// Record the agent's latest capture-source conflict counter.
+    pub fn set_capture_conflicts(&self, agent_id: &str, value: u64) {
+        self.capture_conflicts
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), value);
+    }
+
+    pub fn capture_conflicts_total(&self) -> u64 {
+        self.capture_conflicts.read().unwrap().values().sum()
+    }
+
+    /// Record the agent's latest harpoon forwarder drop counter.
+    pub fn set_forwarder_drops(&self, agent_id: &str, value: u64) {
+        self.forwarder_drops
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), value);
+    }
+
+    pub fn forwarder_drops_total(&self) -> u64 {
+        self.forwarder_drops.read().unwrap().values().sum()
     }
 
     /// Update agent status from heartbeat data
@@ -271,92 +301,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-/// Spawn NATS subscriber for agent heartbeats
-pub fn spawn_heartbeat_listener(
-    nats_client: Client,
-    agent_service: Arc<AgentService>,
-    pool: sqlx::PgPool,
-) {
-    tokio::spawn(async move {
-        let mut subscriber = match nats_client.subscribe("agent_status.*").await {
-            Ok(sub) => sub,
-            Err(e) => {
-                error!("Failed to subscribe to agent heartbeats: {}", e);
-                return;
-            }
-        };
-
-        info!("Listening for agent heartbeats on agent_status.*");
-
-        use futures_util::StreamExt;
-        while let Some(msg) = subscriber.next().await {
-            match serde_json::from_slice::<AgentInfo>(&msg.payload) {
-                Ok(status) => {
-                    let is_new = !agent_service
-                        .agents_store()
-                        .read()
-                        .await
-                        .contains_key(&status.agent_id);
-                    let agent_id = status.agent_id.clone();
-                    agent_service.update_status(status).await;
-
-                    // New agent connected — bind all services, sync ports and filters
-                    if is_new {
-                        let pool2 = pool.clone();
-                        let agent_svc2 = agent_service.clone();
-                        let aid = agent_id.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                            info!("New agent '{}' connected, binding services + syncing", aid);
-
-                            // Bind all services to new agent
-                            crate::api::agent::bind_all_services_to_agent(&aid, &pool2).await;
-
-                            // Push sniffer ports
-                            crate::api::agent::sync_agent_ports(&aid, &pool2, &agent_svc2).await;
-
-                            // Push block filters
-                            crate::api::block_sync::sync_block_filters(&pool2, &agent_svc2).await;
-                        });
-                    }
-                }
-                Err(e) => {
-                    debug!("Failed to parse agent heartbeat: {}", e);
-                }
-            }
-        }
-    });
-}
-
-/// Spawn NATS subscriber for agent Docker container listings
-/// (replies to the DockerListContainers command, published by agents on
-/// `agent_docker.{agent_id}`). Same infrastructure as the heartbeat
-/// listener: malformed payloads are dropped, the subscriber never dies.
-pub fn spawn_docker_containers_listener(nats_client: Client, agent_service: Arc<AgentService>) {
-    tokio::spawn(async move {
-        let subject = format!("{}*", AGENT_DOCKER_SUBJECT_PREFIX);
-        let mut subscriber = match nats_client.subscribe(subject.clone()).await {
-            Ok(sub) => sub,
-            Err(e) => {
-                error!("Failed to subscribe to {}: {}", subject, e);
-                return;
-            }
-        };
-
-        info!("Listening for agent docker listings on {}", subject);
-
-        use futures_util::StreamExt;
-        while let Some(msg) = subscriber.next().await {
-            match serde_json::from_slice::<AgentDockerStatus>(&msg.payload) {
-                Ok(status) => agent_service.update_docker_status(status).await,
-                Err(e) => {
-                    debug!("Failed to parse agent docker listing: {}", e);
-                }
-            }
-        }
-    });
 }
 
 #[cfg(test)]

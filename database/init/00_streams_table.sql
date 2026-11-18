@@ -14,7 +14,37 @@ CREATE TABLE IF NOT EXISTS stream (
     service_id BIGINT NOT NULL,
     l7_protocol VARCHAR(16) NOT NULL DEFAULT 'unknown',
     first_packet_time BIGINT,
-    last_packet_time BIGINT
+    last_packet_time BIGINT,
+    -- Capturing agent (per-agent attribution); NULL for legacy rows and
+    -- batches without a known agent.
+    agent_id VARCHAR(255),
+    -- Starred-stream retention metadata (see
+    -- database/migrations/add_favorite_retention.sql). favorite stays the
+    -- fast operator-visible predicate; the columns below carry the
+    -- retention guarantee.
+    favorite_since TIMESTAMPTZ,
+    -- Monotonic per-stream token; late workers compare it before touching
+    -- anything.
+    favorite_revision BIGINT NOT NULL DEFAULT 0,
+    -- Highest packet id represented in saved_packet; content rows of
+    -- packets <= this id are archived in the same commit.
+    archived_through_packet_id BIGINT NOT NULL DEFAULT 0,
+    -- live | archiving | archived | incomplete. archiving with
+    -- favorite=false means "saved content awaiting bounded deletion".
+    retention_state TEXT NOT NULL DEFAULT 'live'
+        CHECK (retention_state IN ('live', 'archiving', 'archived', 'incomplete')),
+    -- FK-free: the previous segment may be orphan-cleaned while this row
+    -- lives on; a dangling link renders as none.
+    continuation_of BIGINT,
+    segment_index INT NOT NULL DEFAULT 1,
+    -- Running payload-byte estimate maintained by the analyzer flush.
+    retention_bytes BIGINT NOT NULL DEFAULT 0,
+    -- Last archive batch failure, sanitized (ids/byte counts, no payloads).
+    archive_error TEXT,
+    -- Highest packet id included in the flusher's stream-stats update; the
+    -- JEV scheduler's content-revision boundary. Legacy/pre-JEV rows stay 0
+    -- and are never analysis candidates until new packets arrive.
+    last_packet_id BIGINT NOT NULL DEFAULT 0
 );
 
 -- Streams list keyset pagination: the list orders by
@@ -36,3 +66,17 @@ CREATE INDEX IF NOT EXISTS idx_stream_service_id ON stream(service_id);
 -- matches the query exactly and shrinks as the FIN/RST lifecycle retires
 -- streams (identical speed to a full 4-col index at 100% active).
 CREATE INDEX IF NOT EXISTS idx_stream_tuple_active ON stream(src_ip, src_port, dst_ip, dst_port) WHERE active;
+-- Favorite keyset listing: the favorites view reuses the main list's
+-- ordering/cursor expressions restricted to favorites (tiny partial index).
+CREATE INDEX IF NOT EXISTS idx_stream_favorite_list
+    ON stream (COALESCE(last_packet_time, 0) DESC, id DESC) WHERE favorite;
+-- Archive/cleanup worker scans and capacity accounting.
+CREATE INDEX IF NOT EXISTS idx_stream_favorite_state ON stream (favorite, retention_state);
+-- Continuation chain walks (prev/next segment links).
+CREATE INDEX IF NOT EXISTS idx_stream_continuation
+    ON stream (continuation_of) WHERE continuation_of IS NOT NULL;
+-- JEV candidate scan (recent-first and oldest-waiting-first queues);
+-- partial because rows without a revision (last_packet_id = 0) are never
+-- analysis candidates.
+CREATE INDEX IF NOT EXISTS idx_stream_ai_candidates
+    ON stream (last_packet_time DESC, id DESC) WHERE last_packet_id > 0;

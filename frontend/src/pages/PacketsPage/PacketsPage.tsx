@@ -9,13 +9,18 @@ import { PacketCard } from '../../components/PacketCard';
 import { DiffView } from '../../components/DiffView';
 
 import { TimelineBar } from '../../components/TimelineBar/TimelineBar';
-import { apiFetch, copyText } from '../../lib/api';
+import { AiVerdictPanel } from '../../components/AiVerdict';
+import { SocTriagePanel } from '../../components/SocTriage';
+import { apiFetch, copyText, setStreamFavorite, FavoriteCapacityError } from '../../lib/api';
+import { formatBytes } from '../../lib/favoriteRetention';
 import { shq, pyStr } from '../../lib/exportEscaping';
+import { parseStreamsParam, buildAgentLink, MAX_AGENT_LINK_IDS } from '../../lib/streamsLink';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
 import { useStableRowHeight } from '../../lib/useStableRowHeight';
 import { useRedEye } from '../../context/RedEyeContext';
+import { parseUaDrilldown } from '../../lib/userAgents';
 
 
 // Row component for virtual stream list
@@ -125,6 +130,10 @@ export function PacketsPage() {
     const timelineClearRef = useRef<(() => void) | null>(null);
     const clearTimeSelection = () => { setStartTime(null); setEndTime(null); timelineClearRef.current?.(); };
     const [headerFilters, setHeaderFilters] = useState<{name: string, value: string, exclude?: boolean}[]>([]);
+    // Drill-down scope from the URL (User-Agent drawer): every header
+    // search runs against one service (and optionally one agent) with
+    // exact value comparison until Reset clears it.
+    const [scopedFilter, setScopedFilter] = useState<{ serviceId: number; agentId?: string } | null>(null);
     const [headerSearchResults, setHeaderSearchResults] = useState<{stream_ids: number[], total: number} | null>(null);
     const [headerExcludeIds, setHeaderExcludeIds] = useState<Set<number>>(new Set());
     const [, setHeaderSearching] = useState(false);
@@ -132,6 +141,8 @@ export function PacketsPage() {
     const [diffRight, setDiffRight] = useState<any | null>(null);
     const [diffOpen, setDiffOpen] = useState(false);
     const [shareCopied, setShareCopied] = useState(false);
+    const [agentLinkCopied, setAgentLinkCopied] = useState(false);
+    const [agentLinkNote, setAgentLinkNote] = useState('');
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
     const [streamInfoOpen, setStreamInfoOpen] = useState(false);
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -167,6 +178,9 @@ export function PacketsPage() {
         services: streamServices,
         startTime,
         endTime,
+        // Server-side favorites filter (SQL predicate + keyset pagination
+        // over ALL matching streams), not a client-side page filter.
+        favoritesOnly: showFavoritesOnly,
         // Always enabled: the first page must load with Live OFF too, and the
         // freeze keeps background refetches from touching the visible list —
         // pending ids land on the Update badge instead. Live only switches
@@ -236,14 +250,22 @@ export function PacketsPage() {
         if (!pageBootRef.current) {
             pageBootRef.current = true;
             const params = new URLSearchParams(window.location.search);
-            const streamParam = params.get('stream');
-            if (streamParam) {
-                const ids = streamParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-                if (ids.length === 1) {
-                    setTimeout(() => handleStreamClick(ids[0]), 500);
-                } else if (ids.length > 1) {
-                    setTimeout(() => loadMultipleStreams(ids), 500);
-                }
+            const ids = parseStreamsParam(params.get('streams') ?? params.get('stream'));
+            if (ids.length === 1) {
+                setTimeout(() => handleStreamClick(ids[0]), 500);
+            } else if (ids.length > 1) {
+                setTimeout(() => loadMultipleStreams(ids), 500);
+            }
+            // User-Agent drill-down from the Settings drawer: the complete
+            // filter state travels in the URL, so reload and sharing
+            // restore the scoped exact search.
+            const drilldown = parseUaDrilldown(window.location.search);
+            if (drilldown) {
+                const scope = { serviceId: drilldown.serviceId, agentId: drilldown.agentId };
+                setScopedFilter(scope);
+                const filters = [{ name: drilldown.name, value: drilldown.value }];
+                setHeaderFilters(filters);
+                runHeaderSearch(filters, scope);
             }
         }
     }, [isRedEyeActive, servicesLoaded, tagsLoaded]);
@@ -278,14 +300,12 @@ export function PacketsPage() {
     // selection must be re-applied client-side on top of it — otherwise
     // toggling a tag while a header search is open silently does nothing
     // (the "reset doesn't reset" bug). In 'and' mode every selected tag
-    // name AND service must match; in 'or' mode any of them.
+    // name AND service must match; in 'or' mode any of them. Favorites
+    // filtering is server-side (favoritesOnly above), never client-side.
     const filteredStreams = useMemo(() => {
         let streams = headerSearchResults ? headerFilteredStreams : streamsArray;
         if (headerExcludeIds.size > 0) {
             streams = streams.filter((s: any) => !headerExcludeIds.has(s.id));
-        }
-        if (showFavoritesOnly) {
-            streams = streams.filter((s: any) => s.favorite);
         }
         const hasTagServiceFilters = usedTags.length > 0 || usedServices.length > 0;
         if (hasTagServiceFilters && (filterMode === 'or' || headerSearchResults)) {
@@ -303,18 +323,28 @@ export function PacketsPage() {
             });
         }
         return streams;
-    }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, showFavoritesOnly, filterMode, usedTags, usedServices, tagsArray]);
+    }, [headerSearchResults, headerFilteredStreams, streamsArray, headerExcludeIds, filterMode, usedTags, usedServices, tagsArray]);
 
     // Stable callbacks so memoized rowProps (below) don't churn on every render.
-    const runHeaderSearch = useCallback(async (filters: {name: string, value: string, exclude?: boolean}[]) => {
+    // `scope` overrides the current drill-down scope (boot passes the URL
+    // scope synchronously, before the state update lands).
+    const runHeaderSearch = useCallback(async (filters: {name: string, value: string, exclude?: boolean}[], scope?: { serviceId: number; agentId?: string } | null) => {
         setHeaderSearching(true);
+        const effectiveScope = scope !== undefined ? scope : scopedFilter;
         try {
             const includeFilters = filters.filter(f => !f.exclude);
             const excludeFilters = filters.filter(f => f.exclude);
 
             let includeResult = null;
             if (includeFilters.length > 0) {
-                includeResult = await fetch('/api/http/search/multi', {
+                const qp = new URLSearchParams();
+                if (effectiveScope) {
+                    qp.set('service_id', String(effectiveScope.serviceId));
+                    if (effectiveScope.agentId) qp.set('agent_id', effectiveScope.agentId);
+                    qp.set('match_mode', 'exact');
+                }
+                const suffix = qp.toString();
+                includeResult = await fetch(`/api/http/search/multi${suffix ? `?${suffix}` : ''}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(includeFilters.map(f => ({ name: f.name, value: f.value }))),
@@ -337,7 +367,7 @@ export function PacketsPage() {
             setHeaderExcludeIds(new Set());
         }
         setHeaderSearching(false);
-    }, []);
+    }, [scopedFilter]);
 
     const addHeaderFilter = useCallback((name: string, value: string, exclude: boolean = false) => {
         setHeaderFilters(prev => {
@@ -360,22 +390,56 @@ export function PacketsPage() {
         }
     };
 
+    /** Server-confirmed star/unstar for one stream: the local snapshot is
+     * updated ONLY from the server response, and a capacity rejection is
+     * surfaced instead of silently leaving a stale star. */
     const handleFavoriteToggle = useCallback(async (streamId, currentFavorite) => {
         try {
-            const response = await fetch(`/api/stream/${streamId}/favorite`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ favorite: !currentFavorite })
-            });
-            if (!response.ok) {
-                console.error('Не удалось обновить избранное:', await response.text());
-                return;
-            }
-            updateStream(streamId, (s: any) => ({ ...s, favorite: !currentFavorite }));
+            const state = await setStreamFavorite(streamId, !currentFavorite);
+            updateStream(streamId, (s: any) => ({
+                ...s,
+                favorite: state.favorite,
+                favorite_revision: state.favorite_revision,
+                retention_state: state.retention_state,
+                retention_bytes: state.retention_bytes,
+            }));
         } catch (error) {
-            console.error('Ошибка при обновлении избранного:', error);
+            if (error instanceof FavoriteCapacityError) {
+                alert(
+                    `Стрим #${streamId} НЕ взят в избранное: недостаточно ёмкости хранилища ` +
+                    `(зарезервировано ${formatBytes(error.reservedBytes)} из ${formatBytes(error.maxTotalBytes)}). ` +
+                    `Гарантия хранения не создана.`
+                );
+            } else {
+                alert(`Не удалось обновить избранное для стрима #${streamId}: ${error}`);
+            }
         }
     }, [updateStream]);
+
+    /** Bulk unstar: each stream is confirmed by the server; unstarred rows
+     * keep their saved content until bounded cleanup finishes, which the
+     * retention badge shows. */
+    const bulkUnstarSelected = useCallback(async () => {
+        const targets = selectedStreamIds.filter(id => {
+            const s = streamsArray.find((st: any) => st.id === id);
+            return s?.favorite;
+        });
+        if (targets.length === 0) return;
+        if (!confirm(`Снять избранное с ${targets.length} стримов? Сохранённые копии будут удалены фоном.`)) return;
+        for (const id of targets) {
+            try {
+                const state = await setStreamFavorite(id, false);
+                updateStream(id, (s: any) => ({
+                    ...s,
+                    favorite: state.favorite,
+                    favorite_revision: state.favorite_revision,
+                    retention_state: state.retention_state,
+                }));
+            } catch (error) {
+                alert(`Не удалось снять избранное со стрима #${id}: ${error}`);
+            }
+        }
+    }, [selectedStreamIds, streamsArray, updateStream]);
 
     // Infinite scroll callback for virtual stream list
     const handleStreamsRowsRendered = useCallback(
@@ -419,7 +483,12 @@ export function PacketsPage() {
                     template_type: isHex ? 'bsubstr' : 'substr',
                     template: pattern,
                     direction: 'both',
-                    special_type: 'block'
+                    action: 'block',
+                    enabled: true,
+                    service_targets_global: true,
+                    agent_targets_global: true,
+                    service_ids: [],
+                    agent_ids: []
                 })
             });
             if (!response.ok) {
@@ -502,22 +571,54 @@ export function PacketsPage() {
         packetsListRef.current?.scrollToRow({ index: mergedPackets.length - 1, align: 'end', behavior: 'auto' });
     }, [mergedPackets.length, liveEnabled, packetsListRef]);
 
-    // Share: copy link + auto-favorite all selected
+    // Share: copy link + auto-favorite all selected (server-confirmed, no
+    // optimistic stars; per-stream capacity failures are reported).
     const shareStream = async () => {
         if (selectedStreamIds.length === 0) return;
         const streamParam = selectedStreamIds.join(',');
         const url = `${window.location.origin}/packets?stream=${streamParam}`;
         copyText(url);
-        // Auto-favorite all selected streams
+        const rejected: string[] = [];
         for (const id of selectedStreamIds) {
             const stream = streamsArray.find((s: any) => s.id === id);
             if (stream && !stream.favorite) {
-                handleFavoriteToggle(id, false);
+                try {
+                    const state = await setStreamFavorite(id, true);
+                    updateStream(id, (s: any) => ({
+                        ...s,
+                        favorite: state.favorite,
+                        favorite_revision: state.favorite_revision,
+                        retention_state: state.retention_state,
+                        retention_bytes: state.retention_bytes,
+                    }));
+                } catch (error) {
+                    rejected.push(
+                        error instanceof FavoriteCapacityError
+                            ? `#${id} (ёмкость исчерпана)`
+                            : `#${id} (ошибка)`
+                    );
+                }
             }
+        }
+        if (rejected.length > 0) {
+            alert(
+                `Ссылка скопирована, но гарантия хранения не создана для: ${rejected.join(', ')}. ` +
+                `Ёмкость можно увеличить в Настройках.`
+            );
         }
         setShareCopied(true);
         setTimeout(() => setShareCopied(false), 2000);
     };
+
+    // Link for an MCP agent: get_selected_streams reads it only on this origin.
+    const copyAgentLink = useCallback(() => {
+        if (selectedStreamIds.length === 0) return;
+        const { url, truncated } = buildAgentLink(window.location.origin, selectedStreamIds);
+        copyText(url);
+        setAgentLinkCopied(true);
+        setAgentLinkNote(truncated ? `Обрезано до ${MAX_AGENT_LINK_IDS} стримов` : '');
+        setTimeout(() => { setAgentLinkCopied(false); setAgentLinkNote(''); }, 2500);
+    }, [selectedStreamIds]);
 
     // Export generators
     // Stream src/dst ips come CIDR-styled from the API; stripCidr lives at
@@ -724,6 +825,7 @@ export function PacketsPage() {
                         setUsedTags([]); setUsedServices([]); setFilterMode('and'); setShowFavoritesOnly(false);
                         clearTimeSelection();
                         setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set());
+                        setScopedFilter(null);
                     }}>
                         Сброс
                     </button>
@@ -788,8 +890,16 @@ export function PacketsPage() {
                                 ))}
                             </div>
                         )}
+                        {headerFilters.length > 0 && scopedFilter && (
+                            <div className="filter-indicator-chips">
+                                <span className="filter-indicator-chip">
+                                    сервис #{scopedFilter.serviceId}{scopedFilter.agentId ? ` (${scopedFilter.agentId})` : ''} точное совпадение
+                                    <button onClick={() => setScopedFilter(null)}>x</button>
+                                </span>
+                            </div>
+                        )}
                         {headerFilters.length > 0 && (
-                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set()); }}>
+                            <button className="filter-clear-btn" onClick={() => { setHeaderFilters([]); setHeaderSearchResults(null); setHeaderExcludeIds(new Set()); setScopedFilter(null); }}>
                                 Сбросить HTTP фильтры
                             </button>
                         )}
@@ -831,6 +941,12 @@ export function PacketsPage() {
                 {packetData.length > 0 && (
                     <div className="packet-toolbar">
                         <div className="toolbar-left">
+                            {selectedStreamIds.length === 1 && (
+                                <AiVerdictPanel streamId={selectedStreamIds[0]} />
+                            )}
+                            {selectedStreamIds.length === 1 && (
+                                <SocTriagePanel streamId={selectedStreamIds[0]} />
+                            )}
                             <div className="stream-info-wrap">
                                 <button
                                     className="toolbar-btn"
@@ -875,6 +991,28 @@ export function PacketsPage() {
                             )}
                         </div>
                         <div className="toolbar-right">
+                            {showFavoritesOnly && isMultiSelect && (
+                                <button
+                                    className="toolbar-btn"
+                                    onClick={bulkUnstarSelected}
+                                    title="Снять избранное со всех выбранных (сохранённые копии удаляются фоном)"
+                                >
+                                    ✩ Снять избранное ({selectedStreamIds.length})
+                                </button>
+                            )}
+                            <button
+                                className="toolbar-btn"
+                                onClick={copyAgentLink}
+                                title="Скопировать ссылку на выбранные стримы для LLM-агента (MCP get_selected_streams)"
+                                aria-label="Скопировать ссылку на выбранные стримы для LLM-агента"
+                            >
+                                {agentLinkCopied ? 'Скопировано' : 'Скопировать ссылку'}
+                            </button>
+                            {agentLinkNote && (
+                                <span style={{ fontSize: '11px', color: 'var(--re-text-secondary)', marginRight: '4px' }}>
+                                    {agentLinkNote}
+                                </span>
+                            )}
                             <button className="toolbar-btn" onClick={shareStream} title="Скопировать ссылку на стрим">
                                 {shareCopied ? '✓ Скопировано' : 'Share'}
                             </button>

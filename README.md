@@ -64,8 +64,7 @@ Binary: `agent/target/release/red-eye-agent`
 ./scripts/deploy-agent.sh root@10.0.0.1 \
   --nats 10.0.0.100:4222 \
   --nats-password YOUR_NATS_PASSWORD \
-  --interface eth0 \
-  --ports 8080,443
+  --interface eth0
 
 # With the nftables package preinstalled if missing (needed for
 # proxy/firewall features; nftables.service is NOT enabled)
@@ -73,7 +72,6 @@ Binary: `agent/target/release/red-eye-agent`
   --nats 10.0.0.100:4222 \
   --nats-password YOUR_NATS_PASSWORD \
   --interface eth0 \
-  --ports 8080,443 \
   --install-nftables
 
 # Using .env file for credentials
@@ -104,6 +102,44 @@ The script:
 3. This sets up harpoon proxy + nftables redirect automatically
 4. Block filters are synced to all agents
 
+## LLM-SOC and MCP
+
+Two optional, disabled by default services extend Red Eye with AI triage and a remote MCP interface.
+
+### red-eye-mcp (remote MCP interface)
+
+Streamable HTTP MCP at `/mcp`. Read-only is secure default: the process refuses to expose mutations unless it was started with BOTH `MCP_MODE=full_control` and `MCP_ALLOW_FULL_CONTROL=true`, AND the caller holds a `full_control` token, AND the backend service credential carries `full_control` scope. Changing MCP mode is a between-games redeployment, not a runtime setting.
+
+1. `docker compose up -d red-eye-mcp` (starts fail-closed: no tokens, no access)
+2. Settings -> MCP: generate the **service token** once, put it into
+   `.env` as `MCP_SERVICE_TOKEN`, `docker compose up -d red-eye-mcp`
+3. Create an MCP token per harness (name + capability + optional expiry);
+   the plaintext is shown ONCE
+4. Point clients at `https://<central>/mcp` behind the central nginx,
+   which must terminate TLS and proxy `/mcp` with `proxy_buffering off`,
+   a bounded `client_max_body_size` and timeouts. Plaintext public
+   exposure is invalid.
+
+Token validation runs on initialization and every tool call; revocation
+bites immediately. Tokens in query strings are rejected. The service has
+no PostgreSQL/NATS access and no arbitrary backend proxy: every tool maps
+to a bounded backend endpoint.
+
+Full-control mutations additionally require `expected_revision`
+(optimistic concurrency against the control-plane revision),
+`confirm=true`, an audit `reason`, and for delete/block/proxy/agent
+operations a prior `dry_run=true` call whose `operation_id` the mutation
+must reference. Every audit record carries ids and statuses only.
+
+#### get_selected_streams (UI-selection bundle)
+
+The operator selects streams in the UI, copies the `/packets?streams=1,2,3`
+link and hands it to the agent. The tool accepts only links whose origin
+equals `MCP_PUBLIC_URL` (unset = fail closed), extracts the ids (cap 25) and
+serves each stream's bounded summary + messages from the service's backend
+connection. It never connects to the link itself, so external URLs are never
+fetchable. Unknown ids land in `failed_ids` instead of failing the call.
+Available to any authenticated token; audit records carry the url only.
 ## Features
 
 ### Traffic Capture
@@ -191,10 +227,17 @@ python3 test_grpc_service.py http://YOUR_IP:31337
 | `NATS_LOGIN` | NATS login | `username` |
 | `NATS_PASSWORD` | NATS password | `password` |
 | `INTERFACE` | Network interface | `eth0` |
-| `PORTS` | Ports to sniff (comma-sep) | — |
 | `AGENT_ID` | Agent identifier | hostname |
 | `DATA_DIR` | CA certs directory | `/var/lib/red-eye-agent` |
 | `LOGGING_LEVEL` | Log level | `info` |
+
+### LLM-SOC / MCP (.env, all optional)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MCP_SERVICE_TOKEN` | red-eye-mcp service credential for backend API calls | empty (MCP fail-closed) |
+| `MCP_PUBLIC_URL` | public origin of the Red Eye UI; `get_selected_streams` accepts only links on this origin | empty (tool fails closed) |
+| `SOC_WORKER_TOKEN` | soc-worker job credential for backend API calls | empty (worker retries) |
+| `MCP_TOKEN` | read-only MCP token the worker uses for evidence | empty |
 
 ## API Documentation
 

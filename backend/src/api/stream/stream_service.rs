@@ -1,4 +1,4 @@
-use crate::api::stream::stream_dto::{HistogramBucket, Stream, StreamListResponse};
+use crate::api::stream::stream_dto::{HistogramBucket, Stream, StreamListResponse, StreamResponse};
 use crate::api::stream::stream_repository::StreamRepository;
 use sqlx::PgPool;
 
@@ -19,6 +19,24 @@ impl StreamService {
         self.stream_repository.get_packet_by_id(stream_id).await
     }
 
+    pub async fn get_next_segment_id(&self, stream_id: i64) -> Result<Option<i64>, sqlx::Error> {
+        self.stream_repository.get_next_segment_id(stream_id).await
+    }
+
+    /// Full detail payload: stream row + packets + continuation link.
+    /// Read failure from saved storage surfaces as an explicit error, never
+    /// as a silently incomplete stream.
+    pub async fn get_stream_detail(
+        &self,
+        stream_id: i64,
+        packet_service: &crate::api::packet::packet_service::PacketService,
+    ) -> Result<StreamResponse, sqlx::Error> {
+        let stream = self.get_stream_by_id(stream_id).await?;
+        let next_segment_id = self.get_next_segment_id(stream_id).await?;
+        Ok(stream.to_response(packet_service, next_segment_id).await)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_all_streams_with_details(
         &self,
         limit: Option<i64>,
@@ -28,46 +46,38 @@ impl StreamService {
         services: Option<Vec<i64>>,
         start_time: Option<i64>,
         end_time: Option<i64>,
+        favorite: Option<bool>,
     ) -> Result<Vec<StreamListResponse>, sqlx::Error> {
         let limit = limit.unwrap_or(10);
         let offset = offset.unwrap_or(0);
 
         let streams = self
             .stream_repository
-            .get_streams_with_tags(limit, offset, cursor, tags, services, start_time, end_time)
+            .get_streams_with_tags(
+                limit, offset, cursor, tags, services, start_time, end_time, favorite,
+            )
             .await?;
 
         let responses = streams
             .into_iter()
-            .map(
-                |(
-                    id,
-                    first_time,
-                    last_time,
-                    packet_count,
-                    tags,
-                    service_name,
-                    service_id,
-                    favorite,
-                    l7_protocol,
-                    src_ip,
-                    dst_ip,
-                )| {
-                    StreamListResponse {
-                        id,
-                        first_packet_time: first_time.unwrap_or(0),
-                        last_packet_time: last_time.unwrap_or(0),
-                        packet_count: packet_count as i32,
-                        tags,
-                        service_id: service_id.unwrap_or(-1),
-                        service_name: service_name.unwrap_or("Unknown".to_string()),
-                        favorite,
-                        l7_protocol,
-                        src_ip: src_ip.unwrap_or_default(),
-                        dst_ip: dst_ip.unwrap_or_default(),
-                    }
-                },
-            )
+            .map(|row| StreamListResponse {
+                id: row.stream_id,
+                first_packet_time: row.first_time.unwrap_or(0),
+                last_packet_time: row.last_time.unwrap_or(0),
+                packet_count: row.packet_count as i32,
+                tags: row.tags,
+                service_id: row.service_id.unwrap_or(-1),
+                service_name: row.service_name.unwrap_or("Unknown".to_string()),
+                favorite: row.favorite,
+                l7_protocol: row.l7_protocol,
+                src_ip: row.src_ip.unwrap_or_default(),
+                dst_ip: row.dst_ip.unwrap_or_default(),
+                agent_id: row.agent_id,
+                retention_state: row.retention_state,
+                segment_index: row.segment_index,
+                retention_bytes: row.retention_bytes,
+                continuation_of: row.continuation_of,
+            })
             .collect();
 
         Ok(responses)
@@ -90,16 +100,10 @@ impl StreamService {
             })
             .collect())
     }
-
-    pub async fn set_favorite(&self, stream_id: i64, favorite: bool) -> Result<bool, sqlx::Error> {
-        self.stream_repository
-            .set_favorite(stream_id, favorite)
-            .await
-    }
 }
 
 /// Parse the opaque keyset cursor "last_time:id" (both i64, seconds).
-/// Returns None for absent/empty; Err(()) for malformed values — the handler
+/// Returns None for absent/empty; Err(()) for malformed values - the handler
 /// maps that to a 400 rather than silently returning page 1 (a silently
 /// reset cursor would duplicate rows the caller already has).
 pub(crate) fn parse_cursor(raw: &str) -> Result<Option<(i64, i64)>, ()> {

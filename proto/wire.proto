@@ -1,5 +1,9 @@
 // Wire contracts for the red-eye NATS streams: agent -> analyzer raw
 // packets, and backend -> agent + analyzer settings updates.
+//
+// Wire version 4: coordinated between-games upgrade. Version 3 and below
+// are unsupported; consumers reject foreign versions explicitly and keep
+// their last valid configuration.
 syntax = "proto3";
 
 package red_eye.wire;
@@ -19,6 +23,18 @@ message PacketBatch {
   /// Wire protocol version (for check of unsynced components)
   uint32 version = 1;
   repeated RawPacket packets = 2;
+  /// Stable identity of the capturing agent. The analyzer resolves the
+  /// per-agent machine IP from it; batches without a known agent are
+  /// dropped and counted, never attributed through a global default.
+  string agent_id = 3;
+}
+
+/// Transport protocol of a service. TCP is the proto3 zero value, matching
+/// the database default for pre-migration rows; senders always set it
+/// explicitly.
+enum Protocol {
+  PROTOCOL_TCP = 0;
+  PROTOCOL_UDP = 1;
 }
 
 // Wire contract for the backend -> agent + analyzer settings stream on NATS
@@ -41,31 +57,150 @@ message Service {
   bool merge_adjacent_packets = 6;
   bool urldecode = 7;
   bool http_parse = 8;
+  /// Database id, 64-bit end-to-end: a 32-bit narrowing loses ids and must
+  /// never happen at a compatibility boundary.
+  uint64 id = 9;
+  Protocol protocol = 10;
+  /// True = applies to all agents; false = explicit agent assignment only.
+  bool is_global = 11;
 }
 
-/// A packet filter (backend "tag") as delivered to the analyzers.
+/// Where an IP/CIDR matcher looks: the ORIGINAL packet's source or
+/// destination endpoint, before stream tuple normalization.
+enum IpEndpoint {
+  IP_ENDPOINT_SRC = 0;
+  IP_ENDPOINT_DST = 1;
+}
+
+/// Threshold counter configuration for alert and block actions.
+message Threshold {
+  /// Match count within the window that fires the action.
+  uint32 count = 1;
+  /// Sliding window length in seconds.
+  uint32 window_seconds = 2;
+  /// remote_ip | stream | service
+  string group_by = 3;
+  /// Suppression window after the action fires.
+  uint32 cooldown_seconds = 4;
+  /// Temporary remote-IP block length for block actions.
+  uint32 block_seconds = 5;
+}
+
+/// A persistent temporary block on one agent (threshold blocks and
+/// IP/CIDR blocks). Agents apply it through nftables and unban locally at
+/// expiry; the backend cleanup removes expired rows.
+message ActiveBlock {
+  uint64 filter_id = 1;
+  string agent_id = 2;
+  /// Bare remote address (no prefix).
+  string remote_ip = 3;
+  /// Expiry, epoch milliseconds.
+  uint64 blocked_until_ms = 4;
+}
+
+/// A packet filter of the unified model as delivered to the analyzers
+/// (ConfigSync) and agents (per-agent snapshots). Legacy fields 1-4 keep
+/// their meaning; every new field is additive within wire v4.
 message Filter {
   string pattern_name = 1;
+  /// Matcher kind: regex | substr | bsubstr | ip_cidr | expression
   string filter_type = 2;
+  /// Payload pattern (bsubstr: hex; ip_cidr: empty; expression: unused).
   bytes filter_payload = 3;
   FilterDirection direction = 4;
+  bool enabled = 5;
+  /// tag | flag | alert | block | block_connection
+  string action = 6;
+  /// Filter revision at its last mutation (stale per-filter updates are
+  /// rejected; ConfigSync replaces wholesale).
+  uint64 revision = 7;
+  /// Normalized CIDR for ip_cidr matchers ("10.0.0.5/32").
+  string ip_network = 8;
+  IpEndpoint ip_endpoint = 9;
+  /// Expiry, epoch milliseconds; 0 = never expires.
+  uint64 expires_at_ms = 10;
+  bool services_all = 11;
+  repeated uint64 service_ids = 12;
+  bool agents_all = 13;
+  repeated string agent_ids = 14;
+  /// Present only for threshold alert/block filters.
+  Threshold threshold = 15;
 }
 
 /// Id plus payload for single-entity operations.
 message ServiceOp {
-  uint32 id = 1;
+  uint64 id = 1;
   Service service = 2;
 }
 
 message FilterOp {
-  uint32 id = 1;
+  uint64 id = 1;
   Filter filter = 2;
 }
 
-/// Full configuration snapshot; ids ride inside the entries.
+/// Full global configuration snapshot (analyzer view: every service plus
+/// filters); ids ride inside the entries.
 message ConfigSync {
   repeated ServiceOp services = 1;
   repeated FilterOp filters = 2;
+}
+
+/// Effective per-agent network settings carried inside a snapshot.
+message AgentNetworkSettings {
+  /// Capture interface; the agent re-validates it exists on its host.
+  string interface = 1;
+  /// Machine IP: a concrete IPv4/IPv6 address or the wildcard 0.0.0.0 / ::
+  /// (wildcard = match services by protocol+port, preserve observed
+  /// endpoints when synthesizing packets).
+  string machine_ip = 2;
+}
+
+/// Desired proxy protection for one of the agent's services. The original
+/// service key (protocol + target_port) is what the agent must exclude
+/// from passive capture while the proxy is effective. Additive field on
+/// AgentConfigSnapshot (wire v4): agents that do not know it ignore it.
+message ProxyRule {
+  /// Service this proxy protects; the rule identity on the agent side.
+  uint64 service_id = 1;
+  /// Display name of the harpoon rule.
+  string name = 2;
+  string listen_address = 3;
+  uint32 listen_port = 4;
+  string target_address = 5;
+  /// Original service port: the nftables redirect source and the passive
+  /// capture key that must be excluded while the proxy is effective.
+  uint32 target_port = 6;
+  Protocol protocol = 7;
+  /// "" = no TLS; "mitm" | "terminate" | "passthrough".
+  string tls_mode = 8;
+  bool http2_enabled = 9;
+  /// Desired revision this rule was issued at (0 = legacy command without
+  /// revision; the agent still applies it).
+  uint64 revision = 10;
+}
+
+/// Complete desired configuration for one agent. Applying it atomically
+/// replaces that agent's interface, machine IP, service set, desired proxy
+/// state and filter projection (only filters the agent can enforce in its
+/// current mode, plus its active blocks); consumers ignore snapshots older
+/// than their current revision and snapshots addressed to other agent ids.
+message AgentConfigSnapshot {
+  /// Control-plane revision this snapshot was built from.
+  uint64 revision = 1;
+  /// Target agent id; receivers skip snapshots for other ids.
+  string agent_id = 2;
+  AgentNetworkSettings network = 3;
+  /// The agent's effective service set (global services plus explicitly
+  /// assigned ones), complete replacement semantics.
+  repeated Service services = 4;
+  /// Desired proxy state for this agent's services, complete replacement
+  /// semantics: a proxy absent here must not stay effective.
+  repeated ProxyRule desired_proxies = 5;
+  /// Filters assigned to this agent that its protection mode can enforce.
+  /// Renumbered from 5 to avoid colliding with desired_proxies.
+  repeated Filter filters = 6;
+  /// Unexpired blocks for this agent; complete replacement semantics.
+  repeated ActiveBlock blocks = 7;
 }
 
 /// One settings change on the wire. Exactly one `update` variant is set.
@@ -75,10 +210,11 @@ message SettingsEnvelope {
   oneof update {
     ServiceOp service_add = 2;
     ServiceOp service_update = 3;
-    uint32 service_remove = 4;
+    uint64 service_remove = 4;
     FilterOp filter_add = 5;
     FilterOp filter_update = 6;
-    uint32 filter_remove = 7;
+    uint64 filter_remove = 7;
     ConfigSync config_sync = 8;
+    AgentConfigSnapshot agent_snapshot = 9;
   }
 }

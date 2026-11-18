@@ -7,6 +7,7 @@ use tokio::time::{Duration, Instant};
 
 use crate::cache::Cache;
 use crate::db::DB;
+use crate::metrics;
 use crate::ws_aggregator::SharedWsAggregator;
 
 /// A fully-processed packet ready for batch insertion.
@@ -41,6 +42,9 @@ pub struct HttpMessageData {
     pub timestamp: i64,
     pub l7_protocol: String,
     pub grpc: Option<GrpcMessageData>,
+    /// Classified request User-Agent (see user_agent::classify). Responses
+    /// and blank values are None and never reach the aggregates.
+    pub user_agent: crate::user_agent::UserAgentStat,
 }
 
 pub struct GrpcMessageData {
@@ -136,6 +140,7 @@ pub fn spawn_flushers(
     opts: FlusherOptions,
     cache: Arc<Cache>,
     ws_aggregator: SharedWsAggregator,
+    retention: Arc<crate::retention::RetentionTracker>,
 ) -> ShardedBatchSender {
     let n = flushers.max(1);
     let (sender, rxs) = sharded_channels(n, queue_capacity);
@@ -143,8 +148,9 @@ pub fn spawn_flushers(
         let db = db.clone(); // PgPool is internally Arc — one shared pool
         let cache = cache.clone();
         let ws_aggregator = ws_aggregator.clone();
+        let retention = retention.clone();
         tokio::spawn(async move {
-            run_batch_flusher(i, n, rx, db, opts, cache, ws_aggregator).await;
+            run_batch_flusher(i, n, rx, db, opts, cache, ws_aggregator, retention).await;
         });
     }
     info!(
@@ -197,6 +203,7 @@ pub async fn run_batch_flusher(
     opts: FlusherOptions,
     cache: Arc<Cache>,
     ws_aggregator: SharedWsAggregator,
+    retention: Arc<crate::retention::RetentionTracker>,
 ) {
     info!(
         "Batch flusher {}/{} started: batch_size={}, flush_interval={}ms",
@@ -225,7 +232,7 @@ pub async fn run_batch_flusher(
                         None => {
                             // Channel closed — flush remaining and exit.
                             if !buffer.is_empty() {
-                                flush_batch(&db, &mut buffer, &ws_aggregator).await;
+                                flush_batch(&db, &mut buffer, &ws_aggregator, &retention).await;
                             }
                             flush_lifecycle(&db, &cache).await;
                             info!("Batch flusher {}/{}: channel closed, shutting down", index + 1, total);
@@ -250,7 +257,7 @@ pub async fn run_batch_flusher(
                     match result {
                         Some(pkt) => Some(pkt),
                         None => {
-                            flush_batch(&db, &mut buffer, &ws_aggregator).await;
+                            flush_batch(&db, &mut buffer, &ws_aggregator, &retention).await;
                             flush_lifecycle(&db, &cache).await;
                             info!("Batch flusher {}/{}: channel closed, shutting down", index + 1, total);
                             return;
@@ -276,7 +283,7 @@ pub async fn run_batch_flusher(
             || (!buffer.is_empty() && deadline.map(|d| Instant::now() >= d).unwrap_or(false));
 
         if should_flush {
-            flush_batch(&db, &mut buffer, &ws_aggregator).await;
+            flush_batch(&db, &mut buffer, &ws_aggregator, &retention).await;
             flush_lifecycle(&db, &cache).await;
             deadline = None;
         }
@@ -309,6 +316,7 @@ async fn flush_batch(
     db: &DB,
     buffer: &mut Vec<ProcessedPacket>,
     ws_aggregator: &SharedWsAggregator,
+    retention: &Arc<crate::retention::RetentionTracker>,
 ) {
     if buffer.is_empty() {
         return;
@@ -339,8 +347,11 @@ async fn flush_batch(
         }
     }
 
-    // 3. Batch INSERT HTTP messages (multi-row, RETURNING id), then batch the
-    //    dependent gRPC inserts and l7-protocol UPDATEs.
+    // 3. Batch INSERT HTTP messages idempotently, then batch the dependent
+    //    gRPC inserts and l7-protocol UPDATEs. The first attempt also
+    //    carries the User-Agent aggregate update; if that fails, the retry
+    //    drops the aggregates (counted degradation) so packet/HTTP storage
+    //    never stalls on User-Agent statistics.
     let http_rows: Vec<(i64, &HttpMessageData)> = buffer
         .iter()
         .enumerate()
@@ -351,69 +362,104 @@ async fn flush_batch(
         })
         .collect();
     if !http_rows.is_empty() {
-        match db.insert_http_messages_batch(&http_rows).await {
-            Ok(msg_ids) if msg_ids.len() == http_rows.len() => {
-                // gRPC inserts keyed by the returned http_message ids.
-                let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, (_, http))| http.grpc.as_ref().map(|grpc| (msg_ids[i], grpc)))
-                    .collect();
-                if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
-                    error!("Batch gRPC insert failed: {:?}", e);
-                }
-
-                // Dedupe l7-protocol UPDATEs to the highest protocol per stream.
-                let rank = |p: &str| match p {
-                    "grpc" => 2,
-                    "http1" => 1,
-                    _ => 0,
-                };
-                let mut l7: HashMap<usize, &str> = HashMap::new();
-                for (_, http) in &http_rows {
-                    l7.entry(http.stream_id)
-                        .and_modify(|cur| {
-                            if rank(&http.l7_protocol) > rank(cur) {
-                                *cur = http.l7_protocol.as_str();
-                            }
-                        })
-                        .or_insert(http.l7_protocol.as_str());
-                }
-                let l7_rows: Vec<(usize, String)> =
-                    l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
-                if let Err(e) = db.update_stream_l7_protocol_batch(&l7_rows).await {
-                    error!("Batch l7_protocol update failed: {:?}", e);
-                }
-            }
-            Ok(msg_ids) => {
-                error!(
-                    "HTTP batch returned {} ids for {} messages — skipping grpc/l7",
-                    msg_ids.len(),
-                    http_rows.len()
-                );
-            }
+        let inserted = match db.insert_http_messages_batch(&http_rows, true).await {
+            Ok(out) => Some(out),
             Err(e) => {
-                error!("Batch HTTP message insert failed: {:?}", e);
+                let lost = metrics::UA_AGGREGATE_LOSS.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::rate_limited_log("ua-aggregate-loss", lost, || {
+                    format!(
+                        "HTTP batch with User-Agent aggregates failed ({:?}) -- retrying without aggregates",
+                        e
+                    )
+                });
+                tokio::time::sleep(Duration::from_millis(75)).await;
+                match db.insert_http_messages_batch(&http_rows, false).await {
+                    Ok(out) => Some(out),
+                    Err(e2) => {
+                        error!("Batch HTTP message insert failed after retry: {:?}", e2);
+                        None
+                    }
+                }
+            }
+        };
+        if let Some(out) = inserted {
+            metrics::UA_MESSAGES_AGGREGATED
+                .fetch_add(out.ua_messages_contributed, Ordering::Relaxed);
+            metrics::UA_AGGREGATE_ROWS.fetch_add(out.ua_rows_written, Ordering::Relaxed);
+            metrics::UA_OVERSIZED_VALUES.fetch_add(out.ua_oversized, Ordering::Relaxed);
+            metrics::UA_CARDINALITY_OVERFLOW
+                .fetch_add(out.ua_cardinality_overflow, Ordering::Relaxed);
+
+            // gRPC inserts keyed by each row's prefetched http_message id
+            // (positional, independent of which rows conflicted).
+            let grpc_rows: Vec<(i64, &GrpcMessageData)> = http_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (_, http))| {
+                    http.grpc.as_ref().map(|grpc| (out.message_ids[i], grpc))
+                })
+                .collect();
+            if let Err(e) = db.insert_grpc_messages_batch(&grpc_rows).await {
+                error!("Batch gRPC insert failed: {:?}", e);
+            }
+
+            // Dedupe l7-protocol UPDATEs to the highest protocol per stream.
+            let rank = |p: &str| match p {
+                "grpc" => 2,
+                "http1" => 1,
+                _ => 0,
+            };
+            let mut l7: HashMap<usize, &str> = HashMap::new();
+            for (_, http) in &http_rows {
+                l7.entry(http.stream_id)
+                    .and_modify(|cur| {
+                        if rank(&http.l7_protocol) > rank(cur) {
+                            *cur = http.l7_protocol.as_str();
+                        }
+                    })
+                    .or_insert(http.l7_protocol.as_str());
+            }
+            let l7_rows: Vec<(usize, String)> =
+                l7.into_iter().map(|(s, p)| (s, p.to_string())).collect();
+            if let Err(e) = db.update_stream_l7_protocol_batch(&l7_rows).await {
+                error!("Batch l7_protocol update failed: {:?}", e);
             }
         }
     }
 
-    // 4. Single set-based UPDATE stream: last_packet_time (max) + packet_count (+= delta).
-    let mut stream_stats: HashMap<usize, (i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count)
-    for pkt in buffer.iter() {
+    // 4. Single set-based UPDATE stream: last_packet_time (max),
+    //    packet_count (+= delta), retention_bytes (+= payload bytes;
+    //    the segment-rotation estimate and star-time measurement feed on
+    //    it) and last_packet_id (max; the JEV scheduler's revision
+    //    boundary). Local tracker deltas apply for starred segments only.
+    let mut stream_stats: HashMap<usize, (i64, i64, i64, i64)> = HashMap::new(); // stream_id -> (max_ts, count, bytes, max_packet_id)
+    for (idx, pkt) in buffer.iter().enumerate() {
         let ts = pkt.timestamp_seconds as i64;
-        let entry = stream_stats.entry(pkt.stream_id).or_insert((ts, 0));
+        let packet_id = packet_ids[idx];
+        let entry = stream_stats
+            .entry(pkt.stream_id)
+            .or_insert((ts, 0, 0, packet_id));
         if ts > entry.0 {
             entry.0 = ts;
         }
+        if packet_id > entry.3 {
+            entry.3 = packet_id;
+        }
         entry.1 += 1;
+        entry.2 += pkt.payload.len() as i64;
     }
-    let stats_rows: Vec<(usize, i64, i64)> = stream_stats
+    let stats_rows: Vec<(usize, i64, i64, i64, i64)> = stream_stats
         .iter()
-        .map(|(s, (ts, c))| (*s, *ts, *c))
+        .map(|(s, (ts, c, b, max_id))| (*s, *ts, *c, *b, *max_id))
         .collect();
     if let Err(e) = db.update_streams_stats_batch(&stats_rows).await {
         error!("Failed to update stream stats: {:?}", e);
+    } else {
+        // Only on commit: a failed stats update leaves the tracker ahead of
+        // the DB and could trigger rotation on phantom bytes.
+        for (sid, _, _, bytes, _) in &stats_rows {
+            retention.add_bytes(*sid, *bytes);
+        }
     }
 
     // 5. Maintain stream_tag INCREMENTALLY: upsert the distinct
@@ -474,13 +520,13 @@ fn build_trigger_rows(
 /// losing one tag pair is acceptable degradation.
 fn build_stream_tag_pairs(
     buffer: &[ProcessedPacket],
-    names: &HashMap<usize, String>,
+    names: &HashMap<u64, String>,
 ) -> Vec<(usize, String)> {
     let mut seen: HashSet<(usize, &str)> = HashSet::new();
     let mut pairs: Vec<(usize, String)> = Vec::new();
     for pkt in buffer {
         for &(filter_id, _, _) in &pkt.triggers {
-            if let Some(name) = names.get(&filter_id) {
+            if let Some(name) = names.get(&(filter_id as u64)) {
                 if seen.insert((pkt.stream_id, name.as_str())) {
                     pairs.push((pkt.stream_id, name.clone()));
                 }
@@ -594,9 +640,9 @@ mod tests {
         let mut buffer = buffer;
         buffer.push(other_stream);
 
-        let mut names = HashMap::new();
-        names.insert(10usize, "flag_leak".to_string());
-        names.insert(11usize, "exploit".to_string());
+        let mut names: HashMap<u64, String> = HashMap::new();
+        names.insert(10u64, "flag_leak".to_string());
+        names.insert(11u64, "exploit".to_string());
 
         let mut pairs = build_stream_tag_pairs(&buffer, &names);
         pairs.sort();
@@ -616,8 +662,8 @@ mod tests {
         // Filter removed mid-game: no name mapping -> skip, no panic, no
         // placeholder garbage in stream_tag.
         let buffer = vec![packet(1_000, vec![(999, 0, 5), (10, 1, 2)])];
-        let mut names = HashMap::new();
-        names.insert(10usize, "flag_leak".to_string());
+        let mut names: HashMap<u64, String> = HashMap::new();
+        names.insert(10u64, "flag_leak".to_string());
 
         let pairs = build_stream_tag_pairs(&buffer, &names);
         assert_eq!(pairs, vec![(1, "flag_leak".to_string())]);
@@ -626,7 +672,7 @@ mod tests {
     #[test]
     fn stream_tag_pairs_empty_when_no_triggers() {
         let buffer = vec![packet(1_000, vec![])];
-        let names = HashMap::new();
+        let names: HashMap<u64, String> = HashMap::new();
         assert!(build_stream_tag_pairs(&buffer, &names).is_empty());
     }
 
