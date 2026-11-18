@@ -1244,6 +1244,8 @@ mod tests {
                 http2_enabled: false,
                 revision: 5,
             }],
+            filters: vec![],
+            blocks: vec![],
         };
 
         crate::updates::apply_snapshot(&snap, &state, &supervisor);
@@ -1298,6 +1300,8 @@ mod tests {
                 http2_enabled: false,
                 revision: 5,
             }],
+            filters: vec![],
+            blocks: vec![],
         };
         crate::updates::apply_snapshot(&snap, &state, &supervisor);
         supervisor.tick_once().await;
