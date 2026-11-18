@@ -102,9 +102,7 @@ impl ProxyRuleSpec {
     }
 }
 
-/// One running proxy rule: its spec plus its own engine instance. Rules
-/// are started and stopped individually, so enabling one service never
-/// restarts unrelated capture or proxy rules.
+/// One running proxy rule: its spec plus its own engine instance
 pub struct RuleRuntime {
     pub spec: ProxyRuleSpec,
     pub handle: EngineHandle,
@@ -120,8 +118,7 @@ impl RuleRuntime {
     }
 }
 
-/// Counters for the single capture forwarder (lag events on the broadcast
-/// consumer), reported via heartbeat.
+/// Counters for the single capture forwarder (lag events on the broadcast consumer), reported via heartbeat.
 #[derive(Default)]
 pub struct ForwarderCounters {
     pub lag_events: AtomicU64,
@@ -130,13 +127,10 @@ pub struct ForwarderCounters {
 pub struct HarpoonEngine {
     /// Protect rules keyed by service id (desired-state path).
     service_rules: HashMap<u64, RuleRuntime>,
-    /// Manual/replay rules keyed by rule name (legacy command path; no
-    /// capture-source exclusion - only service-keyed protect rules own a
-    /// passive key).
+    /// Manual/replay rules keyed by rule name
     adhoc_rules: HashMap<String, RuleRuntime>,
     /// Proxy rule name -> transport protocol, read by the capture
-    /// forwarder to synthesize the matching header (harpoon-core's
-    /// CapturedPacket carries no protocol field).
+    /// forwarder to synthesize the matching header
     rule_protocols: Arc<std::sync::RwLock<HashMap<String, TransportProto>>>,
     capture_mgr: Arc<CaptureManager>,
     /// Last synced filters (parsed form; kept for `filter_count`/status).

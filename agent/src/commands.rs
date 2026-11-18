@@ -25,10 +25,7 @@ fn default_tcp() -> String {
 pub enum AgentCommand {
     Shutdown,
 
-    // Proxy management. Commands carrying a service_id drive the
-    // desired-state machine (protect flow): the agent keeps them in its
-    // ledger and converges via supervised transitions. Commands without
-    // one are ad-hoc manual/replay rules (no capture-source exclusion).
+    // Proxy management
     ProxyAdd {
         name: String,
         listen: String,
@@ -155,9 +152,6 @@ async fn handle_command(
             service_id,
             revision,
         } => {
-            // Desired-state path: the command updates the ledger; the
-            // supervised transition does the rest. Redelivery is
-            // idempotent (same desired -> ApplyKind::None).
             if let Some(service_id) = service_id {
                 match desired_from_command(
                     service_id,
@@ -209,7 +203,6 @@ async fn handle_command(
             revision,
         } => {
             if let Some(service_id) = service_id {
-                // Protect flow updates are just new desired state.
                 match desired_from_command(
                     service_id,
                     &name,
@@ -252,8 +245,6 @@ async fn handle_command(
 
         AgentCommand::ProxyRemove { name, service_id } => {
             if let Some(service_id) = service_id {
-                // Desired removal: the disable transition retires the rule
-                // and returns the original key to passive capture.
                 supervisor.command_remove_desired(service_id);
                 return;
             }
@@ -368,9 +359,7 @@ mod tests {
         assert!(matches!(cmd, AgentCommand::DockerListContainers));
     }
 
-    /// Service ports no longer travel through commands: SnifferConfig was
-    /// removed with the PORTS bootstrap and must not come back as a
-    /// decode-able variant.
+    /// Service ports no longer travel through commands
     #[test]
     fn sniffer_config_command_is_gone() {
         assert!(
@@ -562,9 +551,7 @@ fn parse_proxy_spec(
     })
 }
 
-/// Parse a service-keyed command into desired proxy state. The original
-/// service port is mandatory: without it the agent could not exclude the
-/// right passive key or install the redirect.
+/// Parse a service-keyed command into desired proxy state
 #[allow(clippy::too_many_arguments)]
 fn desired_from_command(
     service_id: u64,

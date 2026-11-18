@@ -15,13 +15,11 @@ pub struct AgentConfig {
     #[arg(long, env = "AGENT_ID")]
     pub agent_id: Option<String>,
 
-    /// Bootstrap network interface to capture on (overridden per-agent
-    /// from the control plane)
+    /// Bootstrap network interface to capture on
     #[arg(long, short = 'i', env = "INTERFACE", default_value = "eth0")]
     pub interface: String,
 
-    /// Bootstrap machine IP address (overridden per-agent from the
-    /// control plane; 0.0.0.0 / :: = wildcard)
+    /// Bootstrap machine IP address
     #[arg(long, short = 'm', env = "MACHINE_IP", default_value = "0.0.0.0")]
     pub machine_ip: String,
 
@@ -57,7 +55,7 @@ pub struct AgentConfig {
     #[arg(long, env = "HEARTBEAT_INTERVAL_SECS", default_value_t = 5)]
     pub heartbeat_interval_secs: u64,
 
-    /// Data directory for CA certs and persistent state (stable agent id)
+    /// Data directory for CA certs and persistent state (i.e. stable agent id)
     #[arg(long, env = "DATA_DIR", default_value = "/var/lib/red-eye-agent")]
     pub data_dir: String,
 
@@ -93,11 +91,7 @@ impl AgentConfig {
         sanitize_nats_token(&raw)
     }
 
-    /// Stable agent identity. An explicit AGENT_ID remains the
-    /// operator-controlled identity and is never overridden. Otherwise the
-    /// id is persisted under DATA_DIR: agent identity must not depend on
-    /// mutable network settings, and existing installations keep the id
-    /// the legacy formula produced on their first run with this build.
+    /// Stable agent identity
     pub fn stable_agent_id(&self) -> String {
         if let Some(id) = &self.agent_id {
             return sanitize_nats_token(id);
@@ -132,8 +126,7 @@ impl AgentConfig {
         resolved
     }
 
-    /// Legacy bootstrap id formula (kept for tests of the sanitization
-    /// path; production identity flows through stable_agent_id).
+    /// Legacy bootstrap id formula
     pub fn resolved_agent_id(&self) -> String {
         self.bootstrap_resolved_id()
     }
