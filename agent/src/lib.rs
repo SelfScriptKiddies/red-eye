@@ -15,7 +15,9 @@ mod heartbeat;
 mod nats;
 mod nftables;
 mod packet_synthesis;
+mod proxy_state;
 mod sniffer;
+mod supervisor;
 mod tls_certs;
 mod updates;
 pub mod version;
@@ -24,7 +26,7 @@ mod wire;
 use config::AgentConfig;
 use harpoon::HarpoonEngine;
 use nats::NatsClient;
-use updates::{create_ports_cache, create_restart_notifier};
+use updates::create_restart_notifier;
 
 fn init_logging(level: &str) {
     use tracing_subscriber::{fmt, EnvFilter};
@@ -77,52 +79,81 @@ pub async fn run() {
     };
     info!("Connected to NATS at {}", config.nats_host);
 
-    // Shared control-plane state: ports are populated exclusively from
-    // AgentConfigSnapshot updates (no PORTS bootstrap), network settings
-    // start from the env/CLI bootstrap values.
+    // Shared control-plane state. Passive capture keys start EMPTY and
+    // are populated only by supervisor recomputes (assigned services
+    // minus proxied originals): a proxied key can never enter passive
+    // capture, not even briefly at boot. Network settings start from the
+    // env/CLI bootstrap values.
     let (restart_tx, restart_rx) = create_restart_notifier();
     let sniffer_health = Arc::new(sniffer::SnifferHealth::default());
+    let applied_revision = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let last_sync_error: Arc<std::sync::RwLock<Option<String>>> =
+        Arc::new(std::sync::RwLock::new(None));
     let state = Arc::new(updates::AppState {
-        ports: create_ports_cache(),
+        ports: updates::create_ports_cache(),
+        excluded_ports: updates::create_ports_cache(),
+        ports_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         config: Arc::new(std::sync::RwLock::new(updates::EffectiveConfig {
             interface: config.interface.clone(),
             machine_ip: config.machine_ip.parse().unwrap_or_else(|_| {
                 warn!("Invalid machine_ip '{}', using 0.0.0.0", config.machine_ip);
                 std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
             }),
-            revision: 0,
         })),
         restart_tx: restart_tx.clone(),
         health: sniffer_health.clone(),
-        pending_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        applied_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        last_sync_error: Arc::new(std::sync::RwLock::new(None)),
+        services: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        acker: Arc::new(updates::RevisionAcker::new(
+            applied_revision.clone(),
+            last_sync_error.clone(),
+        )),
+        applied_revision,
+        last_sync_error,
         agent_id: agent_id.clone(),
         boot_id: boot_id.clone(),
         config_source: config.clone(),
     });
 
-    // Harpoon engine with TLS certs and nftables manager
+    // Harpoon engine with TLS certs and nftables manager.
     let tls_available = tls_certs.is_some();
-    let harpoon_engine =
-        HarpoonEngine::new(state.ports.clone(), state.restart_tx.clone(), tls_certs);
-    let harpoon = Arc::new(Mutex::new(harpoon_engine));
+    let harpoon = Arc::new(Mutex::new(HarpoonEngine::new(tls_certs)));
+
+    // Proxy supervisor: desired/effective ledger, supervised transitions,
+    // recovery. Constructed BEFORE any capture starts, so the first
+    // snapshot reconciles proxies and passive exclusions in one pass.
+    let supervisor =
+        supervisor::spawn_proxy_supervisor(harpoon.clone(), state.clone(), tls_available);
 
     // Capture forwarder: harpoon packets -> NATS (reads per-packet machine
-    // IP and rule protocol from the shared state).
+    // IP and rule protocol from the shared state). Exactly one forwarder
+    // for ALL proxy rules; rule updates never create additional ones.
     let capture_mgr = harpoon.lock().await.capture_manager();
     let rule_protocols = harpoon.lock().await.rule_protocols();
+    let forwarder_counters = harpoon::new_forwarder_counters();
     harpoon::spawn_capture_forwarder(
         capture_mgr,
         nats.clone(),
         rule_protocols,
         state.config.clone(),
+        forwarder_counters.clone(),
     );
 
     // Start background subsystems
-    updates::spawn_updates_listener(nats.clone(), state.clone());
-    heartbeat::spawn_heartbeat(nats.clone(), harpoon.clone(), state.clone(), tls_available);
-    commands::spawn_command_listener(nats.clone(), state.clone(), harpoon.clone());
+    updates::spawn_updates_listener(nats.clone(), state.clone(), supervisor.clone());
+    heartbeat::spawn_heartbeat(
+        nats.clone(),
+        harpoon.clone(),
+        state.clone(),
+        supervisor.clone(),
+        forwarder_counters.clone(),
+        tls_available,
+    );
+    commands::spawn_command_listener(
+        nats.clone(),
+        state.clone(),
+        harpoon.clone(),
+        supervisor.clone(),
+    );
 
     // SIGTERM (systemctl restart/stop) and SIGINT must clean up nftables
     // before exit, otherwise the table keeps redirecting traffic to a dead
@@ -133,12 +164,13 @@ pub async fn run() {
     sniffer::run_sniffer_loop(
         nats,
         state.ports.clone(),
+        state.excluded_ports.clone(),
+        state.ports_generation.clone(),
         restart_rx,
         sniffer_health,
         state.config.clone(),
         state.last_sync_error.clone(),
-        state.pending_revision.clone(),
-        state.applied_revision.clone(),
+        state.acker.clone(),
     )
     .await;
 

@@ -305,4 +305,127 @@ mod tests {
         assert_eq!(encoded.1, 1_700_000_000);
         assert!(!encoded.2.is_empty());
     }
+
+    /// Build the passive-capture view of the SAME logical flow the
+    /// harpoon proxy observed: a client frame arriving at the machine
+    /// (dst = machine ip, dst port = original service port) and the
+    /// response leaving it. The analyzer derives direction from the
+    /// machine IP and normalizes the tuple with the local side first
+    /// (traffic-analyzer process_packet.rs: normalized_tuple) - the
+    /// synthesized frames must produce identical direction + tuple.
+    fn passive_equivalent_frame(
+        src_ip: [u8; 4],
+        src_port: u16,
+        dst_ip: [u8; 4],
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let l4 = 8 + payload.len();
+        let total = 20 + l4;
+        let mut frame = vec![0u8; 14 + total];
+        frame[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        frame[14] = 0x45;
+        frame[16..18].copy_from_slice(&(total as u16).to_be_bytes());
+        frame[23] = 17; // UDP
+        frame[26..30].copy_from_slice(&src_ip);
+        frame[30..34].copy_from_slice(&dst_ip);
+        frame[34..36].copy_from_slice(&src_port.to_be_bytes());
+        frame[36..38].copy_from_slice(&dst_port.to_be_bytes());
+        frame[38..40].copy_from_slice(&(l4 as u16).to_be_bytes());
+        frame[42..42 + payload.len()].copy_from_slice(payload);
+        frame
+    }
+
+    /// Extract (src, dst) from a synthesized or passive frame the way the
+    /// analyzer's parser does, plus the UDP length field.
+    fn endpoints(frame: &[u8]) -> ([u8; 4], u16, [u8; 4], u16) {
+        let src = [frame[26], frame[27], frame[28], frame[29]];
+        let dst = [frame[30], frame[31], frame[32], frame[33]];
+        let src_port = u16::from_be_bytes([frame[34], frame[35]]);
+        let dst_port = u16::from_be_bytes([frame[36], frame[37]]);
+        (src, src_port, dst, dst_port)
+    }
+
+    #[test]
+    fn synthesized_frames_match_passive_direction_and_tuple() {
+        let machine_ip: IpAddr = "10.0.0.5".parse().unwrap();
+
+        // Harpoon capture: client 10.0.0.9:40000 -> target 127.0.0.1:80
+        // (ClientToServer; target endpoint is rewritten to the machine IP
+        // because the service runs on the local machine).
+        let request = captured(b"GET /");
+        let syn = synthesize_raw_frame(&request, machine_ip, TransportProto::Udp);
+        let (s_ip, s_port, d_ip, d_port) = endpoints(&syn);
+        assert_eq!(d_port, 8080, "target port preserved for attribution");
+        assert_eq!(&s_ip, &[10, 0, 0, 9]);
+        assert_eq!(
+            &d_ip,
+            &[10, 0, 0, 5],
+            "loopback target rewritten to machine IP"
+        );
+
+        // Passive view of the same request on the wire.
+        let passive =
+            passive_equivalent_frame([10, 0, 0, 9], s_port, [10, 0, 0, 5], d_port, b"GET /");
+
+        // Direction: the endpoint matching the machine IP is the local
+        // side; here dst == machine => Inbound for both frames.
+        let direction_of = |frame: &[u8]| {
+            let (_s, _, d, _) = endpoints(frame);
+            if d == [10, 0, 0, 5] {
+                "inbound"
+            } else {
+                "outbound"
+            }
+        };
+        // Normalized tuple: local side first (analyzer semantics).
+        let normalized = |frame: &[u8]| {
+            let (s, sp, d, dp) = endpoints(frame);
+            if d == [10, 0, 0, 5] {
+                (d, dp, s, sp)
+            } else {
+                (s, sp, d, dp)
+            }
+        };
+        assert_eq!(direction_of(&syn), direction_of(&passive));
+        assert_eq!(normalized(&syn), normalized(&passive));
+
+        // Server-to-client capture: harpoon records src = target (the
+        // service endpoint), dst = client.
+        let mut response = captured(b"HTTP");
+        response.direction = harpoon_core::capture::PacketDirection::ServerToClient;
+        response.src = "127.0.0.1:8080".parse().unwrap();
+        response.dst = "10.0.0.9:40000".parse().unwrap();
+        let syn_reply = synthesize_raw_frame(&response, machine_ip, TransportProto::Udp);
+        assert_eq!(direction_of(&syn_reply), "outbound");
+        assert_eq!(
+            normalized(&syn_reply),
+            normalized(&passive_equivalent_frame(
+                [10, 0, 0, 5],
+                8080,
+                [10, 0, 0, 9],
+                s_port,
+                b"HTTP"
+            ))
+        );
+    }
+
+    /// The synthesized frame's UDP length and IP total length always match
+    /// the payload actually published (truncation included).
+    #[test]
+    fn synthesized_udp_lengths_consistent_with_published_bytes() {
+        for size in [0usize, 1, 64, 1400, 65_000, 80_000] {
+            let payload = vec![0xAB; size];
+            let frame = synthesize_raw_frame(
+                &captured(&payload),
+                "10.0.0.5".parse().unwrap(),
+                TransportProto::Udp,
+            );
+            let total = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+            let udp_len = u16::from_be_bytes([frame[14 + 20 + 4], frame[14 + 20 + 5]]) as usize;
+            assert_eq!(udp_len, 8 + frame.len() - 14 - 20 - 8);
+            assert_eq!(total, frame.len() - 14);
+            assert_eq!(frame.len() - 14, total);
+        }
+    }
 }

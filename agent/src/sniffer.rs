@@ -18,18 +18,26 @@ use pnet::packet::vlan::VlanPacket;
 use pnet::packet::Packet;
 
 use crate::nats::NatsClient;
-use crate::updates::{PortsCache, SharedConfig, TransportProto};
+use crate::updates::{ExcludedPortsCache, PortsCache, SharedConfig, TransportProto};
 
 /// Shared sniffer health, reported via heartbeat.
 #[derive(Debug, Default)]
 pub struct SnifferHealth {
     /// Whether the sniffer capture thread is currently running.
     active: AtomicBool,
-    /// True when capture is idle because no services are assigned: a
-    /// healthy waiting state, not an error.
+    /// True when passive capture is idle because the passive port set is
+    /// empty (no services, or every key is proxied): a healthy waiting
+    /// state, not an error.
     idle_no_services: AtomicBool,
     /// Packets dropped because the capture -> NATS queue was full.
     queue_drops: AtomicU64,
+    /// Generation of the passive port set the capture thread last loaded:
+    /// transitions wait for this to advance before trusting an exclusion.
+    applied_generation: AtomicU64,
+    /// Frames seen for keys that are effectively proxied. Any increment is
+    /// a capture-source state bug (passive must be excluded) and is
+    /// surfaced via diagnostics, never silently dropped.
+    capture_source_conflicts: AtomicU64,
 }
 
 /// Capacity of the capture -> NATS queue. When it is full, packets are
@@ -59,6 +67,38 @@ impl SnifferHealth {
     pub fn queue_drops(&self) -> u64 {
         self.queue_drops.load(Ordering::Relaxed)
     }
+
+    pub fn applied_generation(&self) -> u64 {
+        self.applied_generation.load(Ordering::SeqCst)
+    }
+
+    pub fn capture_source_conflicts(&self) -> u64 {
+        self.capture_source_conflicts.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_applied_generation_test_only(&self, generation: u64) {
+        self.set_applied_generation(generation);
+    }
+
+    fn set_applied_generation(&self, generation: u64) {
+        self.applied_generation.store(generation, Ordering::SeqCst);
+    }
+
+    fn add_capture_source_conflict(&self) {
+        let conflicts = self
+            .capture_source_conflicts
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        // Rate-limited visibility: a conflict is a bug, not normal traffic.
+        if conflicts == 1 || conflicts.is_multiple_of(1000) {
+            warn!(
+                "Capture-source conflict: passive sniffer captured a frame for a \
+                 proxied key (total: {}) - exclusion must never be lost",
+                conflicts
+            );
+        }
+    }
 }
 
 /// A capture channel opened and validated but not yet forwarding. Opening
@@ -77,14 +117,24 @@ pub struct SnifferEngine {
     /// Interface the current capture is bound to.
     interface: String,
     ports: PortsCache,
+    excluded_ports: ExcludedPortsCache,
+    ports_generation: Arc<AtomicU64>,
+    /// Port-set refreshes are triggered through the same watch that
+    /// carries interface changes; the capture thread reacts without a
+    /// restart.
+    restart_rx: tokio::sync::watch::Receiver<()>,
     health: SharedSnifferHealth,
 }
 
 impl SnifferEngine {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         nats: NatsClient,
         interface: String,
         ports_cache: PortsCache,
+        excluded_ports: ExcludedPortsCache,
+        ports_generation: Arc<AtomicU64>,
+        restart_rx: tokio::sync::watch::Receiver<()>,
         health: SharedSnifferHealth,
     ) -> Self {
         Self {
@@ -93,6 +143,9 @@ impl SnifferEngine {
             nats,
             interface,
             ports: ports_cache,
+            excluded_ports,
+            ports_generation,
+            restart_rx,
             health,
         }
     }
@@ -162,6 +215,10 @@ impl SnifferEngine {
 
     /// Start the forwarding loop on an already-opened channel.
     fn start_prepared(&mut self, prepared: PreparedCapture) -> Result<()> {
+        // Generation read BEFORE the port set: the writer swaps the set
+        // first and bumps the generation second, so applied_generation >= g
+        // implies the loaded snapshot includes every exclusion of g.
+        let initial_generation = self.ports_generation.load(Ordering::SeqCst);
         let ports: Vec<(TransportProto, u16)> =
             self.ports.read().unwrap().iter().cloned().collect();
         let ports_desc = ports
@@ -176,6 +233,9 @@ impl SnifferEngine {
 
         let nats = self.nats.clone();
         let ports = self.ports.clone();
+        let excluded_ports = self.excluded_ports.clone();
+        let ports_generation = self.ports_generation.clone();
+        let mut restart_rx = self.restart_rx.clone();
         let health = Arc::clone(&self.health);
         // Bounded async channel: the capture thread only ever try_sends
         // (drop-with-counter on full), and the consumer awaits recv() so it
@@ -188,6 +248,7 @@ impl SnifferEngine {
         self.health.set_active(true);
         self.health.set_idle_no_services(false);
         self.interface = prepared.interface.clone();
+        self.health.set_applied_generation(initial_generation);
         let active = Arc::clone(&self.active);
 
         self.handle = Some(thread::spawn(move || {
@@ -195,14 +256,31 @@ impl SnifferEngine {
             let mut rx = prepared.rx;
             let mut ports_snapshot: Vec<(TransportProto, u16)> =
                 ports.read().unwrap().iter().cloned().collect();
+            let mut excluded_snapshot: Vec<(TransportProto, u16)> =
+                excluded_ports.read().unwrap().iter().cloned().collect();
             let mut pkt_count: u64 = 0;
 
             while active.load(Ordering::SeqCst) {
-                // Refresh ports cache periodically
                 pkt_count += 1;
-                if pkt_count.is_multiple_of(1000) {
-                    if let Ok(guard) = ports.try_read() {
-                        ports_snapshot = guard.iter().cloned().collect();
+                // Refresh the passive/excluded snapshots when a config
+                // change is signalled (port set) or periodically. No
+                // restart: the matcher set swap is atomic under the lock,
+                // so unrelated keys keep capturing without a gap.
+                let change_signalled = restart_rx.has_changed().unwrap_or(false);
+                let periodic = pkt_count.is_multiple_of(1000);
+                if change_signalled || periodic {
+                    // On a lock miss the signal stays pending and the next
+                    // iteration retries; the generation is published only
+                    // after both snapshots are loaded together.
+                    if let (Ok(ports_guard), Ok(excluded_guard)) =
+                        (ports.try_read(), excluded_ports.try_read())
+                    {
+                        ports_snapshot = ports_guard.iter().cloned().collect();
+                        excluded_snapshot = excluded_guard.iter().cloned().collect();
+                        health.set_applied_generation(ports_generation.load(Ordering::SeqCst));
+                        if change_signalled {
+                            restart_rx.mark_changed();
+                        }
                     }
                 }
 
@@ -218,6 +296,18 @@ impl SnifferEngine {
                         break;
                     }
                 };
+
+                if let Some(conflict) = ports_snapshot_match_excluded(frame, &excluded_snapshot) {
+                    // A frame for a proxied key must never reach the
+                    // passive sniffer: count it, never publish it.
+                    health.add_capture_source_conflict();
+                    trace!(
+                        "Excluded frame not published (conflicting key {}/{})",
+                        conflict.1,
+                        conflict.0.as_str()
+                    );
+                    continue;
+                }
 
                 if !ports_snapshot_match(frame, &ports_snapshot) {
                     continue;
@@ -279,97 +369,128 @@ impl SnifferEngine {
 /// of entries).
 type PortSet = Vec<(TransportProto, u16)>;
 
-/// Match TCP/UDP packets against a (protocol, port) filter. An empty
-/// filter matches nothing: callers disable the sniffer on an empty set:
-/// empty must never mean "capture everything", or the agent's own NATS
-/// traffic would be fed back into the analyzer.
-fn packet_matches_filter(frame: &[u8], ports: &HashSet<(TransportProto, u16)>) -> bool {
-    ports_snapshot_match(frame, &ports.iter().cloned().collect())
-}
-
-fn ports_snapshot_match(frame: &[u8], ports: &PortSet) -> bool {
-    let eth = match EthernetPacket::new(frame) {
-        Some(e) => e,
-        None => return false,
-    };
-    match_l3(eth.get_ethertype(), eth.payload(), ports)
-}
-
-fn match_l3(ethertype: pnet::packet::ethernet::EtherType, payload: &[u8], ports: &PortSet) -> bool {
-    match ethertype {
+/// Extract the (protocol, src_port, dst_port) triple of a frame, if it is
+/// a TCP/UDP frame.
+fn frame_transport(frame: &[u8]) -> Option<(TransportProto, u16, u16)> {
+    let eth = EthernetPacket::new(frame)?;
+    let (transport, src, dst) = match eth.get_ethertype() {
         EtherTypes::Ipv4 => {
-            let ipv4 = match Ipv4Packet::new(payload) {
-                Some(p) => p,
-                None => return false,
-            };
-            match_l4(ipv4.get_next_level_protocol(), ipv4.payload(), ports)
+            let ipv4 = Ipv4Packet::new(eth.payload())?;
+            match_transport(ipv4.get_next_level_protocol(), ipv4.payload())?
         }
         EtherTypes::Ipv6 => {
-            let ipv6 = match Ipv6Packet::new(payload) {
-                Some(p) => p,
-                None => return false,
-            };
-            match_l4(ipv6.get_next_header(), ipv6.payload(), ports)
+            let ipv6 = Ipv6Packet::new(eth.payload())?;
+            match_transport(ipv6.get_next_header(), ipv6.payload())?
         }
         EtherTypes::Vlan => {
-            let vlan = match VlanPacket::new(payload) {
-                Some(v) => v,
-                None => return false,
-            };
-            match_l3(vlan.get_ethertype(), vlan.payload(), ports)
+            let vlan = VlanPacket::new(eth.payload())?;
+            match vlan.get_ethertype() {
+                EtherTypes::Ipv4 => {
+                    let ipv4 = Ipv4Packet::new(vlan.payload())?;
+                    match_transport(ipv4.get_next_level_protocol(), ipv4.payload())?
+                }
+                EtherTypes::Ipv6 => {
+                    let ipv6 = Ipv6Packet::new(vlan.payload())?;
+                    match_transport(ipv6.get_next_header(), ipv6.payload())?
+                }
+                _ => return None,
+            }
         }
-        _ => false,
+        _ => return None,
+    };
+    Some((transport, src, dst))
+}
+
+fn match_transport(
+    proto: IpNextHeaderProtocol,
+    payload: &[u8],
+) -> Option<(TransportProto, u16, u16)> {
+    if proto == IpNextHeaderProtocols::Tcp {
+        let t = TcpPacket::new(payload)?;
+        Some((TransportProto::Tcp, t.get_source(), t.get_destination()))
+    } else if proto == IpNextHeaderProtocols::Udp {
+        let u = UdpPacket::new(payload)?;
+        Some((TransportProto::Udp, u.get_source(), u.get_destination()))
+    } else {
+        None
     }
 }
 
-fn match_l4(proto: IpNextHeaderProtocol, payload: &[u8], ports: &PortSet) -> bool {
-    let (transport, src, dst) = if proto == IpNextHeaderProtocols::Tcp {
-        match TcpPacket::new(payload) {
-            Some(t) => (TransportProto::Tcp, t.get_source(), t.get_destination()),
-            None => return false,
-        }
-    } else if proto == IpNextHeaderProtocols::Udp {
-        match UdpPacket::new(payload) {
-            Some(u) => (TransportProto::Udp, u.get_source(), u.get_destination()),
-            None => return false,
-        }
-    } else {
+/// Match TCP/UDP packets against a (protocol, port) filter. Test-only:
+/// production matching goes through ports_snapshot_match / the excluded
+/// conflict check. An empty filter matches nothing: empty must never mean
+/// "capture everything", or the agent's own NATS traffic would be fed
+/// back into the analyzer.
+#[cfg(test)]
+fn packet_matches_filter(frame: &[u8], ports: &HashSet<(TransportProto, u16)>) -> bool {
+    let Some((transport, src, dst)) = frame_transport(frame) else {
         return false;
     };
-
     if ports.is_empty() {
-        // Defense in depth: the port snapshot can briefly become empty
-        // between a config sync and the sniffer restart — during that
-        // window capture nothing rather than everything.
+        // Defense in depth: empty means disabled, never "capture all".
         return false;
     }
     ports.contains(&(transport, src)) || ports.contains(&(transport, dst))
 }
 
-/// Sniffer lifecycle: reacts to restart signals from applied snapshots.
-/// Interface changes are prepared-before-retired (open the new channel,
-/// then stop the working capture); an open failure keeps the previous
-/// capture active and records a sanitized sync error without advancing
-/// the applied revision. An empty service set disables capture while the
-/// agent stays healthy and idle.
+/// Returns the conflicting (protocol, port) key when the frame belongs to
+/// a key excluded from passive capture (effectively proxied).
+fn ports_snapshot_match_excluded(
+    frame: &[u8],
+    excluded: &PortSet,
+) -> Option<(TransportProto, u16)> {
+    let (transport, src, dst) = frame_transport(frame)?;
+    excluded
+        .iter()
+        .find(|(proto, port)| *proto == transport && (*port == src || *port == dst))
+        .copied()
+}
+
+fn ports_snapshot_match(frame: &[u8], ports: &PortSet) -> bool {
+    let Some((transport, src, dst)) = frame_transport(frame) else {
+        return false;
+    };
+    if ports.is_empty() {
+        // Defense in depth: the port snapshot can briefly become empty
+        // during a config sync - capture nothing rather than everything.
+        return false;
+    }
+    ports.contains(&(transport, src)) || ports.contains(&(transport, dst))
+}
+
+/// Sniffer lifecycle: reacts to restart signals from applied snapshots and
+/// proxy transitions. Port-set-only changes never restart the capture
+/// thread (the matcher set is refreshed in place, so enabling one service
+/// does not disturb unrelated keys). Interface changes are prepared before
+/// the working capture is retired. An empty passive set disables capture
+/// while the agent stays healthy and idle.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_sniffer_loop(
     nats: NatsClient,
     ports_cache: PortsCache,
+    excluded_ports: ExcludedPortsCache,
+    ports_generation: Arc<AtomicU64>,
     mut restart_rx: tokio::sync::watch::Receiver<()>,
     health: SharedSnifferHealth,
     config: SharedConfig,
     last_sync_error: Arc<RwLock<Option<String>>>,
-    pending_revision: Arc<std::sync::atomic::AtomicU64>,
-    applied_revision: Arc<std::sync::atomic::AtomicU64>,
+    acker: Arc<crate::updates::RevisionAcker>,
 ) {
     let initial = config.read().unwrap().interface.clone();
-    let mut sniffer =
-        SnifferEngine::new(nats.clone(), initial, ports_cache.clone(), health.clone());
+    let mut sniffer = SnifferEngine::new(
+        nats.clone(),
+        initial,
+        ports_cache.clone(),
+        excluded_ports.clone(),
+        ports_generation.clone(),
+        restart_rx.clone(),
+        health.clone(),
+    );
 
     match sniffer.start().await {
         Ok(_) => {
             info!("Sniffer engine started");
-            commit_pending(&pending_revision, &applied_revision, &last_sync_error);
+            confirm_passive_applied(&ports_generation, &health, &acker).await;
         }
         Err(e) => {
             warn!(
@@ -393,44 +514,28 @@ pub async fn run_sniffer_loop(
         let desired_interface = config.read().unwrap().interface.clone();
         let ports_now: HashSet<(TransportProto, u16)> = ports_cache.read().unwrap().clone();
 
-        // Empty service set: sniffer disabled, agent healthy and idle
-        // while heartbeat and update processing continue.
+        // Empty passive set: sniffer disabled, agent healthy and idle
+        // while heartbeat, proxy capture and update processing continue.
         if ports_now.is_empty() {
             if sniffer.is_running() {
-                info!("Service set is empty, disabling sniffer (idle)");
+                info!("Passive port set is empty, disabling sniffer (idle)");
                 sniffer.stop();
             }
             health.set_idle_no_services(true);
-            commit_pending(&pending_revision, &applied_revision, &last_sync_error);
+            // Nothing to capture: the passive side is trivially applied.
+            acker.confirm_passive();
             continue;
         }
         health.set_idle_no_services(false);
 
         let port_change_only = sniffer.current_interface() == desired_interface;
         if port_change_only {
-            // Port-set change on the same interface: retire then restart
-            // through the existing watch mechanism (brief bounded gap).
-            info!("Port set changed, restarting sniffer...");
-            sniffer.stop();
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-
-            let mut replacement = SnifferEngine::new(
-                nats.clone(),
-                desired_interface.clone(),
-                ports_cache.clone(),
-                health.clone(),
-            );
-            match replacement.start().await {
-                Ok(_) => {
-                    sniffer = replacement;
-                    commit_pending(&pending_revision, &applied_revision, &last_sync_error);
-                }
-                Err(e) => {
-                    error!("Failed to restart sniffer: {}", e);
-                    *last_sync_error.write().unwrap() =
-                        Some(e.to_string().chars().take(300).collect());
-                }
-            }
+            // Port-set change on the same interface: NO restart. The
+            // capture thread refreshes its matcher set from the generation
+            // watch within milliseconds; unrelated keys keep capturing and
+            // established state is untouched.
+            debug!("Passive port set changed, refreshing in place");
+            confirm_passive_applied(&ports_generation, &health, &acker).await;
         } else {
             // Interface change: open the new capture BEFORE retiring the
             // working one. On failure the old capture stays active and the
@@ -444,6 +549,9 @@ pub async fn run_sniffer_loop(
                 nats.clone(),
                 desired_interface.clone(),
                 ports_cache.clone(),
+                excluded_ports.clone(),
+                ports_generation.clone(),
+                restart_rx.clone(),
                 health.clone(),
             );
             match replacement.prepare(&desired_interface) {
@@ -453,7 +561,7 @@ pub async fn run_sniffer_loop(
                         Ok(_) => {
                             sniffer = replacement;
                             info!("Interface handoff complete");
-                            commit_pending(&pending_revision, &applied_revision, &last_sync_error);
+                            confirm_passive_applied(&ports_generation, &health, &acker).await;
                         }
                         Err(e) => {
                             error!("Prepared capture failed to start: {}", e);
@@ -477,18 +585,28 @@ pub async fn run_sniffer_loop(
     }
 }
 
-/// A fully started capture confirms the pending revision; the sanitized
-/// error clears. A pending value of 0 means nothing to confirm.
-fn commit_pending(
-    pending_revision: &Arc<std::sync::atomic::AtomicU64>,
-    applied_revision: &Arc<std::sync::atomic::AtomicU64>,
-    last_sync_error: &Arc<RwLock<Option<String>>>,
+/// The passive side of the pending revision counts as applied once the
+/// capture thread has loaded the latest port-set generation. Bounded: a
+/// stale generation means the sniffer is unhealthy; the revision stays
+/// unacknowledged and the backend re-delivers.
+async fn confirm_passive_applied(
+    ports_generation: &Arc<AtomicU64>,
+    health: &SnifferHealth,
+    acker: &Arc<crate::updates::RevisionAcker>,
 ) {
-    let pending = pending_revision.swap(0, Ordering::SeqCst);
-    if pending != 0 {
-        applied_revision.store(pending, Ordering::SeqCst);
+    let target = ports_generation.load(Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while health.applied_generation() < target {
+        if std::time::Instant::now() >= deadline {
+            warn!(
+                "Sniffer did not confirm port set generation {} in time; revision stays unacknowledged",
+                target
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    *last_sync_error.write().unwrap() = None;
+    acker.confirm_passive();
 }
 
 #[cfg(test)]
@@ -523,12 +641,35 @@ mod tests {
         ports.insert((TransportProto::Udp, 53));
         assert!(packet_matches_filter(&udp_frame(1234, 53), &ports));
         assert!(packet_matches_filter(&udp_frame(53, 1234), &ports));
-        // A TCP packet still only matches through its own protocol entry.
-        let mut tcp_only = HashSet::new();
-        tcp_only.insert((TransportProto::Tcp, 53));
-        assert!(packet_matches_filter(&tcp_frame(1234, 53), &tcp_only));
-        tcp_only.insert((TransportProto::Udp, 9999));
-        assert!(packet_matches_filter(&tcp_frame(1234, 53), &tcp_only));
+    }
+
+    #[test]
+    fn excluded_keys_are_detected_as_conflicts_not_captured() {
+        // A proxied key's frame must be recognized as a conflict so the
+        // capture thread counts it instead of publishing it.
+        let excluded: PortSet = vec![(TransportProto::Tcp, 80)];
+        assert_eq!(
+            ports_snapshot_match_excluded(&tcp_frame(1234, 80), &excluded),
+            Some((TransportProto::Tcp, 80))
+        );
+        assert_eq!(
+            ports_snapshot_match_excluded(&tcp_frame(80, 1234), &excluded),
+            Some((TransportProto::Tcp, 80))
+        );
+        assert_eq!(
+            ports_snapshot_match_excluded(&tcp_frame(1234, 81), &excluded),
+            None
+        );
+        // Protocol independence: a UDP frame for the same numeric port is
+        // NOT a conflict of a TCP exclusion.
+        assert_eq!(
+            ports_snapshot_match_excluded(&udp_frame(1234, 80), &excluded),
+            None
+        );
+
+        let health = SnifferHealth::default();
+        health.add_capture_source_conflict();
+        assert_eq!(health.capture_source_conflicts(), 1);
     }
 
     /// Minimal Ethernet + IPv4 + TCP frame (enough header context for the
@@ -567,6 +708,8 @@ mod tests {
         assert!(health.active());
         assert!(health.idle_no_services());
         assert_eq!(health.queue_drops(), 0);
+        health.set_applied_generation(7);
+        assert_eq!(health.applied_generation(), 7);
     }
 
     #[test]

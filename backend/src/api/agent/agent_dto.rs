@@ -55,10 +55,42 @@ pub struct AgentInfo {
     /// (healthy, waiting for control-plane updates)
     #[serde(default)]
     pub sniffer_idle: Option<bool>,
+    /// Per-proxy effective state reports (desired revision applied,
+    /// capture phase). Diagnostics only: they never overwrite operator
+    /// desired state. Absent = older agent binary.
+    #[serde(default)]
+    pub proxies: Vec<AgentProxyReport>,
+    /// Frames captured by the sniffer for keys that are effectively
+    /// proxied (capture-source conflict bug detector).
+    #[serde(default)]
+    pub capture_source_conflicts: Option<u64>,
+    /// Packets the harpoon capture forwarder dropped (broadcast lag).
+    #[serde(default)]
+    pub forwarder_drops: Option<u64>,
     pub timestamp_ms: u64,
     /// Computed by the backend: is the agent currently reachable
     #[serde(default)]
     pub online: bool,
+}
+
+/// One proxy rule's effective state as reported by the agent heartbeat.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AgentProxyReport {
+    pub service_id: u64,
+    pub rule_name: String,
+    /// Desired revision the rule was issued at.
+    pub desired_revision: u64,
+    /// Desired revision the agent has actually applied (None = none yet).
+    pub effective_revision: Option<u64>,
+    /// "effective" | "transitioning" | "capture_unavailable" | "failed"
+    pub state: String,
+    /// "tcp" | "udp"
+    pub protocol: String,
+    /// Original service port (the passive key excluded while effective).
+    pub original_port: u16,
+    pub listen_port: u16,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

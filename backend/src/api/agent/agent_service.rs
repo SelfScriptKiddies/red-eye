@@ -36,6 +36,10 @@ struct CachedDocker {
 pub struct AgentService {
     agents: Arc<RwLock<HashMap<String, AgentInfo>>>,
     docker_containers: Arc<RwLock<HashMap<String, CachedDocker>>>,
+    /// Latest capture-source conflict counters per agent (diagnostic
+    /// gauge source; std lock: tiny values, sync heartbeat path).
+    capture_conflicts: Arc<std::sync::RwLock<HashMap<String, u64>>>,
+    forwarder_drops: Arc<std::sync::RwLock<HashMap<String, u64>>>,
     nats_client: Client,
 }
 
@@ -44,8 +48,34 @@ impl AgentService {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
             docker_containers: Arc::new(RwLock::new(HashMap::new())),
+            capture_conflicts: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            forwarder_drops: Arc::new(std::sync::RwLock::new(HashMap::new())),
             nats_client,
         }
+    }
+
+    /// Record the agent's latest capture-source conflict counter.
+    pub fn set_capture_conflicts(&self, agent_id: &str, value: u64) {
+        self.capture_conflicts
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), value);
+    }
+
+    pub fn capture_conflicts_total(&self) -> u64 {
+        self.capture_conflicts.read().unwrap().values().sum()
+    }
+
+    /// Record the agent's latest harpoon forwarder drop counter.
+    pub fn set_forwarder_drops(&self, agent_id: &str, value: u64) {
+        self.forwarder_drops
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), value);
+    }
+
+    pub fn forwarder_drops_total(&self) -> u64 {
+        self.forwarder_drops.read().unwrap().values().sum()
     }
 
     /// Update agent status from heartbeat data

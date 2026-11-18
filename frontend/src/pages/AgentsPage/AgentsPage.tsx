@@ -27,6 +27,26 @@ interface NetworkSettings {
   last_sync_error?: string | null;
 }
 
+/** One row of GET /api/protect/{agent}/state: desired proxy state plus the
+ * agent-reported capture source. */
+interface ProtectionRow {
+  agent_id: string;
+  service_id: number;
+  service_name: string;
+  service_port: number;
+  protocol: string;
+  enabled: boolean;
+  listen_port: number | null;
+  target_port: number | null;
+  tls_mode: string | null;
+  http2_enabled: boolean;
+  revision: number;
+  effective: boolean;
+  effective_revision: number | null;
+  capture_source: 'passive' | 'proxy' | 'transitioning' | 'proxy_unavailable';
+  last_error?: string | null;
+}
+
 interface Agent {
   agent_id: string;
   uptime_secs: number;
@@ -122,6 +142,9 @@ export default function AgentsPage() {
 
   const [services, setServices] = useState<Service[]>([]);
   const [boundServices, setBoundServices] = useState<number[]>([]);
+
+  // Proxy protection desired/effective state for the selected agent.
+  const [protection, setProtection] = useState<ProtectionRow[]>([]);
 
   // Per-agent network settings (interface / machine IP) editing
   const [netEditing, setNetEditing] = useState(false);
@@ -227,6 +250,19 @@ export default function AgentsPage() {
       .catch(() => setBoundServices([]));
   };
 
+  const fetchProtection = (agentId: string) => {
+    fetch(`/api/protect/${agentId}/state`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => setProtection(Array.isArray(data) ? data : []))
+      .catch(() => setProtection([]));
+  };
+
+  const refreshSelected = (agentId: string | null) => {
+    if (!agentId) return;
+    fetchBoundServices(agentId);
+    fetchProtection(agentId);
+  };
+
   const bindService = (serviceId: number) => {
     if (!selected) return;
     fetch(`/api/agent/${selected}/services/bind`, {
@@ -251,32 +287,38 @@ export default function AgentsPage() {
     });
   };
 
-  // Check protection status for a service on selected agent
-  const getProtectionStatus = (service: Service): 'off' | 'sniffing' | 'proxy' | 'proxy-nft' => {
-    if (!selectedAgent) return 'off';
-    const ruleName = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
-    const hasProxy = selectedAgent.harpoon_rules.includes(ruleName);
-    const hasNft = selectedAgent.nft_redirects.some(r => r.from_port === service.port);
-    const isSniffed = selectedAgent.sniffer_ports.some(p => p.startsWith(`${service.port}/`));
+  // Capture source for a service on the selected agent, from the
+  // protection state API (desired + agent-reported effective state). The
+  // backend write alone is never "Proxy": only an agent ack makes it one.
+  const protectionRow = (serviceId: number): ProtectionRow | null =>
+    protection.find(p => p.service_id === serviceId) ?? null;
 
-    if (hasProxy && hasNft) return 'proxy-nft';
-    if (hasProxy) return 'proxy';
-    if (isSniffed) return 'sniffing';
-    return 'off';
+  const getProtectionStatus = (
+    service: Service
+  ): { source: ProtectionRow['capture_source']; error?: string | null } => {
+    if (!selectedAgent) return { source: 'passive' };
+    const row = protectionRow(service.id);
+    if (row) {
+      return { source: row.capture_source, error: row.last_error };
+    }
+    const isSniffed = selectedAgent.sniffer_ports.some(p =>
+      p.startsWith(`${service.port}/`)
+    );
+    return { source: isSniffed ? 'passive' : 'passive' };
   };
 
-  const statusLabel: Record<string, string> = {
-    'off': 'Off',
-    'sniffing': 'Sniffing',
+  const statusLabel: Record<ProtectionRow['capture_source'], string> = {
+    'passive': 'Passive',
     'proxy': 'Proxy',
-    'proxy-nft': 'Protected',
+    'transitioning': 'Transitioning',
+    'proxy_unavailable': 'No proxy capture',
   };
 
-  const statusStyle: Record<string, string> = {
-    'off': '',
-    'sniffing': 'info-badge',
-    'proxy': 'info-badge',
-    'proxy-nft': 'option-badge',
+  const statusStyle: Record<ProtectionRow['capture_source'], string> = {
+    'passive': 'info-badge',
+    'proxy': 'option-badge',
+    'transitioning': 'badge info-badge',
+    'proxy_unavailable': 'danger-badge',
   };
 
   const toggleProtection = async (service: Service, enable: boolean, tlsMitm: boolean = false) => {
@@ -309,21 +351,21 @@ export default function AgentsPage() {
         alert(`Ошибка ${enable ? 'включения' : 'отключения'} защиты: ${await response.text()}`);
         return;
       }
+      const body = await response.json().catch(() => null);
+      if (body?.sync === 'pending') {
+        alert(
+          'Желаемое состояние сохранено, но доставка агенту не удалась - ' +
+            'снапшот будет повторён при следующем heartbeat. ' +
+            'Состояние защиты обновится после применения агентом.'
+        );
+      }
     } catch (e) {
       alert(`Ошибка ${enable ? 'включения' : 'отключения'} защиты: ${e}`);
       return;
     }
-    // The command is fire-and-forget over NATS: verify the agent actually
-    // applied it (rule appears in harpoon_rules) before calling it done.
-    const expectedRule = `protect-${service.name.replace(/ /g, '-').toLowerCase()}`;
-    setTimeout(async () => {
-      const list = await fetchAgents();
-      const updated = list.find(a => a.agent_id === selected);
-      const applied = updated?.harpoon_rules.includes(expectedRule) ?? false;
-      if (enable && !applied) {
-        alert(`Агент не подтвердил правило "${expectedRule}".\nПроверьте логи агента (nftables? порт занят?).`);
-      }
-    }, 2500);
+    // The desired state is committed; the capture source flips to Proxy
+    // only after the agent reports the effective state.
+    setTimeout(() => refreshSelected(selected), 1500);
   };
 
   useEffect(() => {
@@ -332,6 +374,16 @@ export default function AgentsPage() {
     const interval = setInterval(fetchAgents, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // Re-poll the selected agent's bound services + protection state with
+  // the same cadence so transition states stay visible.
+  useEffect(() => {
+    if (!selected) return;
+    refreshSelected(selected);
+    const interval = setInterval(() => refreshSelected(selected), 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   const selectedAgent = agents.find(a => a.agent_id === selected);
 
@@ -474,7 +526,7 @@ export default function AgentsPage() {
               <div
                 key={agent.agent_id}
                 className={`agent-card ${selected === agent.agent_id ? 'selected' : ''} ${agent.online ? 'online' : 'offline'}`}
-                onClick={() => { setSelected(agent.agent_id); fetchBoundServices(agent.agent_id); }}
+                onClick={() => { setSelected(agent.agent_id); refreshSelected(agent.agent_id); }}
               >
                 <div className="agent-card-header">
                   <span className={`status-dot ${agent.online ? 'online' : 'offline'}`} />
@@ -653,8 +705,9 @@ export default function AgentsPage() {
                   </div>
                   {services.map(svc => {
                     const isBound = boundServices.includes(svc.id);
-                    const status = getProtectionStatus(svc);
-                    const hasProxy = status === 'proxy' || status === 'proxy-nft';
+                    const { source, error } = getProtectionStatus(svc);
+                    const row = protectionRow(svc.id);
+                    const hasProxy = row?.enabled ?? false;
                     return (
                       <div key={svc.id} className={`settings-card ${!isBound ? 'card-dimmed' : ''}`}>
                         <div className="card-row">
@@ -662,13 +715,22 @@ export default function AgentsPage() {
                           <div className="card-right">
                             <span className="port-label">:{svc.port}</span>
                             {isBound && (
-                              <span className={`badge ${statusStyle[status]}`}
-                                style={status === 'off' ? { color: '#666', border: '1px solid #444', fontSize: '10px', padding: '2px 6px' } : {}}>
-                                {statusLabel[status]}
+                              <span className={`badge ${statusStyle[source]}`}
+                                title={error ?? undefined}>
+                                {statusLabel[source]}
                               </span>
                             )}
                           </div>
                         </div>
+                        {isBound && (source === 'transitioning' || source === 'proxy_unavailable') && (
+                          <div className="card-row">
+                            <span className="text-muted" style={{ fontSize: '11px', color: source === 'proxy_unavailable' ? '#e8a33d' : undefined }}>
+                              {source === 'transitioning'
+                                ? 'Переключение источника захвата...'
+                                : error ?? 'Proxy desired, but no proxy capture is running'}
+                            </span>
+                          </div>
+                        )}
                         <div className="card-buttons">
                           {isBound ? (
                             <>

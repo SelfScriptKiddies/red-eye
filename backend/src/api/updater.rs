@@ -317,6 +317,7 @@ mod tests {
                 machine_ip: "10.0.0.5".into(),
             }),
             services: vec![sample_service()],
+            desired_proxies: vec![],
         };
         let envelope = SettingsEnvelope {
             version: SETTINGS_WIRE_VERSION,
