@@ -848,7 +848,13 @@ async fn create_filter(
                 tag.special_type.as_deref(),
                 Some("block") | Some("block_conn")
             ) {
-                crate::api::block_sync::sync_block_filters(pool.get_ref(), &tag_service, &control, &agent_service).await;
+                crate::api::block_sync::sync_block_filters(
+                    pool.get_ref(),
+                    &tag_service,
+                    &control,
+                    &agent_service,
+                )
+                .await;
             }
             audit(
                 "create_filter",
@@ -961,7 +967,13 @@ async fn update_filter(
                 tag.special_type.as_deref(),
                 Some("block") | Some("block_conn")
             ) {
-                crate::api::block_sync::sync_block_filters(pool.get_ref(), &tag_service, &control, &agent_service).await;
+                crate::api::block_sync::sync_block_filters(
+                    pool.get_ref(),
+                    &tag_service,
+                    &control,
+                    &agent_service,
+                )
+                .await;
             }
             audit(
                 "update_filter",
@@ -1041,7 +1053,13 @@ async fn set_filter_enabled(
         Ok(r) if r.rows_affected() > 0 => {
             // Re-sync so the change reaches agents immediately instead of
             // waiting for the next unrelated block-filter update.
-            crate::api::block_sync::sync_block_filters(pool.get_ref(), &tag_service, &control, &agent_service).await;
+            crate::api::block_sync::sync_block_filters(
+                pool.get_ref(),
+                &tag_service,
+                &control,
+                &agent_service,
+            )
+            .await;
             audit(
                 "set_filter_enabled",
                 &session,
@@ -1114,7 +1132,13 @@ async fn delete_filter(
     }
     match tag_service.delete_tag_name(id).await {
         Ok(_) => {
-            crate::api::block_sync::sync_block_filters(pool.get_ref(), &tag_service, &control, &agent_service).await;
+            crate::api::block_sync::sync_block_filters(
+                pool.get_ref(),
+                &tag_service,
+                &control,
+                &agent_service,
+            )
+            .await;
             audit(
                 "delete_filter",
                 &session,

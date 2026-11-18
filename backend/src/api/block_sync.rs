@@ -315,24 +315,29 @@ pub async fn sync_block_filters(
     control: &Arc<ControlPlane>,
     agent_service: &Arc<crate::api::agent::agent_service::AgentService>,
 ) {
-    let services =
-        match crate::api::service::service_service::ServiceService::new_from_pgpool(
-            pool.clone(),
-            control.clone(),
-        )
-        .get_all_services()
-        .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Config sync after filter mutation: services unavailable: {}", e);
-                return;
-            }
-        };
+    let services = match crate::api::service::service_service::ServiceService::new_from_pgpool(
+        pool.clone(),
+        control.clone(),
+    )
+    .get_all_services()
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            error!(
+                "Config sync after filter mutation: services unavailable: {}",
+                e
+            );
+            return;
+        }
+    };
     let tags = match tag_service.get_all_tag_names().await {
         Ok(t) => t,
         Err(e) => {
-            error!("Config sync after filter mutation: filters unavailable: {}", e);
+            error!(
+                "Config sync after filter mutation: filters unavailable: {}",
+                e
+            );
             return;
         }
     };
@@ -344,7 +349,11 @@ pub async fn sync_block_filters(
         .into_iter()
         .map(|t| (u64::try_from(t.id).unwrap_or_default(), t.into()))
         .collect();
-    if let Err(e) = control.updater().sync_config(services_data, filters_data).await {
+    if let Err(e) = control
+        .updater()
+        .sync_config(services_data, filters_data)
+        .await
+    {
         error!("Config sync after filter mutation failed: {}", e);
     }
     control.reconcile_stale_agents(agent_service).await;
