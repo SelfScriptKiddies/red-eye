@@ -147,36 +147,33 @@ Full-control mutations additionally require `expected_revision`
 operations a prior `dry_run=true` call whose `operation_id` the mutation
 must reference. Every audit record carries ids and statuses only.
 
-#### fetch_url (opt-in network egress)
+#### get_selected_streams (UI-selection bundle)
 
-The `fetch_url` MCP tool lets an MCP client hand the service a public
-http(s) URL (exported-stream links, advisory docs) and get back extracted
-readable text instead of raw HTML. It is the only network egress the
-service makes besides its backend connection, and the original service
-spec banned arbitrary HTTP forwarding - so it ships DISABLED and exists
-only when `MCP_ENABLE_FETCH_URL=true` (or `1`) was set at startup. With
-the flag off the tool is unknown: it is not listed and calls fail as an
-unknown tool. Warning: enabling it lets MCP clients make the service
-fetch public urls only.
+The `get_selected_streams` MCP tool is the only way an MCP client turns an
+operator-provided URL into data: the operator selects streams in the Red
+Eye UI, copies the link (`/packets?streams=1,2,3` or the single
+`?stream=N` form) and hands it to the agent. The tool accepts ONLY links
+whose origin (scheme + host + port) equals the configured
+`MCP_PUBLIC_URL` origin. It never opens a network connection to that
+origin: the url is parsed, the ids are extracted, and all data comes from
+the service's own backend connection. External URLs are never fetchable.
 
-Hardening, all fixed compile-time caps:
+Rules:
 
-- Scheme is `http`/`https` only; URLs with embedded credentials are
-  rejected; URL length <= 2048; any authenticated token may call it
-  (read-only or full-control - it mutates nothing), subject to a tight
-  per-token fetch rate limit on top of the global limits.
-- SSRF policy: the host is resolved and EVERY resolved address must be
-  public - loopback, RFC1918, link-local (incl. cloud metadata),
-  unique-local, CGNAT, unspecified, multicast/broadcast and documentation
-  ranges are refused, and one refused address refuses the request. The
-  connection is pinned to a validated address (per-request DNS override,
-  env proxies disabled), so DNS rebinding between check and connect cannot
-  reach a private network. Redirects are followed manually (max 3), and
-  every hop re-runs the same URL + address validation.
-- Download cap 2 MiB, wall-clock 15 s, output capped at 60000 characters
-  with an explicit truncation marker. HTML is rendered to text (title,
-  meta description, body with inline links); JSON/XML/text pass through;
-  binary content types are never returned.
+- Any authenticated token may call it (read-only or full-control - it
+  mutates nothing), subject to the same per-token and per-address rate
+  limits as every other tool.
+- `MCP_PUBLIC_URL` unset, empty or unparseable -> the call fails with a
+  configuration error telling the operator to set it (fail closed).
+- Non-http(s) scheme, embedded credentials, mismatched origin, missing
+  `streams` query param, junk or non-positive ids, and more than 25 ids
+  (fixed cap) are rejected with typed client errors.
+- Output: `{"streams": [{"stream_id", "summary", "messages"}...],
+  "failed_ids": [{"stream_id", "error"}...]}`. Each stream carries the
+  same bounded summary + message evidence as `get_stream_summary` /
+  `get_stream_messages`; an unknown stream id becomes an entry in
+  `failed_ids` instead of failing the whole call. Audit records carry the
+  url only, never the bundle.
 
 ### soc-worker (LLM triage)
 
@@ -299,7 +296,7 @@ python3 test_grpc_service.py http://YOUR_IP:31337
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MCP_SERVICE_TOKEN` | red-eye-mcp service credential for backend API calls | empty (MCP fail-closed) |
-| `MCP_ENABLE_FETCH_URL` | enable the fetch_url MCP tool (network egress to public hosts only) | `false` |
+| `MCP_PUBLIC_URL` | public origin of the Red Eye UI; `get_selected_streams` accepts only links on this origin | empty (tool fails closed) |
 | `SOC_WORKER_TOKEN` | soc-worker job credential for backend API calls | empty (worker retries) |
 | `MCP_TOKEN` | read-only MCP token the worker uses for evidence | empty |
 

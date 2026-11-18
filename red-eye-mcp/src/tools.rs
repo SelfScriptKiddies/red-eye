@@ -4,11 +4,15 @@ use crate::backend::BackendClient;
 use crate::state::{ConsumeError, DryRunStore};
 
 // Tool catalog: names, descriptions, JSON schemas and class. Read-only
-// tools are always listed in read_only mode; mutation tools exist only in
-// a full_control process AND are listed only to full_control tokens. The
-// dispatcher validates arguments against these bounds server-side.
+// tools are always listed; mutation tools exist only in a full_control
+// process AND are listed only to full_control tokens. The dispatcher
+// validates arguments against these bounds server-side.
 
 pub const TOOL_LIST_LIMIT_MAX: u64 = 100;
+
+/// Defaults of get_stream_messages, shared with get_selected_streams.
+pub const MESSAGES_DEFAULT_LIMIT: u64 = 20;
+pub const MESSAGES_DEFAULT_MAX_ENTRY_BYTES: u64 = 4096;
 
 fn limit_schema_value() -> serde_json::Value {
     json!({"type": "integer", "minimum": 1, "maximum": TOOL_LIST_LIMIT_MAX, "default": 20})
@@ -19,9 +23,6 @@ pub enum ToolClass {
     /// Always listed: bounded backend reads, no process opt-in needed.
     ReadOnly,
     Mutation,
-    /// Listed and callable only when the process opted in via config
-    /// (fetch_url): network egress is not part of the default surface.
-    Fetch,
 }
 
 pub struct ToolDef {
@@ -175,21 +176,19 @@ pub fn catalog() -> Vec<ToolDef> {
             class: ToolClass::ReadOnly,
             schema: json!({"type": "object", "properties": {}}),
         },
-        // ----- Fetch: exists only when the deployment set
-        // MCP_ENABLE_FETCH_URL; the handler treats it as unknown otherwise.
         ToolDef {
-            name: "fetch_url",
-            description: "Fetch a public http(s) URL and return extracted readable text \
-                          (title, description, body with inline links). Private networks, \
-                          link-local and other special-purpose addresses are blocked; \
-                          redirects are validated hop by hop; output and download sizes \
-                          are capped. This tool causes network egress and exists only if \
-                          the deployment opted in via MCP_ENABLE_FETCH_URL (disabled by default).",
-            class: ToolClass::Fetch,
+            name: "get_selected_streams",
+            description: "Extract all streams selected in the Red Eye UI from an operator-provided \
+                          Red Eye link. The url must be an http(s) link on the configured \
+                          MCP_PUBLIC_URL origin and carry a 'streams' (or single 'stream') query \
+                          parameter with comma-separated stream ids; at most 25 ids are read per \
+                          call. Returns per-stream summary plus bounded message evidence; \
+                          unresolvable ids are reported in failed_ids instead of failing the call.",
+            class: ToolClass::ReadOnly,
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "maxLength": 2048, "description": "absolute http(s) URL of a public host"}
+                    "url": {"type": "string", "maxLength": 2048, "description": "link copied from the Red Eye UI with a streams query parameter"}
                 },
                 "required": ["url"]
             }),
@@ -518,14 +517,35 @@ pub fn needs_dryrun(tool: &str) -> bool {
     )
 }
 
-/// Opt-in dimension of the listing/dispatch gate: Fetch tools are unknown
-/// unless the process opted in; every other class passes this check and
-/// remains subject to its own capability rules in the handler.
-pub fn opt_in_allowed(class: ToolClass, fetch_url_enabled: bool) -> bool {
-    match class {
-        ToolClass::ReadOnly | ToolClass::Mutation => true,
-        ToolClass::Fetch => fetch_url_enabled,
-    }
+pub async fn stream_summary(backend: &BackendClient, stream_id: i64) -> Result<Value, String> {
+    wrap(backend.stream_summary(stream_id).await)
+}
+
+pub async fn stream_messages(
+    backend: &BackendClient,
+    stream_id: i64,
+    limit: u64,
+    max_entry_bytes: u64,
+) -> Result<Value, String> {
+    wrap(
+        backend
+            .stream_messages(stream_id, limit, max_entry_bytes)
+            .await,
+    )
+}
+
+/// Summary + bounded messages for one stream, the exact evidence
+/// get_stream_summary/get_stream_messages return.
+pub async fn stream_evidence(backend: &BackendClient, stream_id: i64) -> Result<Value, String> {
+    let summary = stream_summary(backend, stream_id).await?;
+    let messages = stream_messages(
+        backend,
+        stream_id,
+        MESSAGES_DEFAULT_LIMIT,
+        MESSAGES_DEFAULT_MAX_ENTRY_BYTES,
+    )
+    .await?;
+    Ok(json!({"stream_id": stream_id, "summary": summary, "messages": messages}))
 }
 
 /// Argument sanity shared by the dispatcher: depth-bounded object, string
@@ -566,18 +586,20 @@ pub async fn dispatch_read(
         "list_services" => wrap(backend.list_services().await),
         "list_agents" => wrap(backend.list_agents().await),
         "search_streams" => wrap(backend.search_streams(args).await),
-        "get_stream_summary" => wrap(backend.stream_summary(int_arg("stream_id")?).await),
-        "get_stream_messages" => wrap(
-            backend
-                .stream_messages(
-                    int_arg("stream_id")?,
-                    args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20),
-                    args.get("max_entry_bytes")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(4096),
-                )
-                .await,
-        ),
+        "get_stream_summary" => stream_summary(backend, int_arg("stream_id")?).await,
+        "get_stream_messages" => {
+            stream_messages(
+                backend,
+                int_arg("stream_id")?,
+                args.get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(MESSAGES_DEFAULT_LIMIT),
+                args.get("max_entry_bytes")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(MESSAGES_DEFAULT_MAX_ENTRY_BYTES),
+            )
+            .await
+        }
         "get_packet" => wrap(
             backend
                 .get_packet(
@@ -818,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_contains_the_exact_read_only_twelve() {
+    fn catalog_contains_the_exact_read_only_thirteen() {
         let read: Vec<&str> = catalog()
             .iter()
             .filter(|t| t.class == ToolClass::ReadOnly)
@@ -837,8 +859,16 @@ mod tests {
             "list_related_streams",
             "get_soc_result",
             "get_component_health",
+            "get_selected_streams",
         ];
         assert_eq!(read, expected);
+        let def = catalog()
+            .into_iter()
+            .find(|t| t.name == "get_selected_streams")
+            .unwrap();
+        assert_eq!(def.class, ToolClass::ReadOnly);
+        assert!(def.description.contains("MCP_PUBLIC_URL"));
+        assert!(def.description.contains("25"));
     }
 
     #[test]
@@ -862,27 +892,6 @@ mod tests {
             "remove_active_block",
         ];
         assert_eq!(mutation, expected);
-    }
-
-    #[test]
-    fn fetch_url_is_the_only_opt_in_tool_and_gates_fail_closed() {
-        let fetch: Vec<&str> = catalog()
-            .iter()
-            .filter(|t| t.class == ToolClass::Fetch)
-            .map(|t| t.name)
-            .collect();
-        assert_eq!(fetch, ["fetch_url"]);
-        let def = catalog()
-            .into_iter()
-            .find(|t| t.name == "fetch_url")
-            .unwrap();
-        assert!(def.description.contains("MCP_ENABLE_FETCH_URL"));
-        assert!(def.description.contains("disabled by default"));
-        assert!(opt_in_allowed(ToolClass::Fetch, true));
-        assert!(!opt_in_allowed(ToolClass::Fetch, false));
-        // Every other class survives the gate regardless of the flag.
-        assert!(opt_in_allowed(ToolClass::ReadOnly, false));
-        assert!(opt_in_allowed(ToolClass::Mutation, false));
     }
 
     #[test]

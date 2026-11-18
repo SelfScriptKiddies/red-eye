@@ -135,6 +135,7 @@ services:
     environment:
       - RED_EYE_BACKEND_URL=http://backend:8000
       - MCP_SERVICE_TOKEN=${MCP_SERVICE_TOKEN:-}
+      - MCP_PUBLIC_URL=${MCP_PUBLIC_URL:-}
       - MCP_MODE=read_only
       - MCP_ALLOW_FULL_CONTROL=false
       - MCP_BIND=0.0.0.0:8081
