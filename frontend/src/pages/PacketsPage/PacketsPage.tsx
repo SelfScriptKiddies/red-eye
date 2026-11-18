@@ -14,6 +14,7 @@ import { SocTriagePanel } from '../../components/SocTriage';
 import { apiFetch, copyText, setStreamFavorite, FavoriteCapacityError } from '../../lib/api';
 import { formatBytes } from '../../lib/favoriteRetention';
 import { shq, pyStr } from '../../lib/exportEscaping';
+import { parseStreamsParam, buildAgentLink, MAX_AGENT_LINK_IDS } from '../../lib/streamsLink';
 import { useStreams } from '../../lib/useStreams';
 import { usePackets } from '../../lib/usePackets';
 import { useRealtimeUpdates } from '../../lib/useRealtimeUpdates';
@@ -135,6 +136,8 @@ export function PacketsPage() {
     const [diffRight, setDiffRight] = useState<any | null>(null);
     const [diffOpen, setDiffOpen] = useState(false);
     const [shareCopied, setShareCopied] = useState(false);
+    const [agentLinkCopied, setAgentLinkCopied] = useState(false);
+    const [agentLinkNote, setAgentLinkNote] = useState('');
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
     const [streamInfoOpen, setStreamInfoOpen] = useState(false);
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
@@ -242,14 +245,11 @@ export function PacketsPage() {
         if (!pageBootRef.current) {
             pageBootRef.current = true;
             const params = new URLSearchParams(window.location.search);
-            const streamParam = params.get('stream');
-            if (streamParam) {
-                const ids = streamParam.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-                if (ids.length === 1) {
-                    setTimeout(() => handleStreamClick(ids[0]), 500);
-                } else if (ids.length > 1) {
-                    setTimeout(() => loadMultipleStreams(ids), 500);
-                }
+            const ids = parseStreamsParam(params.get('streams') ?? params.get('stream'));
+            if (ids.length === 1) {
+                setTimeout(() => handleStreamClick(ids[0]), 500);
+            } else if (ids.length > 1) {
+                setTimeout(() => loadMultipleStreams(ids), 500);
             }
         }
     }, [isRedEyeActive, servicesLoaded, tagsLoaded]);
@@ -578,6 +578,16 @@ export function PacketsPage() {
         setShareCopied(true);
         setTimeout(() => setShareCopied(false), 2000);
     };
+
+    // Link for an MCP agent: get_selected_streams reads it only on this origin.
+    const copyAgentLink = useCallback(() => {
+        if (selectedStreamIds.length === 0) return;
+        const { url, truncated } = buildAgentLink(window.location.origin, selectedStreamIds);
+        copyText(url);
+        setAgentLinkCopied(true);
+        setAgentLinkNote(truncated ? `Обрезано до ${MAX_AGENT_LINK_IDS} стримов` : '');
+        setTimeout(() => { setAgentLinkCopied(false); setAgentLinkNote(''); }, 2500);
+    }, [selectedStreamIds]);
 
     // Export generators
     // Stream src/dst ips come CIDR-styled from the API; stripCidr lives at
@@ -949,6 +959,19 @@ export function PacketsPage() {
                                 >
                                     ✩ Снять избранное ({selectedStreamIds.length})
                                 </button>
+                            )}
+                            <button
+                                className="toolbar-btn"
+                                onClick={copyAgentLink}
+                                title="Скопировать ссылку на выбранные стримы для LLM-агента (MCP get_selected_streams)"
+                                aria-label="Скопировать ссылку на выбранные стримы для LLM-агента"
+                            >
+                                {agentLinkCopied ? '✓ Скопировано' : 'Copy agent link'}
+                            </button>
+                            {agentLinkNote && (
+                                <span style={{ fontSize: '11px', color: 'var(--re-text-secondary)', marginRight: '4px' }}>
+                                    {agentLinkNote}
+                                </span>
                             )}
                             <button className="toolbar-btn" onClick={shareStream} title="Скопировать ссылку на стрим">
                                 {shareCopied ? '✓ Скопировано' : 'Share'}
