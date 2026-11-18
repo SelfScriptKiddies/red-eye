@@ -44,6 +44,15 @@ lazy_static::lazy_static! {
     pub static ref TAG_TRIGGERS_TOTAL: IntGauge = IntGauge::with_opts(
         Opts::new("red_eye_tag_triggers_total", "Total tag triggers")
     ).unwrap();
+    pub static ref CONTROL_PLANE_REVISION: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_control_plane_revision", "Current control-plane configuration revision")
+    ).unwrap();
+    pub static ref AGENTS_SYNC_PENDING: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_agents_sync_pending", "Online agents whose acknowledged revision lags the current one")
+    ).unwrap();
+    pub static ref AGENTS_SYNC_ERROR: IntGauge = IntGauge::with_opts(
+        Opts::new("red_eye_agents_sync_error", "Agents reporting a snapshot application error")
+    ).unwrap();
 }
 
 pub fn register_metrics() {
@@ -59,10 +68,17 @@ pub fn register_metrics() {
     let _ = r.register(Box::new(GRPC_MESSAGES_TOTAL.clone()));
     let _ = r.register(Box::new(HTTP_MESSAGES_TOTAL.clone()));
     let _ = r.register(Box::new(TAG_TRIGGERS_TOTAL.clone()));
+    let _ = r.register(Box::new(CONTROL_PLANE_REVISION.clone()));
+    let _ = r.register(Box::new(AGENTS_SYNC_PENDING.clone()));
+    let _ = r.register(Box::new(AGENTS_SYNC_ERROR.clone()));
 }
 
 /// Refresh gauge metrics from DB and agent state.
-async fn refresh_gauges(pool: &PgPool, agent_service: &AgentService) {
+async fn refresh_gauges(
+    pool: &PgPool,
+    agent_service: &AgentService,
+    control: &crate::api::agent::agent_config::ControlPlane,
+) {
     // Active streams
     if let Ok(row) = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stream WHERE active = true")
         .fetch_one(pool)
@@ -140,6 +156,24 @@ async fn refresh_gauges(pool: &PgPool, agent_service: &AgentService) {
     // Agents online
     let agents = agent_service.list_agents().await;
     AGENTS_ONLINE.set(agents.iter().filter(|a| a.online).count() as i64);
+
+    // Control-plane revision + per-agent sync state
+    if let Some(rev) = control.current_revision().await {
+        CONTROL_PLANE_REVISION.set(rev);
+    }
+    let mut pending = 0;
+    let mut errored = 0;
+    for agent in agents.iter().filter(|a| a.online) {
+        if let Some(view) = control.network_settings_view(&agent.agent_id).await {
+            match view.sync_state.as_str() {
+                "error" => errored += 1,
+                "pending" => pending += 1,
+                _ => {}
+            }
+        }
+    }
+    AGENTS_SYNC_PENDING.set(pending);
+    AGENTS_SYNC_ERROR.set(errored);
 }
 
 /// GET /metrics — Prometheus scrape endpoint (no auth required)
@@ -147,8 +181,9 @@ async fn refresh_gauges(pool: &PgPool, agent_service: &AgentService) {
 async fn prometheus_metrics(
     pool: web::Data<PgPool>,
     agent_service: web::Data<Arc<AgentService>>,
+    control: web::Data<Arc<crate::api::agent::agent_config::ControlPlane>>,
 ) -> impl Responder {
-    refresh_gauges(pool.get_ref(), &agent_service).await;
+    refresh_gauges(pool.get_ref(), &agent_service, &control).await;
 
     let encoder = TextEncoder::new();
     let metric_families = REGISTRY.gather();

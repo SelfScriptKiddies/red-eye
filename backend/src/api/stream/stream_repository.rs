@@ -13,7 +13,7 @@ impl StreamRepository {
     pub async fn get_packet_by_id(&self, stream_id: i64) -> Result<Stream, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol, agent_id
             FROM stream
             WHERE id = $1
             "#)
@@ -25,7 +25,7 @@ impl StreamRepository {
     pub async fn get_all_streams(&self) -> Result<Vec<Stream>, sqlx::Error> {
         sqlx::query_as::<_, Stream>(
             r#"
-            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol
+            SELECT id, src_ip, src_port, dst_ip, dst_port, protocol, active, packet_count, favorite, l7_protocol, agent_id
             FROM stream
             "#)
             .fetch_all(&self.pgpool)
@@ -70,6 +70,7 @@ impl StreamRepository {
             String,
             Option<String>,
             Option<String>,
+            Option<String>,
         )>,
         sqlx::Error,
     > {
@@ -86,7 +87,8 @@ impl StreamRepository {
                 favorite,
                 l7_protocol,
                 src_ip::text,
-                dst_ip::text
+                dst_ip::text,
+                agent_id
             FROM (
                 SELECT
                     str.id AS stream_id,
@@ -99,7 +101,8 @@ impl StreamRepository {
                     str.favorite,
                     str.l7_protocol,
                     str.src_ip::text AS src_ip,
-                    str.dst_ip::text AS dst_ip
+                    str.dst_ip::text AS dst_ip,
+                    str.agent_id::text AS agent_id
                 FROM stream str
                 JOIN service s ON s.id = str.service_id
                 LEFT JOIN LATERAL (
@@ -199,6 +202,7 @@ impl StreamRepository {
                 Option<i64>,
                 bool,
                 String,
+                Option<String>,
                 Option<String>,
                 Option<String>,
             ),

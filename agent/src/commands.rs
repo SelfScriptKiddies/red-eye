@@ -11,7 +11,7 @@ use harpoon_core::types::endpoint::Protocol;
 use crate::harpoon::{self, HarpoonEngine, ProxyRuleSpec};
 use crate::nats::NatsClient;
 use crate::nftables::RedirectRule;
-use crate::updates::{PortsCache, RestartNotifier};
+use crate::updates::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct FilterDef {
@@ -44,9 +44,6 @@ fn default_tcp() -> String {
 #[serde(tag = "type")]
 #[allow(dead_code)]
 pub enum AgentCommand {
-    SnifferConfig {
-        ports: Vec<u16>,
-    },
     Shutdown,
 
     // Proxy management
@@ -114,8 +111,7 @@ pub enum AgentCommand {
 
 pub fn spawn_command_listener(
     nats: NatsClient,
-    ports_cache: PortsCache,
-    restart_tx: RestartNotifier,
+    state: Arc<AppState>,
     harpoon: Arc<Mutex<HarpoonEngine>>,
 ) {
     tokio::spawn(async move {
@@ -139,7 +135,7 @@ pub fn spawn_command_listener(
             };
 
             debug!("Received command: {:?}", cmd);
-            handle_command(cmd, &nats, &ports_cache, &restart_tx, &harpoon).await;
+            handle_command(cmd, &nats, &state, &harpoon).await;
         }
     });
 }
@@ -147,18 +143,10 @@ pub fn spawn_command_listener(
 async fn handle_command(
     cmd: AgentCommand,
     nats: &NatsClient,
-    ports_cache: &PortsCache,
-    restart_tx: &RestartNotifier,
+    _state: &Arc<AppState>,
     harpoon: &Arc<Mutex<HarpoonEngine>>,
 ) {
     match cmd {
-        AgentCommand::SnifferConfig { ports } => {
-            info!("Updating sniffer ports: {:?}", ports);
-            let mut cache = ports_cache.write().unwrap();
-            *cache = ports.into_iter().collect();
-            let _ = restart_tx.send(());
-        }
-
         AgentCommand::Shutdown => {
             info!("Shutdown command received");
             // Shared with SIGTERM/SIGINT: bounded cleanup + exit(0).
@@ -364,6 +352,17 @@ mod tests {
         assert!(matches!(cmd, AgentCommand::DockerListContainers));
     }
 
+    /// Service ports no longer travel through commands: SnifferConfig was
+    /// removed with the PORTS bootstrap and must not come back as a
+    /// decode-able variant.
+    #[test]
+    fn sniffer_config_command_is_gone() {
+        assert!(
+            serde_json::from_str::<AgentCommand>(r#"{"type":"SnifferConfig","ports":[80]}"#)
+                .is_err()
+        );
+    }
+
     // The command listener feeds raw bytes straight into from_slice
     // garbage on the subject must be a clean Err (warn + drop),
     // never a panic or a misapplied command.
@@ -405,10 +404,9 @@ mod tests {
     /// Known variant carrying extra fields from a newer backend still parses
     #[test]
     fn command_with_unknown_fields_still_parses() {
-        let cmd: AgentCommand =
-            serde_json::from_str(r#"{"type":"SnifferConfig","ports":[80],"future":true}"#)
-                .expect("parses with extra fields");
-        assert!(matches!(cmd, AgentCommand::SnifferConfig { ports } if ports == vec![80]));
+        let cmd: AgentCommand = serde_json::from_str(r#"{"type":"NftablesClear","future":true}"#)
+            .expect("parses with extra fields");
+        assert!(matches!(cmd, AgentCommand::NftablesClear));
     }
 }
 

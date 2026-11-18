@@ -86,6 +86,12 @@ interface Service {
     id?: number;
     name: string;
     port: number;
+    /** Transport protocol: "TCP" | "UDP" (required on create) */
+    protocol: string;
+    /** true = applies to all agents; false = explicit agent_ids set */
+    is_global: boolean;
+    /** Explicit agent set when not global */
+    agent_ids: string[];
     chunked_transfer_encoding: boolean;
     urldecode: boolean;
     merge_adjacent_packets: boolean;
@@ -94,6 +100,11 @@ interface Service {
     http_parse: boolean;
     http2_parse: boolean;
     alert_flag_leak?: boolean;
+}
+
+interface AgentForAssignment {
+    agent_id: string;
+    online: boolean;
 }
 
 interface Filter {
@@ -119,6 +130,9 @@ export function SettingsPage() {
     const [serviceForm, setServiceForm] = useState<Service>({
         name: '',
         port: 8080,
+        protocol: 'TCP',
+        is_global: true,
+        agent_ids: [],
         chunked_transfer_encoding: false,
         urldecode: false,
         merge_adjacent_packets: false,
@@ -128,6 +142,10 @@ export function SettingsPage() {
         http2_parse: false,
         alert_flag_leak: false
     });
+    // Known agents for the explicit-assignment editor (online + offline)
+    const [agentsForAssignment, setAgentsForAssignment] = useState<AgentForAssignment[]>([]);
+    // "pending sync" notice from the last save (publication failure)
+    const [serviceSyncNotice, setServiceSyncNotice] = useState<string | null>(null);
     
     // Filters state
     const [filters, setFilters] = useState<Filter[]>([]);
@@ -244,6 +262,9 @@ export function SettingsPage() {
             setServiceForm({
                 name: '',
                 port: 8080,
+                protocol: 'TCP',
+                is_global: true,
+                agent_ids: [],
                 chunked_transfer_encoding: false,
                 urldecode: false,
                 merge_adjacent_packets: false,
@@ -254,6 +275,12 @@ export function SettingsPage() {
                 alert_flag_leak: false
             });
         }
+        // Refresh the agent list the operator assigns to (online + offline)
+        fetch(`${API_URL}/agent`)
+            .then(r => (r.ok ? r.json() : []))
+            .then(data => setAgentsForAssignment(Array.isArray(data) ? data : Object.values(data)))
+            .catch(() => {});
+        setServiceSyncNotice(null);
         setServiceModalOpen(true);
     };
 
@@ -264,19 +291,27 @@ export function SettingsPage() {
 
     const saveService = async () => {
         if (!serviceForm.name.trim()) return;
-        
+        const port = Number(serviceForm.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            setServiceSyncNotice('Порт должен быть в диапазоне 1-65535');
+            return;
+        }
+
         try {
-            const url = editingService 
-                ? `${API_URL}/service/${editingService.id}` 
+            const url = editingService
+                ? `${API_URL}/service/${editingService.id}`
                 : `${API_URL}/service`;
             const method = editingService ? 'PUT' : 'POST';
-            
+
             const response = await fetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name: serviceForm.name,
-                    port: serviceForm.port,
+                    port,
+                    protocol: serviceForm.protocol,
+                    is_global: serviceForm.is_global,
+                    agent_ids: serviceForm.is_global ? [] : serviceForm.agent_ids,
                     chunked_transfer_encoding: serviceForm.chunked_transfer_encoding,
                     urldecode: serviceForm.urldecode,
                     merge_adjacent_packets: serviceForm.merge_adjacent_packets,
@@ -287,13 +322,25 @@ export function SettingsPage() {
                     alert_flag_leak: serviceForm.alert_flag_leak ?? false
                 })
             });
-            
+
             if (response.ok) {
+                const body = await response.json().catch(() => null);
+                // A committed write with failed NATS publication stays
+                // visible as pending sync; agents converge later via
+                // reconciliation, so the operator must see it.
+                if (body?.sync === 'pending') {
+                    setServiceSyncNotice('Сохранено, но публикация не удалась — синхронизация агентов в ожидании');
+                } else {
+                    closeServiceModal();
+                }
                 await fetchServices();
-                closeServiceModal();
+            } else {
+                const text = await response.text().catch(() => '');
+                setServiceSyncNotice(`Ошибка сохранения (${response.status}): ${text.slice(0, 200)}`);
             }
         } catch (error) {
             console.error('Error saving service:', error);
+            setServiceSyncNotice(`Ошибка сохранения: ${error}`);
         }
     };
 
@@ -419,6 +466,11 @@ export function SettingsPage() {
     const saveContainerService = async () => {
         if (!containerServiceName.trim() || !containerPort) return;
         setCreatingFromContainer(true);
+        // Protocol follows the container port report (tcp | udp | sctp);
+        // anything but udp degrades to TCP, sctp is not serviceable.
+        const selectedContainer = containers?.find(x => x.name === selectedContainerName);
+        const preferredPort = selectedContainer?.ports.find(p => p.port === containerPort);
+        const protocol = preferredPort?.protocol.toLowerCase() === 'udp' ? 'UDP' : 'TCP';
         try {
             // Same create API and defaults as the manual "add by port" form
             const response = await fetch(`${API_URL}/service`, {
@@ -427,6 +479,9 @@ export function SettingsPage() {
                 body: JSON.stringify({
                     name: containerServiceName,
                     port: containerPort,
+                    protocol,
+                    is_global: true,
+                    agent_ids: [],
                     chunked_transfer_encoding: false,
                     urldecode: false,
                     merge_adjacent_packets: false,
@@ -438,8 +493,15 @@ export function SettingsPage() {
                 })
             });
             if (response.ok) {
+                const body = await response.json().catch(() => null);
+                if (body?.sync === 'pending') {
+                    alert('Сервис сохранён, но публикация не удалась — синхронизация агентов в ожидании');
+                }
                 await fetchServices();
                 closeContainerModal();
+            } else {
+                const text = await response.text().catch(() => '');
+                alert(`Ошибка создания сервиса (${response.status}): ${text.slice(0, 200)}`);
             }
         } catch (error) {
             console.error('Error creating service from container:', error);
@@ -556,8 +618,20 @@ export function SettingsPage() {
                             <div key={service.id} className="settings-card">
                                 <div className="card-content">
                                     <h4>{service.name}</h4>
-                                    <p className="port-info">Порт: {service.port}</p>
+                                    <p className="port-info">
+                                        Порт: {service.port}/{(service.protocol || 'TCP').toLowerCase()}
+                                        {' · '}
+                                        {service.is_global
+                                            ? 'Все агенты'
+                                            : `Агентов: ${service.agent_ids?.length ?? 0}`}
+                                    </p>
                                     <div className="service-options">
+                                        {!service.is_global && (service.agent_ids ?? []).slice(0, 3).map(a => (
+                                            <span key={a} className="info-badge" title={a}>{a}</span>
+                                        ))}
+                                        {!service.is_global && (service.agent_ids?.length ?? 0) > 3 && (
+                                            <span className="info-badge">+{(service.agent_ids?.length ?? 0) - 3}</span>
+                                        )}
                                         {service.chunked_transfer_encoding && <span className="option-badge">Chunked</span>}
                                         {service.urldecode && <span className="option-badge">URLdecode</span>}
                                         {service.merge_adjacent_packets && <span className="option-badge">Merge</span>}
@@ -735,6 +809,48 @@ export function SettingsPage() {
                                 value={serviceForm.port}
                                 onChange={(e) => setServiceForm({ ...serviceForm, port: parseInt(e.target.value) || 0 })}
                             />
+                            <select
+                                className="select-input"
+                                value={serviceForm.protocol || 'TCP'}
+                                onChange={(e) => setServiceForm({ ...serviceForm, protocol: e.target.value })}
+                            >
+                                <option value="TCP">TCP</option>
+                                <option value="UDP">UDP</option>
+                            </select>
+                            <label className="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    checked={serviceForm.is_global}
+                                    onChange={(e) => setServiceForm({ ...serviceForm, is_global: e.target.checked })}
+                                />
+                                Применять ко всем агентам
+                            </label>
+                            {!serviceForm.is_global && (
+                                <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid #333', borderRadius: '6px', padding: '6px', margin: '4px 0' }}>
+                                    {agentsForAssignment.map(a => (
+                                        <label key={a.agent_id} className="checkbox-label" title={a.online ? 'онлайн' : 'офлайн'}>
+                                            <input
+                                                type="checkbox"
+                                                checked={serviceForm.agent_ids.includes(a.agent_id)}
+                                                onChange={(e) => {
+                                                    const ids = e.target.checked
+                                                        ? [...serviceForm.agent_ids, a.agent_id]
+                                                        : serviceForm.agent_ids.filter(id => id !== a.agent_id);
+                                                    setServiceForm({ ...serviceForm, agent_ids: ids });
+                                                }}
+                                            />
+                                            {a.agent_id}
+                                            {!a.online && <span className="text-muted"> (офлайн)</span>}
+                                        </label>
+                                    ))}
+                                    {agentsForAssignment.length === 0 && (
+                                        <span className="text-muted">Нет известных агентов</span>
+                                    )}
+                                </div>
+                            )}
+                            {serviceSyncNotice && (
+                                <p style={{ color: '#e8a33d', fontSize: '12px', margin: '6px 0' }}>{serviceSyncNotice}</p>
+                            )}
                             <div className="checkbox-group">
                                 <label className="checkbox-label">
                                     <input

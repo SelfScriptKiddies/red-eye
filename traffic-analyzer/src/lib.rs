@@ -7,6 +7,7 @@ pub mod filters;
 pub mod grpc_parser;
 pub mod http_parser;
 pub mod message_broker;
+pub mod metrics;
 pub mod process_packet;
 pub mod proto_schema;
 pub mod version;
@@ -63,14 +64,14 @@ fn tag_name_row_to_filter_args(
     )
 }
 
-/// Warm PACKET_FILTERS from the tag_name table at startup.
+/// Warm PACKET_FILTERS from the tag_name table.
 ///
 /// Why: filters reached the analyzer ONLY via NATS SettingsUpdate messages
 /// (FilterAdd/FilterUpdate/ConfigSync — see configuration/updater.rs), so
 /// after a restart mid-game PACKET_FILTERS stayed EMPTY until the backend's
 /// 5-minute scheduler fired the next ConfigSync or an operator edited a
 /// tag — up to 5 minutes of silently lost flag detections. Services are
-/// already warmed from the DB the same way below; filters now join them.
+/// already warmed from the DB the same way; filters now join them.
 ///
 /// The SELECT mirrors the backend's ConfigSync source
 /// (tag_repository::get_all_tag_names: `id, name, color, template_type,
@@ -122,6 +123,126 @@ async fn warm_filters_from_db(db: &db::DB) {
         total - registered
     );
 }
+
+/// Warm the service cache from the service table. Reused by the startup
+/// warm-up and the periodic DB reconciliation. Failure degrades to the
+/// previous cache contents (unknown-service drops are counted meanwhile).
+async fn warm_services_from_db(db: &db::DB, cache: &cache::Cache) {
+    let rows = match sqlx::query_as::<
+        _,
+        (i64, String, i32, String, bool, bool, bool, bool, bool, bool),
+    >(
+        "SELECT id, name, port, protocol, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
+    )
+    .fetch_all(db.pool())
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load services from DB (keeping previous cache): {}", e);
+            return;
+        }
+    };
+
+    let mut services = cache.services.write().unwrap();
+    services.clear();
+    for (
+        id,
+        name,
+        port,
+        protocol,
+        chunked_transfer_encoding,
+        decrypt_tls,
+        inflate_websockets,
+        merge_adjacent_packets,
+        urldecode,
+        http_parse,
+    ) in rows
+    {
+        // A row whose protocol this build cannot interpret is skipped:
+        // traffic for it degrades to counted unknown-service drops
+        // instead of being reinterpreted (e.g. UDP as TCP).
+        let transport = match protocol.as_str() {
+            "TCP" => configuration::updater::dto::TransportProto::Tcp,
+            "UDP" => configuration::updater::dto::TransportProto::Udp,
+            other => {
+                log::warn!(
+                    "Skipping service id {} with unknown protocol '{}'",
+                    id,
+                    other
+                );
+                continue;
+            }
+        };
+        let Ok(port_u16) = u16::try_from(port) else {
+            log::warn!("Skipping service id {} with out-of-range port {}", id, port);
+            continue;
+        };
+        let Ok(id_usize) = usize::try_from(id) else {
+            log::warn!("Skipping service id {} overflows usize", id);
+            continue;
+        };
+        services.insert(
+            id_usize,
+            configuration::updater::dto::Service {
+                name,
+                port: port_u16,
+                protocol: transport,
+                chunked_transfer_encoding,
+                decrypt_tls,
+                inflate_websockets,
+                merge_adjacent_packets,
+                urldecode,
+                http_parse,
+            },
+        );
+    }
+    info!("Loaded {} services from DB into cache", services.len());
+}
+
+/// Warm the per-agent machine IP registry from agent_config: the
+/// effective value is the override when present, else the last reported
+/// bootstrap value. Values that no longer parse (e.g. legacy garbage) are
+/// skipped — an agent without a resolvable IP has its packets dropped and
+/// counted until a snapshot re-registers it, never guessed.
+async fn warm_agent_registry_from_db(db: &db::DB, cache: &cache::Cache) {
+    let rows = match sqlx::query_as::<_, (String, Option<String>, Option<String>, i64)>(
+        "SELECT agent_id, machine_ip_override, reported_machine_ip, last_acked_revision \
+         FROM agent_config",
+    )
+    .fetch_all(db.pool())
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!(
+                "Failed to load agent registry from DB (keeping previous registry): {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let mut registered = 0;
+    let row_count = rows.len();
+    for (agent_id, override_ip, reported_ip, revision) in rows {
+        let value = override_ip
+            .or_else(|| reported_ip.clone())
+            .unwrap_or_default();
+        let Ok(machine_ip) = value.parse() else {
+            continue;
+        };
+        cache.set_agent_network(&agent_id, machine_ip, revision.max(0) as u64);
+        registered += 1;
+    }
+    info!(
+        "Loaded {} agent machine IPs from DB into registry ({} rows)",
+        registered, row_count
+    );
+}
+
+/// Bounded interval between reconciliation passes.
+const RECONCILIATION_INTERVAL_SECS: u64 = 60;
 
 pub async fn run() {
     let config = init();
@@ -177,44 +298,10 @@ pub async fn run() {
         }
     });
 
-    // Warm service cache from DB before consuming packets
-    {
-        let rows = sqlx::query_as::<_, (i64, String, i32, bool, bool, bool, bool, bool, bool)>(
-            "SELECT id, name, port, chunked_transfer_encoding, decrypt_tls, inflate_websockets, merge_adjacent_packets, urldecode, http_parse FROM service"
-        )
-        .fetch_all(db.pool())
-        .await
-        .unwrap_or_default();
-
-        let mut services = cache.services.write().unwrap();
-        for (
-            id,
-            name,
-            port,
-            chunked_transfer_encoding,
-            decrypt_tls,
-            inflate_websockets,
-            merge_adjacent_packets,
-            urldecode,
-            http_parse,
-        ) in rows
-        {
-            services.insert(
-                id as usize,
-                configuration::updater::dto::Service {
-                    name,
-                    port: port as u16,
-                    chunked_transfer_encoding,
-                    decrypt_tls,
-                    inflate_websockets,
-                    merge_adjacent_packets,
-                    urldecode,
-                    http_parse,
-                },
-            );
-        }
-        info!("Loaded {} services from DB into cache", services.len());
-    }
+    // Warm configuration from the DB before consuming packets: services,
+    // filters and the per-agent machine IP registry.
+    warm_services_from_db(&db, &cache).await;
+    warm_agent_registry_from_db(&db, &cache).await;
 
     // Create the shared WS activity aggregator (flushers record into it,
     // one publisher task sends a single summary frame per second on the
@@ -241,20 +328,72 @@ pub async fn run() {
     // minutes (next backend ConfigSync) — silently lost flags.
     warm_filters_from_db(&db).await;
 
-    // Update listener — spawned only AFTER the DB warm-ups above, so no
-    // SettingsUpdate (ConfigSync / FilterAdd redelivery) can be applied on
-    // top of a partially warmed filter set. Race safety: see the doc
-    // comment on warm_filters_from_db and the tests in filters.rs
-    // (sync_filters diffs by id; add_filter replaces by id).
+    // Supervised update listener: construction and processing failures are
+    // contained in a retry loop with bounded backoff. No spawned-task
+    // error may permanently kill updates while the packet consumer keeps
+    // running with a stale cache; NATS outages degrade to bounded retries.
     tokio::spawn({
         let config = config.clone();
         let cache = cache.clone();
         async move {
-            let update_listener = configuration::updater::UpdateListener::new(&config).await;
-            update_listener
-                .listen_to_updates(&config.nats_updates_topic, cache)
-                .await
-                .unwrap();
+            let mut backoff_secs: u64 = 1;
+            loop {
+                let started = std::time::Instant::now();
+                let outcome = async {
+                    let update_listener =
+                        configuration::updater::UpdateListener::new(&config).await?;
+                    update_listener
+                        .listen_to_updates(&config.nats_updates_topic, cache.clone())
+                        .await
+                }
+                .await;
+                match outcome {
+                    Ok(()) => {
+                        log::warn!("Update listener ended, restarting it");
+                    }
+                    Err(e) => {
+                        log::error!("Update listener failed, retrying: {e:#}");
+                    }
+                }
+                // A listener that ran healthy for a while resets the
+                // backoff; repeated fast failures climb to the ceiling.
+                if started.elapsed() >= std::time::Duration::from_secs(60) {
+                    backoff_secs = 1;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(60);
+            }
+        }
+    });
+
+    // Periodic DB reconciliation: services, filters and the agent registry
+    // re-read on a bounded interval, bounding how long a missed update
+    // event can stay effective. Never restarts the consumer or the packet
+    // path — it only swaps cache contents.
+    tokio::spawn({
+        let config = config.clone();
+        let cache = cache.clone();
+        async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                RECONCILIATION_INTERVAL_SECS,
+            ));
+            interval.tick().await; // skip first tick (startup warm-up just ran)
+            loop {
+                interval.tick().await;
+                match db::DB::init(&config).await {
+                    Ok(recon_db) => {
+                        warm_services_from_db(&recon_db, &cache).await;
+                        warm_agent_registry_from_db(&recon_db, &cache).await;
+                        warm_filters_from_db(&recon_db).await;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Reconciliation skipped (DB unavailable, retrying next interval): {}",
+                            e
+                        );
+                    }
+                }
+            }
         }
     });
 

@@ -120,7 +120,7 @@ pub struct ApplicationConfig {
         clap(long="nats-settings-topic", short='S', help="NATS settings topic", help_heading = "NATS config"),
         env = "NATS_SETTINGS_TOPIC",
         config = "nats.settings_topic",
-        default = "updates_v3".to_string())
+        default = "updates_v4".to_string())
     ]
     pub nats_settings_topic: String,
 

@@ -52,6 +52,7 @@ impl StreamService {
                     l7_protocol,
                     src_ip,
                     dst_ip,
+                    agent_id,
                 )| {
                     StreamListResponse {
                         id,
@@ -65,6 +66,7 @@ impl StreamService {
                         l7_protocol,
                         src_ip: src_ip.unwrap_or_default(),
                         dst_ip: dst_ip.unwrap_or_default(),
+                        agent_id,
                     }
                 },
             )

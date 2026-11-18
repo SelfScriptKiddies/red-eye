@@ -16,7 +16,7 @@ use harpoon_core::{CoreConfig, EngineHandle};
 use crate::nftables::{NftablesManager, RedirectRule};
 use crate::packet_synthesis;
 use crate::tls_certs::TlsCerts;
-use crate::updates::{PortsCache, RestartNotifier};
+use crate::updates::{PortsCache, RestartNotifier, TransportProto};
 
 /// Maximum capture session duration (seconds). Effectively infinite.
 const CAPTURE_TIMEOUT_SECS: u64 = 60 * 60 * 24 * 365;
@@ -96,6 +96,10 @@ impl ProxyRuleSpec {
 pub struct HarpoonEngine {
     ports_cache: PortsCache,
     restart_tx: RestartNotifier,
+    /// Proxy rule name -> transport protocol, read by the capture
+    /// forwarder to synthesize the matching header (harpoon-core's
+    /// CapturedPacket carries no protocol field).
+    rule_protocols: Arc<std::sync::RwLock<HashMap<String, TransportProto>>>,
 
     handle: Option<EngineHandle>,
     capture_mgr: Arc<CaptureManager>,
@@ -126,11 +130,29 @@ impl HarpoonEngine {
             handle: None,
             capture_mgr: CaptureManager::new(),
             rules: HashMap::new(),
+            rule_protocols: Arc::new(std::sync::RwLock::new(HashMap::new())),
             filters: Vec::new(),
             shared_filters: SharedFilterSet::empty(),
             tls_certs,
             nft: NftablesManager::new(),
         }
+    }
+
+    fn sync_rule_protocols(&self) {
+        let mut map = self.rule_protocols.write().unwrap();
+        map.clear();
+        for (name, spec) in &self.rules {
+            let transport = match spec.protocol {
+                Protocol::Tcp => TransportProto::Tcp,
+                Protocol::Udp => TransportProto::Udp,
+            };
+            map.insert(name.clone(), transport);
+        }
+    }
+
+    /// Protocol map for the capture forwarder.
+    pub fn rule_protocols(&self) -> Arc<std::sync::RwLock<HashMap<String, TransportProto>>> {
+        self.rule_protocols.clone()
     }
 
     /// Add a proxy rule, set up nftables if needed, and restart the engine.
@@ -162,9 +184,14 @@ impl HarpoonEngine {
         }
 
         let port = spec.listen_port();
+        let transport = match spec.protocol {
+            Protocol::Tcp => TransportProto::Tcp,
+            Protocol::Udp => TransportProto::Udp,
+        };
         self.rules.insert(spec.name.clone(), spec);
+        self.sync_rule_protocols();
         self.restart_engine().await?;
-        self.exclude_port_from_sniffer(port);
+        self.exclude_port_from_sniffer(transport, port);
 
         Ok(())
     }
@@ -184,8 +211,12 @@ impl HarpoonEngine {
         }
 
         let port = spec.listen_port();
+        let transport = match spec.protocol {
+            Protocol::Tcp => TransportProto::Tcp,
+            Protocol::Udp => TransportProto::Udp,
+        };
         self.restart_engine().await?;
-        self.return_port_to_sniffer(port);
+        self.return_port_to_sniffer(transport, port);
 
         Ok(())
     }
@@ -219,15 +250,21 @@ impl HarpoonEngine {
             })?;
         }
 
+        let old_transport = self.rules.get(&spec.name).map(|r| match r.protocol {
+            Protocol::Tcp => TransportProto::Tcp,
+            Protocol::Udp => TransportProto::Udp,
+        });
         self.rules.insert(spec.name.clone(), spec);
+        self.sync_rule_protocols();
         self.restart_engine().await?;
 
-        if let Some(old) = old_port {
-            if old != new_port {
-                self.return_port_to_sniffer(old);
+        if let (Some(old_port), Some(old_transport)) = (old_port, old_transport) {
+            if old_port != new_port {
+                self.return_port_to_sniffer(old_transport, old_port);
             }
         }
-        self.exclude_port_from_sniffer(new_port);
+        let transport = old_transport.unwrap_or(TransportProto::Tcp);
+        self.exclude_port_from_sniffer(transport, new_port);
 
         Ok(())
     }
@@ -373,21 +410,35 @@ impl HarpoonEngine {
         Ok(())
     }
 
-    fn exclude_port_from_sniffer(&self, port: u16) {
-        let removed = self.ports_cache.write().unwrap().remove(&port);
+    fn exclude_port_from_sniffer(&self, transport: TransportProto, port: u16) {
+        let removed = self.ports_cache.write().unwrap().remove(&(transport, port));
         if removed {
             let _ = self.restart_tx.send(());
-            debug!("Port {} excluded from sniffer (now proxied)", port);
+            debug!(
+                "Port {} {} excluded from sniffer (now proxied)",
+                port,
+                transport.as_str()
+            );
         }
     }
 
-    fn return_port_to_sniffer(&self, port: u16) {
-        let still_proxied = self.rules.values().any(|r| r.listen_port() == port);
+    fn return_port_to_sniffer(&self, transport: TransportProto, port: u16) {
+        let still_proxied = self
+            .rules
+            .values()
+            .any(|r| r.listen_port() == port && r.protocol == protocol_of(transport));
         if !still_proxied {
-            self.ports_cache.write().unwrap().insert(port);
+            self.ports_cache.write().unwrap().insert((transport, port));
             let _ = self.restart_tx.send(());
-            debug!("Port {} returned to sniffer", port);
+            debug!("Port {} {} returned to sniffer", port, transport.as_str());
         }
+    }
+}
+
+fn protocol_of(transport: TransportProto) -> Protocol {
+    match transport {
+        TransportProto::Tcp => Protocol::Tcp,
+        TransportProto::Udp => Protocol::Udp,
     }
 }
 
@@ -426,11 +477,14 @@ pub fn parse_filter(kind: &str, pattern: &str, direction: &str, action: &str) ->
     })
 }
 
-/// Spawn a background task that forwards captured packets from harpoon to NATS.
+/// Spawn a background task that forwards captured packets from harpoon to
+/// NATS. The machine IP and rule protocol are read per packet from the
+/// shared state, so snapshot application takes effect without a restart.
 pub fn spawn_capture_forwarder(
     capture_mgr: Arc<CaptureManager>,
     nats: crate::nats::NatsClient,
-    machine_ip: std::net::IpAddr,
+    rule_protocols: Arc<std::sync::RwLock<HashMap<String, TransportProto>>>,
+    config: crate::updates::SharedConfig,
 ) {
     tokio::spawn(async move {
         let mut rx = capture_mgr.subscribe();
@@ -439,7 +493,16 @@ pub fn spawn_capture_forwarder(
         loop {
             match rx.recv().await {
                 Ok(packet) => {
-                    if let Some(encoded) = packet_synthesis::encode_for_nats(&packet, machine_ip) {
+                    let protocol = rule_protocols
+                        .read()
+                        .unwrap()
+                        .get(&packet.rule_name)
+                        .copied()
+                        .unwrap_or(TransportProto::Tcp);
+                    let machine_ip = config.read().unwrap().machine_ip;
+                    if let Some(encoded) =
+                        packet_synthesis::encode_for_nats(&packet, machine_ip, protocol)
+                    {
                         nats.send_packet(encoded);
                     }
                 }

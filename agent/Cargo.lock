@@ -1789,6 +1789,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "bollard",
+ "bytes",
  "clap",
  "colog",
  "futures",

@@ -3,14 +3,18 @@ use crate::batch_flusher::{
 };
 use crate::cache::streams::StreamsCache;
 use crate::cache::Cache;
+use crate::configuration::updater::dto::TransportProto;
 use crate::configuration::ApplicationConfig;
 use crate::db::DB;
 use crate::ethernet::{self, PacketInfo, Protocol};
 use crate::filters::apply_filters;
 use crate::grpc_parser;
 use crate::http_parser;
-use log::{debug, error};
+use crate::metrics;
+use log::debug;
 use std::io::Error;
+use std::net::IpAddr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -18,6 +22,68 @@ use tokio::sync::Mutex;
 pub enum Direction {
     Inbound,
     Outbound,
+}
+
+/// Per-packet resolution inputs: the capturing agent and its effective
+/// machine IP. A wildcard machine IP (0.0.0.0 / ::) matches services by
+/// protocol+port only; a concrete value matches IP+port.
+pub struct PacketContext {
+    pub agent_id: String,
+    pub machine_ip: IpAddr,
+}
+
+/// Outcome of service matching.
+#[derive(Debug, PartialEq)]
+enum ServiceMatch {
+    Found(usize, Direction),
+    /// Both endpoints match the same service under wildcard mode.
+    Ambiguous,
+    /// No service covers this packet: drop immediately, never buffer.
+    Unknown,
+}
+
+/// Pure service resolution: transport protocol + port identify the
+/// service; a concrete machine IP also requires the IP to match the local
+/// endpoint, a wildcard one matches protocol+port on either side and
+/// reports ambiguity when both sides match. Extracted for unit tests.
+fn resolve_service_match<'a, I>(
+    services: I,
+    packet: &PacketInfo,
+    machine_ip: IpAddr,
+) -> ServiceMatch
+where
+    I: Iterator<Item = (usize, &'a crate::configuration::updater::dto::Service)>,
+{
+    for (id, service) in services {
+        let transport = match service.protocol {
+            TransportProto::Tcp => Protocol::TCP,
+            TransportProto::Udp => Protocol::UDP,
+        };
+        if transport != packet.protocol {
+            continue;
+        }
+
+        if !machine_ip.is_unspecified() {
+            let src_is_local = machine_ip == packet.src_ip && service.port == packet.src_port;
+            let dst_is_local = machine_ip == packet.dst_ip && service.port == packet.dst_port;
+            if src_is_local {
+                return ServiceMatch::Found(id, Direction::Outbound);
+            }
+            if dst_is_local {
+                return ServiceMatch::Found(id, Direction::Inbound);
+            }
+        } else {
+            let src_matches = service.port == packet.src_port;
+            let dst_matches = service.port == packet.dst_port;
+            match (src_matches, dst_matches) {
+                (true, true) => return ServiceMatch::Ambiguous,
+                (true, false) => return ServiceMatch::Found(id, Direction::Outbound),
+                (false, true) => return ServiceMatch::Found(id, Direction::Inbound),
+                (false, false) => continue,
+            }
+        }
+    }
+    ServiceMatch::Unknown
 }
 
 #[derive(Debug)]
@@ -51,26 +117,20 @@ impl PacketProcessor {
         }
     }
 
-    fn compare_ip(&self, filter_ip: &String, got_ip: &String) -> bool {
-        filter_ip == got_ip || filter_ip == "0.0.0.0"
-    }
-
-    fn find_service_and_direction(&self, packet: &PacketInfo) -> Option<(usize, Direction)> {
+    /// Service matching by transport protocol + port, direction by the
+    /// agent's machine IP. Returns the first match in id order for the
+    /// concrete case; the wildcard case additionally detects ambiguity.
+    fn find_service_and_direction(
+        &self,
+        packet: &PacketInfo,
+        context: &PacketContext,
+    ) -> ServiceMatch {
         let services = self.cache.services.read().unwrap();
-        for (id, service) in services.iter() {
-            if self.compare_ip(&self.config.machine_ip, &packet.src_ip.to_string())
-                && service.port == packet.src_port
-            {
-                return Some((*id, Direction::Outbound));
-            }
-
-            if self.compare_ip(&self.config.machine_ip, &packet.dst_ip.to_string())
-                && service.port == packet.dst_port
-            {
-                return Some((*id, Direction::Inbound));
-            }
-        }
-        None
+        resolve_service_match(
+            services.iter().map(|(id, s)| (*id, s)),
+            packet,
+            context.machine_ip,
+        )
     }
 
     /// Direction-normalized 4-tuple: src is always the local machine's side,
@@ -115,6 +175,7 @@ impl PacketProcessor {
         packet: &PacketInfo,
         direction: &Direction,
         service_id: usize,
+        agent_id: &str,
     ) -> Result<usize, Error> {
         let (src_ip, src_port, dst_ip, dst_port) = Self::normalized_tuple(packet, direction);
         let key = StreamsCache::format_key(&src_ip, src_port, &dst_ip, dst_port);
@@ -124,7 +185,9 @@ impl PacketProcessor {
             && ethernet::tcp_is_new_connection_syn(packet.tcp_flags)
         {
             let tuple = (src_ip, src_port, dst_ip, dst_port);
-            return self.start_new_stream(&tuple, packet, service_id).await;
+            return self
+                .start_new_stream(&tuple, packet, service_id, agent_id)
+                .await;
         }
 
         // Lock-free lookup
@@ -171,6 +234,7 @@ impl PacketProcessor {
                 &packet.ip_version,
                 service_id,
                 packet.timestamp_seconds as i64,
+                Some(agent_id),
             )
             .await
             .map_err(|e| Error::other(format!("Stream creation failed: {:?}", e)))?;
@@ -191,6 +255,7 @@ impl PacketProcessor {
         tuple: &(String, u16, String, u16),
         packet: &PacketInfo,
         service_id: usize,
+        agent_id: &str,
     ) -> Result<usize, Error> {
         let (src_ip, src_port, dst_ip, dst_port) = tuple;
         let key = StreamsCache::format_key(src_ip, *src_port, dst_ip, *dst_port);
@@ -231,6 +296,7 @@ impl PacketProcessor {
                 &packet.ip_version,
                 service_id,
                 packet.timestamp_seconds as i64,
+                Some(agent_id),
             )
             .await
             .map_err(|e| {
@@ -247,11 +313,38 @@ impl PacketProcessor {
         Ok(stream_id)
     }
 
-    pub async fn process_packet(&self, packet: PacketInfo) -> Result<(), Error> {
-        // Find service and direction
-        let (service_id, direction) = self
-            .find_service_and_direction(&packet)
-            .ok_or(Error::other("Service not found"))?;
+    pub async fn process_packet(
+        &self,
+        packet: PacketInfo,
+        context: &PacketContext,
+    ) -> Result<(), Error> {
+        // Find service and direction. Unknown-service packets are dropped
+        // immediately (never buffered): the loss is observable via the
+        // aggregate counter and may trigger asynchronous reconciliation.
+        let (service_id, direction) = match self.find_service_and_direction(&packet, context) {
+            ServiceMatch::Found(service_id, direction) => (service_id, direction),
+            ServiceMatch::Ambiguous => {
+                let dropped =
+                    metrics::AMBIGUOUS_DIRECTION_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::rate_limited_log("ambiguous-direction", dropped, || {
+                    format!(
+                        "agent '{}': both endpoints match the same service under wildcard machine IP",
+                        context.agent_id
+                    )
+                });
+                return Ok(());
+            }
+            ServiceMatch::Unknown => {
+                let dropped = metrics::UNKNOWN_SERVICE_DROPS.fetch_add(1, Ordering::Relaxed) + 1;
+                metrics::rate_limited_log("unknown-service", dropped, || {
+                    format!(
+                        "agent '{}': no service covers {} port {}",
+                        context.agent_id, packet.dst_ip, packet.dst_port
+                    )
+                });
+                return Ok(());
+            }
+        };
 
         debug!(
             "Processing packet: \nService ID: {:?}\nDirection: {:?}",
@@ -279,7 +372,8 @@ impl PacketProcessor {
         if packet.payload.is_empty() {
             if is_tcp && ethernet::tcp_is_new_connection_syn(packet.tcp_flags) {
                 let tuple = Self::normalized_tuple(&packet, &direction);
-                self.start_new_stream(&tuple, &packet, service_id).await?;
+                self.start_new_stream(&tuple, &packet, service_id, &context.agent_id)
+                    .await?;
             }
             return Ok(());
         }
@@ -291,7 +385,9 @@ impl PacketProcessor {
             self.cache.clear_syn_pending(&key);
         }
 
-        let stream_id = self.find_stream_id(&packet, &direction, service_id).await?;
+        let stream_id = self
+            .find_stream_id(&packet, &direction, service_id, &context.agent_id)
+            .await?;
         debug!("Stream ID: {:?}", stream_id);
 
         // Checking all of the filters (direction-aware: a filter tagged
@@ -447,47 +543,155 @@ impl PacketProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configuration::updater::dto::{Service as DtoService, TransportProto};
+    use std::net::IpAddr;
 
-    #[test]
-    fn first_syn_on_fresh_tuple_opens_new_stream() {
-        // No cached stream for the tuple yet: the SYN must create one.
-        assert!(PacketProcessor::should_start_new_stream(true, false, false));
+    fn service(id: usize, port: u16, protocol: TransportProto) -> (usize, DtoService) {
+        (
+            id,
+            DtoService {
+                name: format!("svc-{id}"),
+                port,
+                protocol,
+                chunked_transfer_encoding: false,
+                decrypt_tls: false,
+                inflate_websockets: false,
+                merge_adjacent_packets: false,
+                urldecode: false,
+                http_parse: false,
+            },
+        )
+    }
+
+    fn packet(
+        src: &str,
+        src_port: u16,
+        dst: &str,
+        dst_port: u16,
+        protocol: Protocol,
+    ) -> PacketInfo {
+        PacketInfo {
+            payload: vec![1, 2, 3],
+            timestamp_seconds: 0,
+            timestamp_microseconds: 0,
+            src_ip: src.parse::<IpAddr>().unwrap(),
+            src_port,
+            dst_ip: dst.parse::<IpAddr>().unwrap(),
+            dst_port,
+            protocol,
+            ip_version: crate::ethernet::IpVersion::IPv4,
+            stream_id: None,
+            tcp_flags: 0,
+        }
+    }
+
+    fn services() -> Vec<(usize, DtoService)> {
+        vec![
+            service(1, 80, TransportProto::Tcp),
+            service(2, 53, TransportProto::Udp),
+        ]
     }
 
     #[test]
-    fn syn_after_data_opens_new_stream_and_invalidates_cache() {
-        // Tuple reused by a NEW connection (old stream cached, data already
-        // flowed so syn_pending was cleared): must NOT reuse the old stream.
-        assert!(PacketProcessor::should_start_new_stream(true, false, true));
+    fn tcp_and_udp_coexist_on_the_same_port() {
+        let services = vec![
+            service(1, 8080, TransportProto::Tcp),
+            service(2, 8080, TransportProto::Udp),
+        ];
+        let tcp_packet = packet("10.0.0.1", 40000, "10.0.0.5", 8080, Protocol::TCP);
+        let udp_packet = packet("10.0.0.1", 40000, "10.0.0.5", 8080, Protocol::UDP);
+
+        let tcp_match = resolve_service_match(
+            services.iter().map(|(id, s)| (*id, s)),
+            &tcp_packet,
+            "10.0.0.5".parse().unwrap(),
+        );
+        let udp_match = resolve_service_match(
+            services.iter().map(|(id, s)| (*id, s)),
+            &udp_packet,
+            "10.0.0.5".parse().unwrap(),
+        );
+        assert_eq!(tcp_match, ServiceMatch::Found(1, Direction::Inbound));
+        assert_eq!(udp_match, ServiceMatch::Found(2, Direction::Inbound));
     }
 
     #[test]
-    fn syn_after_close_opens_new_stream() {
-        // FIN/RST cleared syn_pending: a following plain SYN is a new
-        // connection even though the closed stream may still be cached.
-        assert!(PacketProcessor::should_start_new_stream(true, false, true));
+    fn protocol_mismatch_is_unknown_not_tcp_fallback() {
+        // A UDP packet must never match a TCP-only service set: the loss
+        // degrades to a counted unknown-service drop instead of a silent
+        // reinterpretation.
+        let services = vec![service(1, 53, TransportProto::Tcp)];
+        let udp_packet = packet("10.0.0.1", 40000, "10.0.0.5", 53, Protocol::UDP);
+        assert_eq!(
+            resolve_service_match(
+                services.iter().map(|(id, s)| (*id, s)),
+                &udp_packet,
+                "10.0.0.5".parse().unwrap(),
+            ),
+            ServiceMatch::Unknown
+        );
     }
 
     #[test]
-    fn retransmitted_syn_reuses_pending_stream() {
-        // SYN seen, no data yet, stream cached: this is a retransmission —
-        // reusing the stream avoids forking duplicates per dropped SYN.
-        assert!(!PacketProcessor::should_start_new_stream(true, true, true));
+    fn concrete_machine_ip_requires_endpoint_match() {
+        let local: IpAddr = "10.0.0.5".parse().unwrap();
+        let response = packet("10.0.0.5", 80, "10.0.0.9", 40000, Protocol::TCP);
+        let request = packet("10.0.0.9", 40000, "10.0.0.5", 80, Protocol::TCP);
+
+        assert_eq!(
+            resolve_service_match(services().iter().map(|(id, s)| (*id, s)), &response, local),
+            ServiceMatch::Found(1, Direction::Outbound)
+        );
+        assert_eq!(
+            resolve_service_match(services().iter().map(|(id, s)| (*id, s)), &request, local),
+            ServiceMatch::Found(1, Direction::Inbound)
+        );
+
+        // Same ports, but neither endpoint is this machine.
+        let other = packet("10.1.0.1", 80, "10.1.0.9", 40000, Protocol::TCP);
+        assert_eq!(
+            resolve_service_match(services().iter().map(|(id, s)| (*id, s)), &other, local),
+            ServiceMatch::Unknown
+        );
     }
 
     #[test]
-    fn syn_pending_without_cached_stream_still_creates() {
-        // syn_pending set but the cache entry is gone (e.g. TTL eviction
-        // raced the handshake): create rather than lose the connection.
-        assert!(PacketProcessor::should_start_new_stream(true, true, false));
+    fn wildcard_machine_ip_matches_by_protocol_and_port() {
+        let wildcard: IpAddr = "0.0.0.0".parse().unwrap();
+        let pkt = packet("172.16.0.9", 40000, "172.16.0.5", 80, Protocol::TCP);
+        assert_eq!(
+            resolve_service_match(services().iter().map(|(id, s)| (*id, s)), &pkt, wildcard),
+            ServiceMatch::Found(1, Direction::Inbound)
+        );
+
+        // Outbound under wildcard: service port on the source side.
+        let out = packet("172.16.0.5", 80, "172.16.0.9", 40000, Protocol::TCP);
+        assert_eq!(
+            resolve_service_match(services().iter().map(|(id, s)| (*id, s)), &out, wildcard),
+            ServiceMatch::Found(1, Direction::Outbound)
+        );
+
+        // IPv6 wildcard behaves the same.
+        let pkt6 = packet("fd00::9", 40000, "fd00::5", 80, Protocol::TCP);
+        assert_eq!(
+            resolve_service_match(
+                services().iter().map(|(id, s)| (*id, s)),
+                &pkt6,
+                "::".parse().unwrap()
+            ),
+            ServiceMatch::Found(1, Direction::Inbound)
+        );
     }
 
     #[test]
-    fn non_syn_packets_never_take_the_new_stream_path() {
-        assert!(!PacketProcessor::should_start_new_stream(
-            false, false, false
-        ));
-        assert!(!PacketProcessor::should_start_new_stream(false, true, true));
+    fn wildcard_both_endpoints_matching_is_ambiguous_and_dropped() {
+        let wildcard: IpAddr = "0.0.0.0".parse().unwrap();
+        // src port 80 and dst port 80: direction cannot be decided.
+        let pkt = packet("10.0.0.9", 80, "10.0.0.10", 80, Protocol::TCP);
+        assert_eq!(
+            resolve_service_match(services().iter().map(|(id, s)| (*id, s)), &pkt, wildcard),
+            ServiceMatch::Ambiguous
+        );
     }
 
     #[test]
@@ -542,5 +746,72 @@ mod tests {
             PacketProcessor::tuple_key(&response_packet, &Direction::Outbound),
             PacketProcessor::tuple_key(&request_packet, &Direction::Inbound),
         );
+    }
+
+    #[test]
+    fn agent_registry_rejects_stale_snapshots() {
+        let cache = Cache::new(60);
+        cache.set_agent_network("a1", "10.0.0.5".parse().unwrap(), 5);
+        assert_eq!(
+            cache.agent_machine_ip("a1"),
+            Some("10.0.0.5".parse().unwrap())
+        );
+
+        // Stale revision must not roll back a newer value.
+        cache.set_agent_network("a1", "10.9.9.9".parse().unwrap(), 4);
+        assert_eq!(
+            cache.agent_machine_ip("a1"),
+            Some("10.0.0.5".parse().unwrap())
+        );
+
+        // Newer revision applies; unknown agents resolve to None.
+        cache.set_agent_network("a1", "10.0.0.7".parse().unwrap(), 6);
+        assert_eq!(
+            cache.agent_machine_ip("a1"),
+            Some("10.0.0.7".parse().unwrap())
+        );
+        assert_eq!(cache.agent_machine_ip("ghost"), None);
+    }
+
+    #[test]
+    fn first_syn_on_fresh_tuple_opens_new_stream() {
+        // No cached stream for the tuple yet: the SYN must create one.
+        assert!(PacketProcessor::should_start_new_stream(true, false, false));
+    }
+
+    #[test]
+    fn syn_after_data_opens_new_stream_and_invalidates_cache() {
+        // Tuple reused by a NEW connection (old stream cached, data already
+        // flowed so syn_pending was cleared): must NOT reuse the old stream.
+        assert!(PacketProcessor::should_start_new_stream(true, false, true));
+    }
+
+    #[test]
+    fn syn_after_close_opens_new_stream() {
+        // FIN/RST cleared syn_pending: a following plain SYN is a new
+        // connection even though the closed stream may still be cached.
+        assert!(PacketProcessor::should_start_new_stream(true, false, true));
+    }
+
+    #[test]
+    fn retransmitted_syn_reuses_pending_stream() {
+        // SYN seen, no data yet, stream cached: this is a retransmission —
+        // reusing the stream avoids forking duplicates per dropped SYN.
+        assert!(!PacketProcessor::should_start_new_stream(true, true, true));
+    }
+
+    #[test]
+    fn syn_pending_without_cached_stream_still_creates() {
+        // syn_pending set but the cache entry is gone (e.g. TTL eviction
+        // raced the handshake): create rather than lose the connection.
+        assert!(PacketProcessor::should_start_new_stream(true, true, false));
+    }
+
+    #[test]
+    fn non_syn_packets_never_take_the_new_stream_path() {
+        assert!(!PacketProcessor::should_start_new_stream(
+            false, false, false
+        ));
+        assert!(!PacketProcessor::should_start_new_stream(false, true, true));
     }
 }

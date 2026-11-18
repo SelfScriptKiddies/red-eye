@@ -64,8 +64,7 @@ Binary: `agent/target/release/red-eye-agent`
 ./scripts/deploy-agent.sh root@10.0.0.1 \
   --nats 10.0.0.100:4222 \
   --nats-password YOUR_NATS_PASSWORD \
-  --interface eth0 \
-  --ports 8080,443
+  --interface eth0
 
 # With the nftables package preinstalled if missing (needed for
 # proxy/firewall features; nftables.service is NOT enabled)
@@ -73,7 +72,6 @@ Binary: `agent/target/release/red-eye-agent`
   --nats 10.0.0.100:4222 \
   --nats-password YOUR_NATS_PASSWORD \
   --interface eth0 \
-  --ports 8080,443 \
   --install-nftables
 
 # Using .env file for credentials
@@ -82,6 +80,11 @@ Binary: `agent/target/release/red-eye-agent`
 # Remove agent
 ./scripts/deploy-agent.sh root@10.0.0.1 --uninstall
 ```
+
+The agent deploys WITHOUT a ports list: service ports come from the
+central registry (Settings page) via revisioned snapshots, so assigning
+a service takes effect at runtime without redeploying or restarting the
+agent. `PORTS` is removed and ignored if present in old env files.
 
 The script:
 1. Uploads binary via scp
@@ -191,7 +194,6 @@ python3 test_grpc_service.py http://YOUR_IP:31337
 | `NATS_LOGIN` | NATS login | `username` |
 | `NATS_PASSWORD` | NATS password | `password` |
 | `INTERFACE` | Network interface | `eth0` |
-| `PORTS` | Ports to sniff (comma-sep) | — |
 | `AGENT_ID` | Agent identifier | hostname |
 | `DATA_DIR` | CA certs directory | `/var/lib/red-eye-agent` |
 | `LOGGING_LEVEL` | Log level | `info` |
