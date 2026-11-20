@@ -156,7 +156,7 @@ function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo })
     );
 }
 /** Versions of every service from /api/version (60s server-side cache).
- * Different git shas across rows = the stack drifted apart — redeploy. */
+ * Different git shas across rows = the stack drifted apart: redeploy. */
 function VersionsBlock() {
     const { data, isLoading, error } = useQuery({
         queryKey: ['versions'],
