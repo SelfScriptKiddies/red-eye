@@ -4,6 +4,7 @@ import { LoginPage } from '../pages/LoginPage';
 import { MainPage } from '../pages/MainPage';
 import { PacketsPage } from "../pages/PacketsPage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { AiPage } from "../pages/AiPage";
 import AgentsPage from "../pages/AgentsPage";
 
 function getCookie(name) {
@@ -19,6 +20,7 @@ export const RenderPage = (): ReactNode => {
         "/login": <LoginPage />,
         "/packets": <PacketsPage />,
         "/settings": <SettingsPage />,
+        "/ai": <AiPage />,
         "/agents": <AgentsPage />,
     };
     if(!getCookie('id') && name !== "/login")

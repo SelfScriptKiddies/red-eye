@@ -189,20 +189,35 @@ export async function revokeMcpToken(id: number): Promise<void> {
 /** The operator-configurable SOC settings with UI metadata. Secrets are
  * absent: soc_api_key has its own write-only field, generated credentials
  * have their own buttons. */
-export const SOC_SETTING_ROWS: { key: string; label: string; hint: string; type?: 'float' | 'int' | 'text' }[] = [
+/** `advanced` rows hide behind the per-section Advanced collapsible. */
+export const SOC_SETTING_ROWS: { key: string; label: string; hint: string; type?: 'float' | 'int' | 'text'; advanced?: boolean }[] = [
     { key: 'soc_base_url', label: 'LLM endpoint', hint: 'OpenAI-совместимый /v1, например http://llm:8080/v1', type: 'text' },
     { key: 'soc_model', label: 'Модель', hint: 'Имя модели на endpoint', type: 'text' },
     { key: 'soc_alert_threshold', label: 'Порог алерта', hint: '0..1: likely_attack с confidence >= порога шлёт soc_triage тост', type: 'float' },
     { key: 'soc_auto_min_jev_severity', label: 'Мин. тяжесть JEV для авто-триажа', hint: '0..3; новые qualifying вердикты ставят ровно одну задачу', type: 'int' },
-    { key: 'soc_max_context_tokens', label: 'Лимит контекста', hint: 'токены на запрос модели', type: 'int' },
-    { key: 'soc_max_output_tokens', label: 'Лимит вывода', hint: 'токены на ответ модели', type: 'int' },
-    { key: 'soc_max_tool_calls', label: 'Лимит tool-вызовов', hint: 'максимум на одну задачу', type: 'int' },
-    { key: 'soc_max_tool_result_bytes', label: 'Лимит результата tool', hint: 'байты на один результат', type: 'int' },
-    { key: 'soc_job_timeout_secs', label: 'Таймаут задачи', hint: 'сек; lease и бюджет попытки', type: 'int' },
-    { key: 'soc_max_attempts', label: 'Максимум попыток', hint: 'после исчерпания задача помечается failed (это не benign)', type: 'int' },
-    { key: 'soc_concurrency', label: 'Параллелизм воркера', hint: 'число одновременных задач (по умолчанию 1)', type: 'int' },
-    { key: 'soc_daily_job_limit', label: 'Дневной лимит задач', hint: 'по UTC; при достижении claims пауза до следующего дня', type: 'int' },
+    { key: 'soc_max_context_tokens', label: 'Лимит контекста', hint: 'токены на запрос модели', type: 'int', advanced: true },
+    { key: 'soc_max_output_tokens', label: 'Лимит вывода', hint: 'токены на ответ модели', type: 'int', advanced: true },
+    { key: 'soc_max_tool_calls', label: 'Лимит tool-вызовов', hint: 'максимум на одну задачу', type: 'int', advanced: true },
+    { key: 'soc_max_tool_result_bytes', label: 'Лимит результата tool', hint: 'байты на один результат', type: 'int', advanced: true },
+    { key: 'soc_job_timeout_secs', label: 'Таймаут задачи', hint: 'сек; lease и бюджет попытки', type: 'int', advanced: true },
+    { key: 'soc_max_attempts', label: 'Максимум попыток', hint: 'после исчерпания задача помечается failed (это не benign)', type: 'int', advanced: true },
+    { key: 'soc_concurrency', label: 'Параллелизм воркера', hint: 'число одновременных задач (по умолчанию 1)', type: 'int', advanced: true },
+    { key: 'soc_daily_job_limit', label: 'Дневной лимит задач', hint: 'по UTC; при достижении claims пауза до следующего дня', type: 'int', advanced: true },
 ];
+
+export interface SocModelEntry {
+    id: string;
+    context_length?: number | null;
+}
+
+export interface SocModelsResponse {
+    models: SocModelEntry[];
+    note?: string;
+}
+
+export function fetchSocModels(signal?: AbortSignal): Promise<SocModelsResponse> {
+    return apiFetch<SocModelsResponse>('/api/soc/models', signal);
+}
 
 /** True when the endpoint points outside localhost / private networks:
  * the privacy acknowledgement gate keys off this. */
