@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseStreamsParam, buildAgentLink, MAX_AGENT_LINK_IDS } from './streamsLink';
+import { parseStreamsParam, buildAgentLink, buildShareLink, MAX_AGENT_LINK_IDS } from './streamsLink';
 
 describe('parseStreamsParam', () => {
     it('parses comma separated ids', () => {
@@ -42,5 +42,20 @@ describe('buildAgentLink', () => {
         const ids = Array.from({ length: MAX_AGENT_LINK_IDS }, (_, i) => i + 1);
         const { truncated } = buildAgentLink('https://x', ids);
         expect(truncated).toBe(false);
+    });
+});
+
+describe('buildShareLink', () => {
+    it('builds the MCP-canonical streams url without a note', () => {
+        const { url, note } = buildShareLink('https://red-eye.example.com', [1, 2, 3]);
+        expect(url).toBe('https://red-eye.example.com/packets?streams=1,2,3');
+        expect(note).toBe('');
+    });
+
+    it('emits a cap note when the selection is truncated', () => {
+        const ids = Array.from({ length: MAX_AGENT_LINK_IDS + 1 }, (_, i) => i + 1);
+        const { url, note } = buildShareLink('https://x', ids);
+        expect(url).toBe(`https://x/packets?streams=${Array.from({ length: MAX_AGENT_LINK_IDS }, (_, i) => i + 1).join(',')}`);
+        expect(note).toContain('25');
     });
 });
