@@ -147,15 +147,15 @@ impl FavoriteService {
         let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
             r#"
             SELECT
-                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)
+                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::bigint
                  FROM pg_class c
                  WHERE c.relkind = 'r'
                    AND c.relname IN ('saved_packet', 'saved_tag',
                                      'saved_http_message', 'saved_grpc_message')),
                 (SELECT COUNT(*) FROM stream WHERE favorite AND active),
-                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                (SELECT COALESCE(SUM(retention_bytes), 0)::bigint FROM stream
                  WHERE favorite AND NOT active AND retention_state <> 'archived'),
-                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                (SELECT COALESCE(SUM(retention_bytes), 0)::bigint FROM stream
                  WHERE NOT favorite AND retention_state IN ('archiving', 'archived')
                    AND id <> COALESCE($1, -1)),
                 (SELECT COUNT(*) FROM stream WHERE favorite),
@@ -232,7 +232,7 @@ impl FavoriteService {
         // and L7 rows are two orders smaller and folded into the
         // reservation margin. Estimate documented per the design.
         let measured: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(octet_length(packet_data)), 0) FROM packets WHERE stream_id = $1",
+            "SELECT COALESCE(SUM(octet_length(packet_data)), 0)::bigint FROM packets WHERE stream_id = $1",
         )
         .bind(stream_id)
         .fetch_one(&mut *tx)
@@ -249,15 +249,15 @@ impl FavoriteService {
         let usage = sqlx::query_as::<_, (i64, i64, i64, i64)>(
             r#"
             SELECT
-                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)
+                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::bigint
                  FROM pg_class c
                  WHERE c.relkind = 'r'
                    AND c.relname IN ('saved_packet', 'saved_tag',
                                      'saved_http_message', 'saved_grpc_message')),
                 (SELECT COUNT(*) FROM stream WHERE favorite AND active),
-                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                (SELECT COALESCE(SUM(retention_bytes), 0)::bigint FROM stream
                  WHERE favorite AND NOT active AND retention_state <> 'archived'),
-                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                (SELECT COALESCE(SUM(retention_bytes), 0)::bigint FROM stream
                  WHERE NOT favorite AND retention_state IN ('archiving', 'archived')
                    AND id <> $1)
             "#,

@@ -482,7 +482,7 @@ async fn middle_stats(
 ) -> Result<(i64, i64), sqlx::Error> {
     let sql = format!(
         r#"
-        SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(length(packet_data)), 0)
+        SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(length(packet_data)), 0)::bigint
         FROM (
             (
                 SELECT packet_data FROM packets
