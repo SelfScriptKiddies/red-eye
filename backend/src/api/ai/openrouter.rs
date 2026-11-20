@@ -261,6 +261,37 @@ pub fn retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<u64> {
         .and_then(|v| v.trim().parse::<u64>().ok())
 }
 
+/// Bounded GET for catalog endpoints (/models): 10s total budget, body
+/// capped so a hostile upstream cannot balloon backend memory. The bearer
+/// key never enters errors or logs.
+pub async fn fetch_json_bounded(
+    url: &str,
+    bearer: Option<&str>,
+    cap: usize,
+) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(url);
+    if let Some(key) = bearer {
+        req = req.bearer_auth(key);
+    }
+    let mut resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("upstream status {}", resp.status().as_u16()));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > cap {
+            return Err("upstream body too large".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|e| e.to_string())
+}
+
 /// Production transport: one shared client, key per request (never stored
 /// in the client), Authorization only to the configured endpoint.
 pub struct ReqwestTransport {

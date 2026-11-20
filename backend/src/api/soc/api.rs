@@ -17,12 +17,58 @@ const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 /// Retry hint handed to manual submitters when the queue is saturated.
 const QUEUE_FULL_RETRY_AFTER: &str = "30";
+/// Model catalog proxy bounds: body cap, entry cap (shared shape with the
+/// JEV /models endpoint).
+const MODELS_BODY_CAP: usize = 1 << 20;
+const MODELS_MAX_ENTRIES: usize = 500;
+
+#[derive(Deserialize)]
+struct CatalogModels {
+    data: Vec<CatalogModel>,
+}
+
+#[derive(Deserialize)]
+struct CatalogModel {
+    id: String,
+    context_length: Option<i64>,
+}
 
 // ---------- Operator endpoints ----------
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct TriageRequest {
     pub stream_id: i64,
+}
+
+/// GET /api/soc/models: OpenAI-compatible /models on the configured
+/// endpoint, signed with the stored key when present. Failure degrades to
+/// an empty list plus a terse note; the frontend falls back to free text.
+#[utoipa::path(get, path = "/api/soc/models", tag = "soc",
+    responses((status = 200, description = "Endpoint model catalog")))]
+#[get("/soc/models")]
+async fn get_models(_identity: Identity, pool: web::Data<PgPool>) -> impl Responder {
+    let settings = SocSettings::load(pool.get_ref()).await;
+    let url = format!("{}/models", settings.base_url.trim_end_matches('/'));
+    let bearer = if settings.api_key_configured {
+        Some(settings.api_key.as_str())
+    } else {
+        None
+    };
+    match crate::api::ai::openrouter::fetch_json_bounded(&url, bearer, MODELS_BODY_CAP).await {
+        Ok(body) => match serde_json::from_str::<CatalogModels>(&body) {
+            Ok(catalog) => {
+                let models: Vec<serde_json::Value> = catalog
+                    .data
+                    .into_iter()
+                    .take(MODELS_MAX_ENTRIES)
+                    .map(|m| serde_json::json!({"id": m.id, "context_length": m.context_length}))
+                    .collect();
+                HttpResponse::Ok().json(json!({ "models": models }))
+            }
+            Err(_) => HttpResponse::Ok().json(json!({"models": [], "note": "upstream"})),
+        },
+        Err(_) => HttpResponse::Ok().json(json!({"models": [], "note": "upstream"})),
+    }
 }
 
 /// POST /api/soc/triage?fresh=true {stream_id}: manual triage. Works with
@@ -586,6 +632,7 @@ async fn submit_failure(
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(submit_triage)
+        .service(get_models)
         .service(get_status)
         .service(list_results)
         .service(get_result)
