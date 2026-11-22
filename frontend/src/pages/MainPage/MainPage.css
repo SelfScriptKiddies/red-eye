@@ -1,7 +1,6 @@
 .MainPage {
     width: 100vw;
     margin-top: 130px;
-    border-top: 3px solid var(--re-accent);
     padding: 20px 30px;
     box-sizing: border-box;
 }
@@ -306,9 +305,6 @@
 }
 
 /* Focus mode */
-body:has(.eye__apple__focus) .MainPage {
-    border-top-color: var(--re-danger);
-}
 
 body:has(.eye__apple__focus) .stat-card {
     border-left-color: var(--re-danger);
@@ -324,4 +320,13 @@ body:has(.eye__apple__focus) .tag-metric-count {
 
 body:has(.eye__apple__focus) .sparkline polyline {
     stroke: var(--re-danger);
+}
+
+#root:has(div.MainPage) .header {
+    transition: 0.3s;
+    border-bottom: solid 3px var(--re-accent);
+}
+
+#root:has(div.MainPage):has(.eye__apple__focus) .header {
+    border-bottom: solid 3px var(--re-danger);
 }

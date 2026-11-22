@@ -5,7 +5,6 @@
   margin-top: 130px;
   display: flex;
   flex-direction: column;
-  border-top: 3px solid var(--re-accent);
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -524,9 +523,6 @@
 }
 
 /* Focus mode (Red Eye) */
-body:has(.eye__apple__focus) .AgentsPage {
-  border-top-color: var(--re-danger);
-}
 
 body:has(.eye__apple__focus) .column-header {
   border-bottom-color: var(--re-danger);
@@ -660,4 +656,13 @@ body:has(.eye__apple__focus) .agents-column::-webkit-scrollbar-thumb {
     border: 1px solid #e74c3c44;
     border-radius: 6px;
     background: rgba(231, 76, 60, 0.08);
+}
+
+#root:has(div.AgentsPage) .header {
+    transition: 0.3s;
+    border-bottom: solid 3px var(--re-accent);
+}
+
+#root:has(div.AgentsPage):has(.eye__apple__focus) .header {
+    border-bottom: solid 3px var(--re-danger);
 }
