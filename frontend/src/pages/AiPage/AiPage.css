@@ -1,4 +1,14 @@
 
+/* Header border for the AI page, as the other pages draw it. */
+#root:has(div.AiPage) .header {
+    transition: 0.3s;
+    border-bottom: solid 3px var(--re-accent);
+}
+
+#root:has(div.AiPage):has(.eye__apple__focus) .header {
+    border-bottom: solid 3px var(--re-danger);
+}
+
 /* Three side-by-side columns, mirroring the SettingsPage column language. */
 .AiPage {
     width: 100vw;
