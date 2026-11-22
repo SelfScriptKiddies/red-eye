@@ -205,6 +205,7 @@ main.content {
 main.content:has(.MainPage),
 main.content:has(.SettingsPage),
 main.content:has(.AgentsPage),
+main.content:has(.AiPage),
 main.content:has(.packetsPage) {
   justify-content: flex-start;
   align-items: stretch;
