@@ -13,6 +13,7 @@ import {
 import { usePages } from '../../PagesProvider';
 import { UserAgentsDrawer } from '../../components/UserAgentsDrawer';
 import { buildUaDrilldownUrl } from '../../lib/userAgents';
+import { BYTE_UNITS, ByteUnit, fromDisplay, toDisplay } from '../../lib/byteUnits';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -37,9 +38,9 @@ interface FavoriteLimitRow {
 /** The three favorite byte budgets (see favorite_max_total_bytes et al in
  * app_settings). Workers re-read them without restarts. */
 const FAVORITE_LIMIT_ROWS: FavoriteLimitRow[] = [
-    { key: 'favorite_max_total_bytes', label: 'Общий лимит хранимого', hint: 'Максимальный суммарный объём сохранённого содержимого избранных' },
-    { key: 'favorite_segment_bytes', label: 'Лимит сегмента', hint: 'Сегмент избранного сверх этого объёма закрывается и продолжается новым стримом' },
-    { key: 'favorite_disk_reserve_bytes', label: 'Резерв диска', hint: 'Свободное место, которое должен гарантировать резерв избранных' },
+    { key: 'favorite_max_total_bytes', label: 'Всего под избранное', hint: 'Больше этого объёма новые звёзды не принимаются' },
+    { key: 'favorite_segment_bytes', label: 'На один стрим', hint: 'Сверх лимита стрим закрывается и продолжается новой записью' },
+    { key: 'favorite_disk_reserve_bytes', label: 'Резерв диска', hint: 'Минимум свободного места, ниже которого звёзды не принимаются' },
 ];
 
 /** Favorite storage: the three byte limits, current saved/reserved usage
@@ -48,6 +49,7 @@ const FAVORITE_LIMIT_ROWS: FavoriteLimitRow[] = [
 function FavoriteStorageBlock() {
     const [usage, setUsage] = useState<FavoriteUsage | null>(null);
     const [values, setValues] = useState<Record<string, string>>({});
+    const [units, setUnits] = useState<Record<string, ByteUnit>>({});
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
 
@@ -59,9 +61,14 @@ function FavoriteStorageBlock() {
             ]);
             setUsage(u);
             setValues({
-                favorite_max_total_bytes: String(s.favorite_max_total_bytes ?? ''),
-                favorite_segment_bytes: String(s.favorite_segment_bytes ?? ''),
-                favorite_disk_reserve_bytes: String(s.favorite_disk_reserve_bytes ?? ''),
+                favorite_max_total_bytes: toDisplay(Number(s.favorite_max_total_bytes)).value,
+                favorite_segment_bytes: toDisplay(Number(s.favorite_segment_bytes)).value,
+                favorite_disk_reserve_bytes: toDisplay(Number(s.favorite_disk_reserve_bytes)).value,
+            });
+            setUnits({
+                favorite_max_total_bytes: toDisplay(Number(s.favorite_max_total_bytes)).unit,
+                favorite_segment_bytes: toDisplay(Number(s.favorite_segment_bytes)).unit,
+                favorite_disk_reserve_bytes: toDisplay(Number(s.favorite_disk_reserve_bytes)).unit,
             });
         } catch (e) {
             setError(`Не удалось загрузить состояние хранилища: ${e}`);
@@ -73,12 +80,12 @@ function FavoriteStorageBlock() {
     const save = async (key: string) => {
         setError(null);
         setNotice(null);
-        const raw = (values[key] ?? '').trim();
-        const parsed = Number(raw);
-        if (!raw || !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-            setError(`${key}: значение должно быть целым числом байт больше нуля`);
+        const converted = fromDisplay(values[key] ?? '', units[key] ?? 'B');
+        if ('error' in converted) {
+            setError(`${key}: ${converted.error}`);
             return;
         }
+        const parsed = converted.bytes;
         try {
             const resp = await fetch(`/api/settings/${key}`, {
                 method: 'PUT',
@@ -117,12 +124,21 @@ function FavoriteStorageBlock() {
                     <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
                         <input
                             type="text"
-                            inputMode="numeric"
+                            inputMode="decimal"
                             value={values[row.key] ?? ''}
                             onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
-                            placeholder="байт"
+                            placeholder="0"
                             style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
                         />
+                        <select
+                            value={units[row.key] ?? 'B'}
+                            onChange={(e) => setUnits(u => ({ ...u, [row.key]: e.target.value as ByteUnit }))}
+                            style={{ padding: '8px 10px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                        >
+                            {BYTE_UNITS.map(u => (
+                                <option key={u.unit} value={u.unit}>{u.label}</option>
+                            ))}
+                        </select>
                         <button className="add-btn" onClick={() => save(row.key)} style={{ fontSize: '12px', padding: '6px 14px' }}>
                             Сохранить
                         </button>
