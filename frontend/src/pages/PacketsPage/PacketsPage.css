@@ -572,3 +572,7 @@
     color: var(--re-text-muted, #888);
     margin-top: 2px;
 }
+
+.stream-row {
+    overflow: hidden;
+}

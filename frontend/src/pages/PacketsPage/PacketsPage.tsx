@@ -44,7 +44,7 @@ function StreamRow({ index = 0, style, streams, selectedStreamIds, handleStreamC
     const stream = streams[index];
     if (!stream) return null;
     return (
-        <div style={style}>
+        <div style={style} className="stream-row">
             <StreamCard
                 streamObj={stream}
                 selected={selectedStreamIds.includes(stream.id)}
