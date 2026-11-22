@@ -9,7 +9,6 @@ import {
     fetchSocModels,
     fetchSocStatus,
     generateSocCredential,
-    isExternalLlmEndpoint,
     putSocSetting,
     type SocModelEntry,
     type SocStatus,
@@ -58,7 +57,6 @@ export function SocBlock() {
     const [status, setStatus] = useState<SocStatus | null>(null);
     const [values, setValues] = useState<Record<string, string>>({});
     const [apiKey, setApiKey] = useState('');
-    const [acknowledged, setAcknowledged] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [models, setModels] = useState<SocModelEntry[]>([]);
@@ -128,13 +126,6 @@ export function SocBlock() {
             setError('Сначала включите LLM-SOC');
             return;
         }
-        if (key === 'soc_enabled' && target) {
-            const external = isExternalLlmEndpoint(values.soc_base_url ?? '');
-            if (external && !acknowledged) {
-                setError('Подтвердите предупреждение о приватности');
-                return;
-            }
-        }
         save(key, target ? 'true' : 'false');
     };
 
@@ -171,7 +162,7 @@ export function SocBlock() {
                     list={isModel ? 'soc-model-list' : undefined}
                     style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
                 />
-                <button className="add-btn" onClick={() => saveValidated(row)} style={{ fontSize: '12px', padding: '6px 14px' }}>Сохранить</button>
+                <button className="ai-btn" onClick={() => saveValidated(row)}>Сохранить</button>
             </div>
             <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>{row.hint}</p>
         </div>
@@ -179,7 +170,6 @@ export function SocBlock() {
 
     const primary = SOC_SETTING_ROWS.filter(row => !row.advanced);
     const advanced = SOC_SETTING_ROWS.filter(row => row.advanced);
-    const external = isExternalLlmEndpoint(values.soc_base_url ?? '');
 
     return (
         <div>
@@ -187,42 +177,24 @@ export function SocBlock() {
 
             <div className="setting-row">
                 <button
-                    className="add-btn"
+                    className="ai-btn"
                     onClick={() => toggle('soc_enabled', !status?.enabled)}
-                    style={{ fontSize: '12px', padding: '6px 14px' }}
+                   
                 >
                     {status?.enabled ? 'Выключить LLM-SOC' : 'Включить LLM-SOC'}
                 </button>
                 <button
-                    className={`add-btn ${status?.auto_enabled ? '' : 'disabled'}`}
+                    className="ai-btn"
                     onClick={() => toggle('soc_auto_enabled', !status?.auto_enabled)}
-                    style={{ fontSize: '12px', padding: '6px 14px' }}
+                   
                     title="Автоматически ставить новые qualifying JEV-вердикты в очередь"
                 >
                     {status?.auto_enabled ? 'Авто: вкл' : 'Авто: выкл'}
                 </button>
             </div>
 
-            {external && status !== null && (
-                <div className="jev-warning" style={{
-                    border: '1px solid #a05050', borderRadius: '8px', padding: '10px',
-                    margin: '10px 0', background: 'rgba(160, 80, 80, 0.12)', fontSize: '12px',
-                }}>
-                    <b>Приватность.</b> SOC endpoint ({values.soc_base_url}) вне локальной сети:
-                    plaintext трафика уйдёт наружу.
-                    <label className="checkbox-label" style={{ display: 'block', marginTop: '8px' }}>
-                        <input
-                            type="checkbox"
-                            checked={acknowledged}
-                            onChange={(e) => setAcknowledged(e.target.checked)}
-                        />
-                        Я понимаю, что данные покидают сеть
-                    </label>
-                </div>
-            )}
-
             <div className="setting-row" style={{ marginTop: '10px', flexDirection: 'column', alignItems: 'stretch' }}>
-                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ LLM (запись-только)</label>
+                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ</label>
                 <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
                     <input
                         type="password"
@@ -232,33 +204,25 @@ export function SocBlock() {
                         placeholder={status?.api_key_configured ? 'ключ скрыт; введите новый для замены' : 'sk-... (опционально для локального сервера)'}
                         style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
                     />
-                    <button className="add-btn" onClick={() => { setApiKey(''); save('soc_api_key', apiKey); }} style={{ fontSize: '12px', padding: '6px 14px' }}>Сохранить</button>
-                    <button className="add-btn" onClick={() => { setApiKey(''); save('soc_api_key', ''); }} style={{ fontSize: '12px', padding: '6px 14px' }}>Удалить</button>
+                    <button className="ai-btn" onClick={() => { setApiKey(''); save('soc_api_key', apiKey); }}>Сохранить</button>
+                    <button className="ai-btn" onClick={() => { setApiKey(''); save('soc_api_key', ''); }}>Удалить</button>
                 </div>
-                <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>
-                    Ключ не возвращается через API и не попадает в логи.
-                </p>
             </div>
 
             <div className="setting-row" style={{ marginTop: '10px', flexDirection: 'column', alignItems: 'stretch' }}>
-                <label style={{ fontSize: '12px', color: '#ccc' }}>Служебные токены (показываются один раз)</label>
-                <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
-                    <button className="add-btn" onClick={() => generate('worker-token', false)} style={{ fontSize: '11px', padding: '5px 10px' }}>
-                        Токен воркера {status?.worker_token_configured ? '(задан)' : '(сгенерировать)'}
-                    </button>
-                    <button className="add-btn" onClick={() => generate('worker-token', true)} style={{ fontSize: '11px', padding: '5px 10px' }}>
-                        Перевыпустить воркера
-                    </button>
-                    <button className="add-btn" onClick={() => generate('mcp-service-token', false)} style={{ fontSize: '11px', padding: '5px 10px' }}>
-                        Токен MCP-сервиса {status?.mcp_service_token_configured ? '(задан)' : '(сгенерировать)'}
-                    </button>
-                    <button className="add-btn" onClick={() => generate('mcp-service-token', true)} style={{ fontSize: '11px', padding: '5px 10px' }}>
-                        Перевыпустить MCP
-                    </button>
+                <label style={{ fontSize: '12px', color: '#ccc' }}>Служебные токены</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '12px', width: '110px' }}>Воркер</span>
+                        <span className="info-badge">{status?.worker_token_configured ? 'задан' : 'нет'}</span>
+                        <button className="ai-btn" onClick={() => generate('worker-token', true)}>Перевыпустить</button>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '12px', width: '110px' }}>MCP-сервис</span>
+                        <span className="info-badge">{status?.mcp_service_token_configured ? 'задан' : 'нет'}</span>
+                        <button className="ai-btn" onClick={() => generate('mcp-service-token', true)}>Перевыпустить</button>
+                    </div>
                 </div>
-                <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>
-                    Воркер: SOC_WORKER_TOKEN, MCP: MCP_SERVICE_TOKEN; хранится только SHA-256.
-                </p>
             </div>
 
             {primary.map(row => renderRow(row, row.key === 'soc_model'))}

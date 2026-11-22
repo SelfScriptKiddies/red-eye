@@ -69,6 +69,17 @@ async fn create_token(
         return HttpResponse::BadRequest()
             .json(json!({"error": "capability must be read_only or full_control"}));
     }
+    if capability == "full_control" {
+        let svc = crate::api::settings::get_setting(pool.get_ref(), "mcp_service_capability")
+            .await
+            .unwrap_or_else(|| "read_only".to_string());
+        if svc != "full_control" {
+            return HttpResponse::Conflict().json(json!({
+                "error": "full_control tokens require mcp_service_capability=full_control \
+                          and red-eye-mcp deployed with MCP_MODE=full_control",
+            }));
+        }
+    }
     let expires_at: Option<f64> = body
         .expires_in_secs
         .filter(|s| *s > 0 && *s <= MAX_EXPIRY_SECS)

@@ -50,7 +50,6 @@ export function JevBlock() {
     const [status, setStatus] = useState<AiStatus | null>(null);
     const [values, setValues] = useState<Record<string, string>>({});
     const [apiKey, setApiKey] = useState('');
-    const [acknowledged, setAcknowledged] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     const [models, setModels] = useState<AiModelEntry[]>([]);
@@ -136,10 +135,6 @@ export function JevBlock() {
             setError('Сначала сохраните API-ключ OpenRouter');
             return;
         }
-        if (!acknowledged) {
-            setError('Подтвердите предупреждение о приватности');
-            return;
-        }
         save('ai_enabled', 'true');
     };
 
@@ -154,7 +149,7 @@ export function JevBlock() {
                     list={isModel ? 'jev-model-list' : undefined}
                     style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
                 />
-                <button className="add-btn" onClick={() => validateAndSave(row)} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                <button className="ai-btn" onClick={() => validateAndSave(row)}>
                     Сохранить
                 </button>
             </div>
@@ -171,9 +166,9 @@ export function JevBlock() {
 
             <div className="setting-row">
                 <button
-                    className={`add-btn ${status?.enabled ? '' : acknowledged && status?.configured ? '' : 'disabled'}`}
+                    className="ai-btn"
                     onClick={toggleEnabled}
-                    style={{ fontSize: '12px', padding: '6px 14px' }}
+                   
                 >
                     {status?.enabled ? 'Выключить AI-анализ' : 'Включить AI-анализ'}
                 </button>
@@ -182,24 +177,9 @@ export function JevBlock() {
                 </span>
             </div>
 
-            <div className="jev-warning" style={{
-                border: '1px solid #a05050', borderRadius: '8px', padding: '10px',
-                margin: '10px 0', background: 'rgba(160, 80, 80, 0.12)', fontSize: '12px',
-            }}>
-                <b>Приватность.</b> Включение отправляет plaintext трафика (TLS-MITM текст,
-                учётные данные, флаги) наружу: OpenRouter / TypeSafe.
-                <label className="checkbox-label" style={{ display: 'block', marginTop: '8px' }}>
-                    <input
-                        type="checkbox"
-                        checked={acknowledged}
-                        onChange={(e) => setAcknowledged(e.target.checked)}
-                    />
-                    Я понимаю, что plaintext покидает сеть
-                </label>
-            </div>
 
             <div className="setting-row" style={{ marginTop: '10px', flexDirection: 'column', alignItems: 'stretch' }}>
-                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ OpenRouter (запись-только)</label>
+                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ OpenRouter</label>
                 <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
                     <input
                         type="password"
@@ -209,16 +189,13 @@ export function JevBlock() {
                         placeholder={status?.configured ? 'ключ скрыт; введите новый для замены' : 'sk-or-...'}
                         style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
                     />
-                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', apiKey); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                    <button className="ai-btn" onClick={() => { setApiKey(''); save('ai_api_key', apiKey); }}>
                         Сохранить
                     </button>
-                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', ''); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
+                    <button className="ai-btn" onClick={() => { setApiKey(''); save('ai_api_key', ''); }}>
                         Удалить
                     </button>
                 </div>
-                <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>
-                    Ключ не возвращается через API и не попадает в логи.
-                </p>
             </div>
 
             {primary.map(row => renderRow(row, row.key === 'ai_model'))}

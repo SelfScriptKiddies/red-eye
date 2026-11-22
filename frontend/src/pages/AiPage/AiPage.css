@@ -31,17 +31,38 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 20px;
+    padding: 15px 20px;
     min-height: 70px;
     flex-shrink: 0;
-    border-bottom: solid 3px var(--re-accent);
+    border-bottom: solid 2px var(--re-accent);
 }
 
 .ai-col-header h2 {
     margin: 0;
+    color: rgba(255, 255, 255, 0.87);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+/* Compact button for all actions on this page. */
+.ai-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 6px;
+    background-color: var(--re-bg-card);
+    border: 1px solid var(--re-border);
+    cursor: pointer;
     color: var(--re-text);
-    font-size: 20px;
-    font-weight: 600;
+    transition: border-color 0.15s;
+}
+
+.ai-btn:hover {
+    border-color: var(--re-accent);
+}
+
+.ai-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .ai-col-body {
