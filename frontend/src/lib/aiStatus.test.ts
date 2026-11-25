@@ -132,8 +132,15 @@ describe('formatSeen', () => {
 });
 
 describe('formatMoney', () => {
-    it('always shows cents', () => {
+    it('shows cents by default', () => {
         expect(formatMoney(5)).toBe('$5.00');
         expect(formatMoney(0.5)).toBe('$0.50');
+        expect(formatMoney(0)).toBe('$0.00');
+    });
+
+    it('keeps four decimals for sub-cent spend', () => {
+        expect(formatMoney(0.000238)).toBe('$0.0002');
+        expect(formatMoney(0.0099)).toBe('$0.0099');
+        expect(formatMoney(0.01)).toBe('$0.01');
     });
 });

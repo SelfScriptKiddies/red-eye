@@ -84,6 +84,9 @@ export function formatSeen(unix: number | null | undefined, nowMs: number = Date
     return at.toDateString() === now.toDateString() ? time : `${pad(at.getDate())}.${pad(at.getMonth() + 1)} ${time}`;
 }
 
+/** Cents by default; JEV verdicts cost far less, so sub-cent spend keeps
+ * four decimals instead of reading as zero. */
 export function formatMoney(usd: number): string {
-    return `$${usd.toFixed(2)}`;
+    const digits = usd > 0 && usd < 0.01 ? 4 : 2;
+    return `$${usd.toFixed(digits)}`;
 }
