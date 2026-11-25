@@ -1026,23 +1026,32 @@ pub(super) mod live {
         pub ctx: StreamContext,
     }
 
+    /// Waits for the init scripts, then fails within the deadline instead
+    /// of hanging when no scratch Postgres is running.
     pub async fn pool() -> PgPool {
         let url = std::env::var("AI_TEST_DATABASE_URL")
             .unwrap_or_else(|_| "postgres://t:t@127.0.0.1:55434/t".to_string());
-        for _ in 0..60 {
-            if let Ok(pool) = PgPool::connect(&url).await {
-                let ready: Option<String> =
-                    sqlx::query_scalar("SELECT to_regclass('public.ai_verdict')::text")
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        loop {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_secs(2))
+                .connect(&url)
+                .await;
+            if let Ok(pool) = pool {
+                let ready: bool =
+                    sqlx::query_scalar("SELECT to_regclass('public.ai_verdict') IS NOT NULL")
                         .fetch_one(&pool)
                         .await
-                        .ok();
-                if ready.is_some() {
+                        .unwrap_or(false);
+                if ready {
                     return pool;
                 }
             }
+            if std::time::Instant::now() > deadline {
+                panic!("scratch Postgres with the repo schema is not reachable at {url}");
+            }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-        panic!("scratch Postgres with the repo schema is not reachable at {url}");
     }
 
     async fn insert_packet(
