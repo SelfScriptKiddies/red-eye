@@ -266,7 +266,7 @@ mod live_tests {
     async fn verdict_round_trip_live_keeps_one_identity() {
         let pool = pool().await;
         let repo = AiRepository::new(pool.clone());
-        let seeded = seed_http_stream(&pool).await;
+        let seeded = seed_http_stream(&pool, false).await;
         let answers = serde_json::json!({ "is_sql_injection": 0.9 });
         let verdict = |last: i64| NewVerdict {
             stream_id: seeded.stream_id,

@@ -498,6 +498,7 @@ async fn analyze_candidate(
     }
 }
 
+#[derive(Debug)]
 enum AnalysisError {
     NoContent,
     Backoff {
@@ -576,6 +577,19 @@ async fn run_analysis(
     if transcript.truncated {
         crate::api::metrics::AI_TRANSCRIPTS_TRUNCATED.inc();
     }
+
+    // Packet ids do not follow capture order, so the verdict is keyed on
+    // the stream revision rather than on the transcript's last entry.
+    let revision: i64 = sqlx::query_scalar("SELECT last_packet_id FROM stream WHERE id = $1")
+        .bind(candidate.stream_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            AnalysisError::backoff("transcript_db", format!("revision: {}", short_err(&e)))
+        })?
+        .unwrap_or(candidate.last_packet_id);
+    let first_packet_id = transcript.packet_id_span.0.min(revision);
+    let last_packet_id = transcript.packet_id_span.1.max(revision);
 
     // Cost guard BEFORE the call: recorded spend today plus a conservative
     // estimate for this request. Reaching the limit pauses new calls until
@@ -669,8 +683,8 @@ async fn run_analysis(
 
     let new_verdict = NewVerdict {
         stream_id: candidate.stream_id,
-        first_packet_id: transcript.first_packet_id,
-        last_packet_id: transcript.last_packet_id,
+        first_packet_id,
+        last_packet_id,
         model: &settings.model,
         prompt_version: PROMPT_VERSION,
         transcript_sha256: &transcript.sha256,
@@ -710,7 +724,7 @@ async fn run_analysis(
         return Ok(VerdictOutcome {
             verdict_id: 0,
             stream_id: candidate.stream_id,
-            last_packet_id: transcript.last_packet_id,
+            last_packet_id,
             is_attack: decision.is_attack,
             attack_class: decision.attack_class,
             confidence: decision.confidence,
@@ -734,7 +748,7 @@ async fn run_analysis(
     let outcome = VerdictOutcome {
         verdict_id,
         stream_id: candidate.stream_id,
-        last_packet_id: transcript.last_packet_id,
+        last_packet_id,
         is_attack: decision.is_attack,
         attack_class: decision.attack_class,
         confidence: decision.confidence,
@@ -1326,6 +1340,7 @@ mod tests {
 
 #[cfg(test)]
 mod live_tests {
+    use super::super::openrouter::{DecisionsHttpSuccess, TransportFuture};
     use super::super::transcript::live::{pool, seed_http_stream};
     use super::*;
 
@@ -1333,7 +1348,7 @@ mod live_tests {
     #[ignore = "needs a scratch Postgres initialized from database/init (AI_TEST_DATABASE_URL)"]
     async fn candidate_query_live_returns_idle_streams_after_the_boundary() {
         let pool = pool().await;
-        let seeded = seed_http_stream(&pool).await;
+        let seeded = seed_http_stream(&pool, false).await;
         let settings = AiSettings {
             enabled: true,
             api_key: "k".to_string(),
@@ -1370,6 +1385,91 @@ mod live_tests {
             fair.iter()
                 .chain(&priority)
                 .all(|c| c.stream_id != seeded.stream_id)
+        );
+    }
+
+    /// A provider that always answers with a valid benign verdict.
+    struct CannedTransport;
+
+    impl DecisionsTransport for CannedTransport {
+        fn send_decisions<'a>(
+            &'a self,
+            _api_key: &'a str,
+            _request: &'a DecisionsRequest,
+        ) -> TransportFuture {
+            Box::pin(async {
+                Ok(DecisionsHttpSuccess {
+                    body: serde_json::json!({
+                        "answers": {
+                            "is_sql_injection": {"noul": 0.01},
+                            "is_command_injection": {"noul": 0.01},
+                            "is_path_traversal": {"noul": 0.01},
+                            "is_xss": {"noul": 0.01},
+                            "is_scanner_probe": {"noul": 0.01},
+                            "is_exfiltration": {"noul": 0.01},
+                            "is_exploit_attempt": {"noul": 0.01},
+                            "attack_class": {"choice": "benign", "confidence": 0.99},
+                            "severity": {"score": 0.0, "confidence": 0.99}
+                        },
+                        "usage": {"input_tokens": 100, "cost": 0.00001}
+                    }),
+                })
+            })
+        }
+    }
+
+    async fn enable_jev(pool: &PgPool) {
+        sqlx::query(
+            "INSERT INTO app_settings (key, value) VALUES ('ai_enabled', 'true'), ('ai_api_key', 'live-test-key')
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .execute(pool)
+        .await
+        .expect("enable JEV");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a scratch Postgres initialized from database/init (AI_TEST_DATABASE_URL)"]
+    async fn analysis_live_keys_the_verdict_on_the_stream_revision() {
+        let pool = pool().await;
+        enable_jev(&pool).await;
+        // Reversed batch: the newest packet carries the lowest id, so the
+        // transcript ends before the stream revision.
+        let seeded = seed_http_stream(&pool, true).await;
+        let scheduler = JevScheduler::new(0.0);
+        let broadcaster = Arc::new(tokio::sync::broadcast::channel::<String>(16).0);
+        let settings = AiSettings::load(&pool).await;
+
+        let (fair, priority) = fetch_candidates(&pool, &settings, now_unix(), 0)
+            .await
+            .expect("candidate query");
+        let candidate = priority
+            .iter()
+            .chain(&fair)
+            .find(|c| c.stream_id == seeded.stream_id)
+            .cloned()
+            .expect("seeded stream is a candidate");
+        let outcome = run_analysis(
+            &pool,
+            &AiRepository::new(pool.clone()),
+            &broadcaster,
+            &scheduler,
+            &CannedTransport,
+            &settings,
+            &candidate,
+        )
+        .await
+        .expect("analysis succeeds");
+        assert_eq!(outcome.last_packet_id, seeded.high_id);
+
+        let (fair, priority) = fetch_candidates(&pool, &settings, now_unix(), 0)
+            .await
+            .expect("candidate query");
+        assert!(
+            fair.iter()
+                .chain(&priority)
+                .all(|c| c.stream_id != seeded.stream_id),
+            "an analyzed revision must not be queued again"
         );
     }
 }

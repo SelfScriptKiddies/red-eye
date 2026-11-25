@@ -63,15 +63,29 @@ pub struct Transcript {
     pub state: Value,
     /// SHA-256 over the canonical state serialization.
     pub sha256: String,
-    pub first_packet_id: i64,
-    pub last_packet_id: i64,
     pub analyzed_packet_count: i64,
     pub omitted_packet_count: i64,
     pub omitted_byte_count: i64,
     pub truncated: bool,
+    /// Lowest and highest packet id among the entries. Ids do not follow
+    /// capture order, so this span, not the first and last entry, is the
+    /// analyzed coverage.
+    pub packet_id_span: (i64, i64),
     /// Length of the serialized state: the conservative input estimate
     /// (chars/4) for the cost guard.
     pub state_chars: usize,
+}
+
+/// Coverage bounds of rendered entries; `fallback` covers an entry-less
+/// transcript (only an omission marker).
+fn id_span(entries: &[Value], fallback: i64) -> (i64, i64) {
+    let mut ids = entries
+        .iter()
+        .filter_map(|e| e.get("packet_id").and_then(|v| v.as_i64()));
+    let first = ids.next().unwrap_or(fallback);
+    ids.fold((first, first), |(low, high), id| {
+        (low.min(id), high.max(id))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -737,12 +751,11 @@ pub async fn build(
     Ok(Transcript {
         state,
         sha256,
-        first_packet_id,
-        last_packet_id,
         analyzed_packet_count: analyzed,
         omitted_packet_count: total_omitted,
         omitted_byte_count: omitted_bytes,
         truncated,
+        packet_id_span: id_span(&entries, tail_first.id),
         state_chars: state_string.len(),
     })
 }
@@ -937,6 +950,18 @@ mod tests {
     }
 
     #[test]
+    fn id_span_ignores_markers_and_unordered_ids() {
+        let entries = vec![
+            json!({"packet_id": 94}),
+            json!({"omission_marker": "x"}),
+            json!({"packet_id": 92}),
+            json!({"packet_id": 93}),
+        ];
+        assert_eq!(id_span(&entries, 0), (92, 94));
+        assert_eq!(id_span(&[], 7), (7, 7));
+    }
+
+    #[test]
     fn fit_entries_respects_count_and_byte_budgets() {
         let entries: Vec<Value> = (0..10).map(|i| entry_of(i, 100)).collect();
         let fit = fit_entries(entries, 5, 10_000, false);
@@ -996,6 +1021,8 @@ pub(super) mod live {
 
     pub struct Seeded {
         pub stream_id: i64,
+        pub low_id: i64,
+        pub high_id: i64,
         pub ctx: StreamContext,
     }
 
@@ -1041,8 +1068,10 @@ pub(super) mod live {
     }
 
     /// One idle stream: a parsed request and response plus a raw-text packet.
-    /// Rows stay behind: every run seeds its own service and stream.
-    pub async fn seed_http_stream(pool: &PgPool) -> Seeded {
+    /// Rows stay behind: every run seeds its own service and stream. With
+    /// `reversed` the batch is written the way the flusher sometimes does,
+    /// so packet ids run against capture order.
+    pub async fn seed_http_stream(pool: &PgPool, reversed: bool) -> Seeded {
         static SEEDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seed = SEEDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as i64;
         let now = std::time::SystemTime::now()
@@ -1079,9 +1108,17 @@ pub(super) mod live {
         response.extend_from_slice(body.as_bytes());
         let note = b"plain text after the exchange";
 
-        let request_id = insert_packet(pool, stream_id, now, 1, "dest", request).await;
-        let response_id = insert_packet(pool, stream_id, now, 2, "orig", &response).await;
-        let note_id = insert_packet(pool, stream_id, now, 3, "orig", note).await;
+        let (request_id, response_id, note_id) = if reversed {
+            let note_id = insert_packet(pool, stream_id, now, 3, "orig", note).await;
+            let response_id = insert_packet(pool, stream_id, now, 2, "orig", &response).await;
+            let request_id = insert_packet(pool, stream_id, now, 1, "dest", request).await;
+            (request_id, response_id, note_id)
+        } else {
+            let request_id = insert_packet(pool, stream_id, now, 1, "dest", request).await;
+            let response_id = insert_packet(pool, stream_id, now, 2, "orig", &response).await;
+            let note_id = insert_packet(pool, stream_id, now, 3, "orig", note).await;
+            (request_id, response_id, note_id)
+        };
 
         let header_set_id: i64 = sqlx::query_scalar(
             "INSERT INTO header_set (hash, headers) VALUES ($1, $2) RETURNING id",
@@ -1130,8 +1167,18 @@ pub(super) mod live {
             .await
             .expect("response message");
 
+        let (low_id, high_id) = (
+            [request_id, response_id, note_id]
+                .into_iter()
+                .min()
+                .unwrap_or(0),
+            [request_id, response_id, note_id]
+                .into_iter()
+                .max()
+                .unwrap_or(0),
+        );
         sqlx::query("UPDATE stream SET last_packet_id = $1 WHERE id = $2")
-            .bind(note_id)
+            .bind(high_id)
             .bind(stream_id)
             .execute(pool)
             .await
@@ -1154,9 +1201,11 @@ pub(super) mod live {
                 packet_count: 3,
                 first_packet_time: now,
                 last_packet_time: now,
-                revision_packet_id: note_id,
+                revision_packet_id: high_id,
                 after_packet_id: 0,
             },
+            low_id,
+            high_id,
         }
     }
 
@@ -1164,25 +1213,43 @@ pub(super) mod live {
     #[ignore = "needs a scratch Postgres initialized from database/init (AI_TEST_DATABASE_URL)"]
     async fn transcript_live_renders_http_messages_in_capture_order() {
         let pool = pool().await;
-        let seeded = seed_http_stream(&pool).await;
-        let transcript = build(&pool, &seeded.ctx, 65_536, 200, 8192)
-            .await
-            .expect("transcript builds");
+        for reversed in [false, true] {
+            let seeded = seed_http_stream(&pool, reversed).await;
+            let transcript = build(&pool, &seeded.ctx, 65_536, 200, 8192)
+                .await
+                .expect("transcript builds");
 
-        let entries = transcript.state["entries"].as_array().expect("entries");
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0]["dir"], "inbound");
-        assert_eq!(entries[0]["http"]["method"], "GET");
-        assert_eq!(entries[0]["http"]["path"], "/search?q=hello");
-        assert_eq!(entries[0]["http"]["headers"]["Host"], "example.test");
-        assert_eq!(entries[1]["http"]["status"], 200);
-        assert_eq!(
-            entries[1]["http"]["body"]["data"],
-            "<html>results: hello</x>"
-        );
-        assert_eq!(
-            entries[2]["payload"]["data"],
-            "plain text after the exchange"
-        );
+            let entries = transcript.state["entries"].as_array().expect("entries");
+            assert_eq!(entries.len(), 3);
+            assert_eq!(entries[0]["dir"], "inbound");
+            assert_eq!(entries[0]["http"]["method"], "GET");
+            assert_eq!(entries[0]["http"]["path"], "/search?q=hello");
+            assert_eq!(entries[0]["http"]["headers"]["Host"], "example.test");
+            assert_eq!(entries[1]["http"]["status"], 200);
+            assert_eq!(
+                entries[1]["http"]["body"]["data"],
+                "<html>results: hello</x>"
+            );
+            assert_eq!(
+                entries[2]["payload"]["data"],
+                "plain text after the exchange"
+            );
+            let (low, high) = (seeded.low_id, seeded.high_id);
+            assert_eq!(transcript.packet_id_span, (low, high));
+            // The state document keeps capture order: first and last entry.
+            let stream = &transcript.state["stream"];
+            let first_last = (
+                stream["first_packet_id"].as_i64(),
+                stream["last_packet_id"].as_i64(),
+            );
+            assert_eq!(
+                first_last,
+                if reversed {
+                    (Some(high), Some(low))
+                } else {
+                    (Some(low), Some(high))
+                }
+            );
+        }
     }
 }
