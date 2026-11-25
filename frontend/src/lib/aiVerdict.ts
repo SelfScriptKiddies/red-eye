@@ -5,6 +5,7 @@
 
 import { apiFetch } from './api';
 import { ApiError, RetryableError } from './queryClient';
+import { type SettingRow } from './settingRows';
 
 export interface AiAnswers {
     nouls: Record<string, number>;
@@ -114,22 +115,18 @@ export async function putAiSetting(key: string, value: string): Promise<void> {
     }
 }
 
-/**
- * The operator-configurable AI settings with UI metadata. The API key is
- * deliberately absent from this list: it has its own write-only field.
- * `advanced` rows hide behind the Advanced collapsible.
- */
-export const AI_SETTING_ROWS: { key: string; label: string; hint: string; type?: 'float' | 'int' | 'text'; advanced?: boolean }[] = [
-    { key: 'ai_model', label: 'Модель', hint: 'Пinned-модель или алиас Decisions API', type: 'text' },
+// The API key stays out of this list: it has its own write-only field.
+export const AI_SETTING_ROWS: SettingRow[] = [
+    { key: 'ai_model', label: 'Модель', hint: 'Pinned-модель или алиас Decisions API', type: 'text', required: true },
     { key: 'ai_threshold', label: 'Порог атаки', hint: '0..1: вердикт is_attack при max(noul) >= порога или non-benign класс с confidence >= порога', type: 'float' },
-    { key: 'ai_max_per_tick', label: 'Максимум стримов за тик', hint: '1..100, тик 5 секунд', type: 'int', advanced: true },
-    { key: 'ai_stream_debounce_ms', label: 'Дебаунс активности', hint: 'мс неактивности перед анализом активного стрима', type: 'int', advanced: true },
-    { key: 'ai_stream_min_interval_secs', label: 'Минимальный интервал', hint: 'сек между попытками одного стрима (закрытые - исключение)', type: 'int', advanced: true },
-    { key: 'ai_stream_max_bytes', label: 'Лимит транскрипта', hint: 'байты на весь транскрипт (голова 16 КиБ + хвост)', type: 'int', advanced: true },
-    { key: 'ai_stream_max_entries', label: 'Лимит записей', hint: 'максимум пакетов в транскрипте', type: 'int', advanced: true },
-    { key: 'ai_entry_max_bytes', label: 'Лимит записи', hint: 'байты на одну запись (8 КиБ по умолчанию)', type: 'int', advanced: true },
-    { key: 'ai_daily_cost_limit', label: 'Дневной лимит стоимости', hint: 'USD по UTC; при достижении новые вызовы приостанавливаются до следующего дня', type: 'float', advanced: true },
-    { key: 'ai_verdict_retention_days', label: 'Хранение вердиктов', hint: 'дней; старые вердикты удаляются ограниченными пачками', type: 'int', advanced: true },
+    { key: 'ai_max_per_tick', label: 'Стримов за тик', hint: '1..100, тик 5 секунд', type: 'int', advanced: true },
+    { key: 'ai_stream_debounce_ms', label: 'Пауза перед анализом, мс', hint: 'мс неактивности перед анализом активного стрима', type: 'int', advanced: true },
+    { key: 'ai_stream_min_interval_secs', label: 'Интервал повтора, с', hint: 'сек между попытками одного стрима (закрытые - исключение)', type: 'int', advanced: true },
+    { key: 'ai_stream_max_bytes', label: 'Лимит транскрипта', hint: 'байты на весь транскрипт (голова 16 КиБ + хвост)', type: 'int', bytes: true, advanced: true },
+    { key: 'ai_stream_max_entries', label: 'Записей в транскрипте', hint: 'максимум пакетов в транскрипте', type: 'int', advanced: true },
+    { key: 'ai_entry_max_bytes', label: 'Размер записи', hint: 'байты на одну запись (8 КиБ по умолчанию)', type: 'int', bytes: true, advanced: true },
+    { key: 'ai_daily_cost_limit', label: 'Лимит расходов в день, $', hint: 'USD по UTC; при достижении новые вызовы приостанавливаются до следующего дня', type: 'float', advanced: true },
+    { key: 'ai_verdict_retention_days', label: 'Хранение вердиктов, дн', hint: 'дней; старые вердикты удаляются ограниченными пачками', type: 'int', advanced: true },
 ];
 
 export interface AiModelEntry {

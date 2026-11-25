@@ -5,6 +5,7 @@
 
 import { apiFetch } from './api';
 import { ApiError, RetryableError } from './queryClient';
+import { type SettingRow } from './settingRows';
 
 /** Mirrors SocResultRow in backend/src/api/soc/repository.rs */
 export interface SocResult {
@@ -186,23 +187,21 @@ export async function revokeMcpToken(id: number): Promise<void> {
     if (!response.ok) throw new ApiError(response.status);
 }
 
-/** The operator-configurable SOC settings with UI metadata. Secrets are
- * absent: soc_api_key has its own write-only field, generated credentials
- * have their own buttons. */
-/** `advanced` rows hide behind the per-section Advanced collapsible. */
-export const SOC_SETTING_ROWS: { key: string; label: string; hint: string; type?: 'float' | 'int' | 'text'; advanced?: boolean }[] = [
-    { key: 'soc_base_url', label: 'LLM endpoint', hint: 'OpenAI-совместимый /v1, например http://llm:8080/v1', type: 'text' },
-    { key: 'soc_model', label: 'Модель', hint: 'Имя модели на endpoint', type: 'text' },
+// Secrets stay out of this list: soc_api_key has its own write-only
+// field and generated credentials have their own buttons.
+export const SOC_SETTING_ROWS: SettingRow[] = [
+    { key: 'soc_base_url', label: 'LLM endpoint', hint: 'OpenAI-совместимый /v1, например http://llm:8080/v1', type: 'text', required: true },
+    { key: 'soc_model', label: 'Модель', hint: 'Имя модели на endpoint', type: 'text', required: true },
     { key: 'soc_alert_threshold', label: 'Порог алерта', hint: '0..1: likely_attack с confidence >= порога шлёт soc_triage тост', type: 'float' },
-    { key: 'soc_auto_min_jev_severity', label: 'Мин. тяжесть JEV для авто-триажа', hint: '0..3; новые qualifying вердикты ставят ровно одну задачу', type: 'int' },
-    { key: 'soc_max_context_tokens', label: 'Лимит контекста', hint: 'токены на запрос модели', type: 'int', advanced: true },
-    { key: 'soc_max_output_tokens', label: 'Лимит вывода', hint: 'токены на ответ модели', type: 'int', advanced: true },
-    { key: 'soc_max_tool_calls', label: 'Лимит tool-вызовов', hint: 'максимум на одну задачу', type: 'int', advanced: true },
-    { key: 'soc_max_tool_result_bytes', label: 'Лимит результата tool', hint: 'байты на один результат', type: 'int', advanced: true },
-    { key: 'soc_job_timeout_secs', label: 'Таймаут задачи', hint: 'сек; lease и бюджет попытки', type: 'int', advanced: true },
-    { key: 'soc_max_attempts', label: 'Максимум попыток', hint: 'после исчерпания задача помечается failed (это не benign)', type: 'int', advanced: true },
-    { key: 'soc_concurrency', label: 'Параллелизм воркера', hint: 'число одновременных задач (по умолчанию 1)', type: 'int', advanced: true },
-    { key: 'soc_daily_job_limit', label: 'Дневной лимит задач', hint: 'по UTC; при достижении claims пауза до следующего дня', type: 'int', advanced: true },
+    { key: 'soc_auto_min_jev_severity', label: 'Мин. тяжесть JEV', hint: '0..3; новые qualifying вердикты ставят ровно одну задачу', type: 'int' },
+    { key: 'soc_max_context_tokens', label: 'Контекст, токенов', hint: 'токены на запрос модели', type: 'int', advanced: true },
+    { key: 'soc_max_output_tokens', label: 'Вывод, токенов', hint: 'токены на ответ модели', type: 'int', advanced: true },
+    { key: 'soc_max_tool_calls', label: 'Вызовов инструментов', hint: 'максимум tool-вызовов на одну задачу', type: 'int', advanced: true },
+    { key: 'soc_max_tool_result_bytes', label: 'Размер результата', hint: 'байты на один результат tool-вызова', type: 'int', bytes: true, advanced: true },
+    { key: 'soc_job_timeout_secs', label: 'Таймаут задачи, с', hint: 'сек; lease и бюджет попытки', type: 'int', advanced: true },
+    { key: 'soc_max_attempts', label: 'Попыток на задачу', hint: 'после исчерпания задача помечается failed (это не benign)', type: 'int', advanced: true },
+    { key: 'soc_concurrency', label: 'Параллельных задач', hint: 'число одновременных задач воркера (по умолчанию 1)', type: 'int', advanced: true },
+    { key: 'soc_daily_job_limit', label: 'Задач в день', hint: 'по UTC; при достижении claims пауза до следующего дня', type: 'int', advanced: true },
 ];
 
 export interface SocModelEntry {
