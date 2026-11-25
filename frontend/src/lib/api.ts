@@ -57,6 +57,10 @@ export async function fetchAgentContainers(
     return apiFetch<AgentContainersResponse>(`/api/agent/${encodeURIComponent(agentId)}/containers`, signal);
 }
 
+export function errorMessage(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+}
+
 export function copyText(text: string) {
     if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(text);
