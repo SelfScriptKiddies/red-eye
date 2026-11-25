@@ -11,17 +11,46 @@ export interface StateView {
     note?: string;
 }
 
+const FAILURE_NOTES: Record<string, string> = {
+    tick: 'Шаг планировщика не выполнился',
+    transcript_db: 'Ошибка базы при сборке транскрипта',
+    network: 'Провайдер недоступен',
+    rate_limited: 'Лимит запросов провайдера',
+    provider_server: 'Ошибка на стороне провайдера',
+    provider_rejected: 'Провайдер отклонил запрос',
+    provider_malformed: 'Провайдер прислал нечитаемый ответ',
+    response_schema: 'Ответ провайдера не прошёл проверку',
+    verdict_insert: 'Не удалось сохранить вердикт',
+};
+
+function plural(n: number, one: string, few: string, many: string): string {
+    const abs = Math.abs(n) % 100;
+    if (abs >= 11 && abs <= 14) return many;
+    const last = abs % 10;
+    return last === 1 ? one : last >= 2 && last <= 4 ? few : many;
+}
+
+function failureNote(reason: string, count: number): string {
+    const note = FAILURE_NOTES[reason] ?? 'Последняя попытка не удалась';
+    return count > 1 ? `${note} (${count} ${plural(count, 'раз', 'раза', 'раз')})` : note;
+}
+
 export function jevState(status: AiStatus): StateView {
     if (!status.enabled) {
         return status.configured
             ? { tone: 'off', label: 'Выключен' }
             : { tone: 'off', label: 'Выключен', note: 'Нужен ключ OpenRouter' };
     }
+    const failure = status.last_error
+        ? failureNote(status.last_error.reason, status.last_error.count)
+        : undefined;
     switch (status.run_state) {
         case 'active':
-            return { tone: 'ok', label: 'Активен' };
+            return failure
+                ? { tone: 'warn', label: 'Активен', note: failure }
+                : { tone: 'ok', label: 'Активен' };
         case 'backoff':
-            return { tone: 'warn', label: 'Пауза', note: 'Запрос не прошёл, скоро повтор' };
+            return { tone: 'warn', label: 'Пауза', note: failure ?? 'Запрос не прошёл, скоро повтор' };
         case 'cost_limited':
             return { tone: 'warn', label: 'Лимит', note: 'Дневной лимит расходов' };
         case 'unconfigured':

@@ -55,6 +55,8 @@ export interface AiStatus {
     calls_failed: number;
     invalid_responses: number;
     last_success_unix?: number | null;
+    /** Coarse code of the latest failed attempt; the next success clears it. */
+    last_error?: { reason: string; count: number; at_unix: number } | null;
 }
 
 /** WebSocket event: every successful verdict, attack or not. */

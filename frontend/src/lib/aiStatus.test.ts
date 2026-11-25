@@ -65,6 +65,32 @@ describe('jevState', () => {
     it('falls back to waiting for an unknown run state', () => {
         expect(jevState(jev({ enabled: true, configured: true, run_state: 'something-new' }))).toEqual({ tone: 'warn', label: 'Ждёт' });
     });
+
+    it('names the last failure while the scheduler keeps running', () => {
+        const failing = jev({
+            enabled: true,
+            configured: true,
+            run_state: 'active',
+            last_error: { reason: 'response_schema', count: 3, at_unix: 1 },
+        });
+        expect(jevState(failing)).toEqual({ tone: 'warn', label: 'Активен', note: 'Ответ провайдера не прошёл проверку (3 раза)' });
+    });
+
+    it('replaces the generic pause note with the failure reason', () => {
+        const failing = jev({
+            enabled: true,
+            configured: true,
+            run_state: 'backoff',
+            last_error: { reason: 'transcript_db', count: 12, at_unix: 1 },
+        });
+        expect(jevState(failing)).toEqual({ tone: 'warn', label: 'Пауза', note: 'Ошибка базы при сборке транскрипта (12 раз)' });
+        expect(jevState(jev({ enabled: true, configured: true, run_state: 'backoff', last_error: null })).note).toBe('Запрос не прошёл, скоро повтор');
+    });
+
+    it('uses a generic note for a reason it does not know', () => {
+        const failing = jev({ enabled: true, configured: true, run_state: 'active', last_error: { reason: 'new-code', count: 21, at_unix: 1 } });
+        expect(jevState(failing).note).toBe('Последняя попытка не удалась (21 раз)');
+    });
 });
 
 describe('socState', () => {

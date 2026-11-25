@@ -173,6 +173,7 @@ struct Inner {
     backlog: i64,
     oldest_candidate_age_secs: i64,
     last_success_unix: Option<i64>,
+    last_error: Option<LastError>,
 }
 
 pub struct JevScheduler {
@@ -181,7 +182,7 @@ pub struct JevScheduler {
 }
 
 /// Data behind GET /api/ai/status. No secrets, no stream ids, no payload
-/// material: counts and states only.
+/// material: counts, states and failure codes only.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SchedulerSnapshot {
     pub run_state: String,
@@ -190,6 +191,7 @@ pub struct SchedulerSnapshot {
     pub in_flight: usize,
     pub cost_spent_today: f64,
     pub last_success_unix: Option<i64>,
+    pub last_error: Option<LastError>,
 }
 
 impl JevScheduler {
@@ -206,6 +208,7 @@ impl JevScheduler {
                 backlog: 0,
                 oldest_candidate_age_secs: 0,
                 last_success_unix: None,
+                last_error: None,
             }),
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_CALLS)),
         })
@@ -220,6 +223,7 @@ impl JevScheduler {
             in_flight: inner.in_flight.len(),
             cost_spent_today,
             last_success_unix: inner.last_success_unix,
+            last_error: inner.last_error.clone(),
         }
     }
 }
@@ -497,18 +501,23 @@ async fn analyze_candidate(
 enum AnalysisError {
     NoContent,
     Backoff {
+        reason: &'static str,
         msg: String,
         retry_after: Option<u64>,
     },
-    Poison(String),
+    Poison {
+        reason: &'static str,
+        msg: String,
+    },
     /// Daily budget reached: pause this candidate without poisoning it or
     /// backing off; the next tick re-checks the ledger.
     CostLimited,
 }
 
 impl AnalysisError {
-    fn backoff(msg: String) -> Self {
+    fn backoff(reason: &'static str, msg: String) -> Self {
         AnalysisError::Backoff {
+            reason,
             msg,
             retry_after: None,
         }
@@ -558,10 +567,10 @@ async fn run_analysis(
             return Err(AnalysisError::NoContent);
         }
         Err(BuildError::Db(e)) => {
-            return Err(AnalysisError::backoff(format!(
-                "transcript db: {}",
-                short_err(&e)
-            )));
+            return Err(AnalysisError::backoff(
+                "transcript_db",
+                format!("transcript db: {}", short_err(&e)),
+            ));
         }
     };
     if transcript.truncated {
@@ -598,26 +607,33 @@ async fn run_analysis(
         .map_err(|e| match e {
             TransportError::Network(m) => {
                 crate::api::metrics::AI_TRANSPORT_FAILURES.inc();
-                AnalysisError::backoff(format!("network: {}", m))
+                AnalysisError::backoff("network", format!("network: {}", m))
             }
             TransportError::RateLimited(code, retry_after) => {
                 crate::api::metrics::AI_RATE_LIMITS.inc();
                 AnalysisError::Backoff {
+                    reason: "rate_limited",
                     msg: format!("rate limited {}", code),
                     retry_after,
                 }
             }
             TransportError::Server(code) => {
                 crate::api::metrics::AI_TRANSPORT_FAILURES.inc();
-                AnalysisError::backoff(format!("server {}", code))
+                AnalysisError::backoff("provider_server", format!("server {}", code))
             }
             TransportError::Rejected(code, m) => {
                 crate::api::metrics::AI_INVALID_RESPONSES.inc();
-                AnalysisError::Poison(format!("rejected {}: {}", code, m))
+                AnalysisError::Poison {
+                    reason: "provider_rejected",
+                    msg: format!("rejected {}: {}", code, m),
+                }
             }
             TransportError::MalformedBody(m) => {
                 crate::api::metrics::AI_INVALID_RESPONSES.inc();
-                AnalysisError::Poison(format!("malformed body: {}", m))
+                AnalysisError::Poison {
+                    reason: "provider_malformed",
+                    msg: format!("malformed body: {}", m),
+                }
             }
         })?;
     crate::api::metrics::AI_PROVIDER_LATENCY.observe(started.elapsed().as_secs_f64());
@@ -628,7 +644,10 @@ async fn run_analysis(
         Ok(v) => v,
         Err(m) => {
             crate::api::metrics::AI_INVALID_RESPONSES.inc();
-            return Err(AnalysisError::Poison(format!("schema: {}", m)));
+            return Err(AnalysisError::Poison {
+                reason: "response_schema",
+                msg: format!("schema: {}", m),
+            });
         }
     };
 
@@ -679,7 +698,10 @@ async fn run_analysis(
                 "Verdict insert failed for stream {} (will retry via polling): {}",
                 candidate.stream_id, e
             );
-            return Err(AnalysisError::backoff(format!("insert: {}", short_err(&e))));
+            return Err(AnalysisError::backoff(
+                "verdict_insert",
+                format!("insert: {}", short_err(&e)),
+            ));
         }
     };
 
@@ -701,6 +723,7 @@ async fn run_analysis(
         let mut inner = scheduler.inner.lock().await;
         inner.ledger.record(recorded_cost, cost_estimate);
         inner.last_success_unix = Some(now_unix());
+        inner.last_error = None;
         inner.run_state = RunState::Active;
     }
     crate::api::metrics::AI_VERDICTS_TOTAL.inc();
@@ -753,6 +776,28 @@ async fn repo_cost_seed(pool: &PgPool) -> f64 {
     }
 }
 
+/// Coarse reason of the latest failed attempt. A code, never free text:
+/// messages may quote database or provider details.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LastError {
+    pub reason: &'static str,
+    pub count: i64,
+    pub at_unix: i64,
+}
+
+fn note_error(inner: &mut Inner, reason: &'static str) {
+    let streak = inner
+        .last_error
+        .as_ref()
+        .filter(|e| e.reason == reason)
+        .map_or(1, |e| e.count + 1);
+    inner.last_error = Some(LastError {
+        reason,
+        count: streak,
+        at_unix: now_unix(),
+    });
+}
+
 async fn handle_analysis_error(
     scheduler: &Arc<JevScheduler>,
     candidate: &Candidate,
@@ -765,15 +810,20 @@ async fn handle_analysis_error(
             // Skip or budget pause: no backoff, no poisoning. The next
             // tick re-evaluates from the ledger and the candidate query.
         }
-        AnalysisError::Poison(m) => {
+        AnalysisError::Poison { reason, msg } => {
             // Invalid 4xx / schema mismatch: never retry the identical
             // request until content, credentials, model or prompt version
             // changes.
             let mut inner = scheduler.inner.lock().await;
             inner.poisoned.insert(identity.to_string());
-            debug!("JEV poisoned identity {}: {}", identity, m);
+            note_error(&mut inner, reason);
+            debug!("JEV poisoned identity {}: {}", identity, msg);
         }
-        AnalysisError::Backoff { msg, retry_after } => {
+        AnalysisError::Backoff {
+            reason,
+            msg,
+            retry_after,
+        } => {
             let mut inner = scheduler.inner.lock().await;
             let step = inner
                 .backoff_step
@@ -786,10 +836,16 @@ async fn handle_analysis_error(
                 .backoff_step
                 .insert(candidate.stream_id, step.saturating_add(1));
             inner.run_state = RunState::Backoff;
-            debug!(
-                "JEV backoff stream {} for {:?}: {}",
-                candidate.stream_id, until, msg
-            );
+            note_error(&mut inner, reason);
+            if matches!(reason, "transcript_db" | "verdict_insert") {
+                // Internal faults never heal on their own.
+                warn!("JEV stream {}: {}", candidate.stream_id, msg);
+            } else {
+                debug!(
+                    "JEV backoff stream {} for {:?}: {}",
+                    candidate.stream_id, until, msg
+                );
+            }
         }
     }
 }
@@ -810,10 +866,23 @@ pub fn spawn(
         let mut ticker = interval(Duration::from_secs(TICK_SECS));
         loop {
             ticker.tick().await;
-            if let Err(e) = tick(&pool, &repo, &broadcaster, &scheduler_for_tasks, &transport).await
-            {
-                // Containment: one bad tick never terminates the poller.
-                debug!("JEV tick error: {}", e);
+            match tick(&pool, &repo, &broadcaster, &scheduler_for_tasks, &transport).await {
+                Ok(()) => {
+                    let mut inner = scheduler_for_tasks.inner.lock().await;
+                    if inner
+                        .last_error
+                        .as_ref()
+                        .is_some_and(|e| e.reason == "tick")
+                    {
+                        inner.last_error = None;
+                    }
+                }
+                Err(e) => {
+                    // Containment: one bad tick never terminates the poller.
+                    warn!("JEV tick error: {}", e);
+                    let mut inner = scheduler_for_tasks.inner.lock().await;
+                    note_error(&mut inner, "tick");
+                }
             }
         }
     });
@@ -851,6 +920,7 @@ async fn tick(
         };
         inner.backlog = 0;
         inner.oldest_candidate_age_secs = 0;
+        inner.last_error = None;
         drop(inner);
         publish_gauges(scheduler).await;
         return Ok(());
@@ -1196,13 +1266,19 @@ mod tests {
     #[test]
     fn retry_after_rides_the_backoff_variant() {
         let err = AnalysisError::Backoff {
+            reason: "rate_limited",
             msg: "rate limited 429".to_string(),
             retry_after: Some(42),
         };
         match err {
-            AnalysisError::Backoff { msg, retry_after } => {
+            AnalysisError::Backoff {
+                reason,
+                msg,
+                retry_after,
+            } => {
                 assert_eq!(retry_after, Some(42));
                 assert_eq!(next_backoff(0, retry_after), Duration::from_secs(42));
+                assert_eq!(reason, "rate_limited");
                 assert_eq!(msg, "rate limited 429");
             }
             _ => panic!("expected backoff"),
@@ -1218,6 +1294,33 @@ mod tests {
         let paused = AnalysisError::CostLimited;
         assert!(matches!(skip, AnalysisError::NoContent));
         assert!(matches!(paused, AnalysisError::CostLimited));
+    }
+
+    #[tokio::test]
+    async fn last_error_counts_the_streak_of_one_reason() {
+        let sched = JevScheduler::new(0.0);
+        let s = settings();
+        let c = candidate(true, now_unix(), 0);
+        let identity = c.identity(&s.model);
+        let fail = |reason, msg: &'static str| AnalysisError::backoff(reason, msg.to_string());
+
+        handle_analysis_error(&sched, &c, &s, &identity, fail("transcript_db", "db")).await;
+        handle_analysis_error(&sched, &c, &s, &identity, fail("transcript_db", "db")).await;
+        {
+            let inner = sched.inner.lock().await;
+            let err = inner.last_error.clone().unwrap();
+            assert_eq!((err.reason, err.count), ("transcript_db", 2));
+        }
+
+        // Another reason starts a new streak.
+        let poison = AnalysisError::Poison {
+            reason: "response_schema",
+            msg: "schema".to_string(),
+        };
+        handle_analysis_error(&sched, &c, &s, &identity, poison).await;
+        let inner = sched.inner.lock().await;
+        let err = inner.last_error.clone().unwrap();
+        assert_eq!((err.reason, err.count), ("response_schema", 1));
     }
 }
 

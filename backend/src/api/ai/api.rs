@@ -135,6 +135,7 @@ async fn get_status(
         "calls_failed": crate::api::metrics::AI_TRANSPORT_FAILURES.get() as i64,
         "invalid_responses": crate::api::metrics::AI_INVALID_RESPONSES.get() as i64,
         "last_success_unix": snap.last_success_unix,
+        "last_error": snap.last_error,
     }))
 }
 
