@@ -209,14 +209,16 @@ async fn fetch_http_messages(pool: &PgPool, stream_id: i64) -> Result<Vec<HttpRo
         FROM (
             SELECT DISTINCT ON (id) id, packet_id, is_request, method, path, status_code,
                    http_version, content_type, content_length, body_offset, body_length,
-                   header_set_id
+                   header_set_id, timestamp
             FROM (
                 SELECT id, packet_id, is_request, method, path, status_code, http_version,
-                       content_type, content_length, body_offset, body_length, header_set_id, 0 AS src
+                       content_type, content_length, body_offset, body_length, header_set_id,
+                       timestamp, 0 AS src
                 FROM http_message WHERE stream_id = $1
                 UNION ALL
                 SELECT id, packet_id, is_request, method, path, status_code, http_version,
-                       content_type, content_length, body_offset, body_length, header_set_id, 1 AS src
+                       content_type, content_length, body_offset, body_length, header_set_id,
+                       timestamp, 1 AS src
                 FROM saved_http_message WHERE stream_id = $1
             ) u
             ORDER BY id, src
@@ -983,5 +985,204 @@ mod tests {
         assert_eq!(fit.entries.len(), 3);
         assert_eq!(fit.cut, 0);
         assert_eq!(fit.used_bytes, total);
+    }
+}
+
+/// String-built SQL is not compile-checked: the real schema is the only
+/// place that verifies every column these queries name.
+#[cfg(test)]
+pub(super) mod live {
+    use super::*;
+
+    pub struct Seeded {
+        pub stream_id: i64,
+        pub ctx: StreamContext,
+    }
+
+    pub async fn pool() -> PgPool {
+        let url = std::env::var("AI_TEST_DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://t:t@127.0.0.1:55434/t".to_string());
+        for _ in 0..60 {
+            if let Ok(pool) = PgPool::connect(&url).await {
+                let ready: Option<String> =
+                    sqlx::query_scalar("SELECT to_regclass('public.ai_verdict')::text")
+                        .fetch_one(&pool)
+                        .await
+                        .ok();
+                if ready.is_some() {
+                    return pool;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        panic!("scratch Postgres with the repo schema is not reachable at {url}");
+    }
+
+    async fn insert_packet(
+        pool: &PgPool,
+        stream_id: i64,
+        ts: i64,
+        ts_us: i64,
+        direction: &str,
+        data: &[u8],
+    ) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO packets (timestamp, timestamp_microseconds, direction, stream_id, packet_data)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        )
+        .bind(ts)
+        .bind(ts_us)
+        .bind(direction)
+        .bind(stream_id)
+        .bind(data)
+        .fetch_one(pool)
+        .await
+        .expect("packet row")
+    }
+
+    /// One idle stream: a parsed request and response plus a raw-text packet.
+    /// Rows stay behind: every run seeds its own service and stream.
+    pub async fn seed_http_stream(pool: &PgPool) -> Seeded {
+        static SEEDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seed = SEEDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as i64;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+            - 10;
+        let name = format!("jev-live-{now}-{}-{seed}", std::process::id());
+        let service_id: i64 =
+            sqlx::query_scalar("INSERT INTO service (name, port) VALUES ($1, 8080) RETURNING id")
+                .bind(&name)
+                .fetch_one(pool)
+                .await
+                .expect("service row");
+        let stream_id: i64 = sqlx::query_scalar(
+            "INSERT INTO stream (src_ip, src_port, dst_ip, dst_port, protocol, active, service_id,
+                                 l7_protocol, first_packet_time, last_packet_time, packet_count)
+             VALUES ('10.0.0.1', 40000, '10.0.0.2', 8080, 'TCP', false, $1, 'http1', $2, $2, 3)
+             RETURNING id",
+        )
+        .bind(service_id)
+        .bind(now)
+        .fetch_one(pool)
+        .await
+        .expect("stream row");
+
+        let request = b"GET /search?q=hello HTTP/1.1\r\nHost: example.test\r\n\r\n";
+        let body = "<html>results: hello</x>";
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut response = head.clone().into_bytes();
+        response.extend_from_slice(body.as_bytes());
+        let note = b"plain text after the exchange";
+
+        let request_id = insert_packet(pool, stream_id, now, 1, "dest", request).await;
+        let response_id = insert_packet(pool, stream_id, now, 2, "orig", &response).await;
+        let note_id = insert_packet(pool, stream_id, now, 3, "orig", note).await;
+
+        let header_set_id: i64 = sqlx::query_scalar(
+            "INSERT INTO header_set (hash, headers) VALUES ($1, $2) RETURNING id",
+        )
+        .bind((now << 24) ^ ((std::process::id() as i64) << 8) ^ seed)
+        .bind(serde_json::json!({ "Host": "example.test" }))
+        .fetch_one(pool)
+        .await
+        .expect("header_set row");
+
+        let message =
+            "INSERT INTO http_message (stream_id, packet_id, is_request, method, path, status_code,
+                         http_version, content_type, content_length, body_offset, body_length,
+                         header_set_id, timestamp)
+                      VALUES ($1, $2, $3, $4, $5, $6, 'HTTP/1.1', $7, $8, $9, $10, $11, $12)";
+        sqlx::query(message)
+            .bind(stream_id)
+            .bind(request_id)
+            .bind(true)
+            .bind("GET")
+            .bind("/search?q=hello")
+            .bind(Option::<i16>::None)
+            .bind(Option::<String>::None)
+            .bind(Option::<i32>::None)
+            .bind(Option::<i32>::None)
+            .bind(Option::<i32>::None)
+            .bind(header_set_id)
+            .bind(now)
+            .execute(pool)
+            .await
+            .expect("request message");
+        sqlx::query(message)
+            .bind(stream_id)
+            .bind(response_id)
+            .bind(false)
+            .bind(Option::<String>::None)
+            .bind(Option::<String>::None)
+            .bind(200i16)
+            .bind("text/html")
+            .bind(body.len() as i32)
+            .bind(head.len() as i32)
+            .bind(body.len() as i32)
+            .bind(Option::<i64>::None)
+            .bind(now)
+            .execute(pool)
+            .await
+            .expect("response message");
+
+        sqlx::query("UPDATE stream SET last_packet_id = $1 WHERE id = $2")
+            .bind(note_id)
+            .bind(stream_id)
+            .execute(pool)
+            .await
+            .expect("stream revision");
+
+        Seeded {
+            stream_id,
+            ctx: StreamContext {
+                id: stream_id,
+                agent_id: None,
+                service_id,
+                service_name: Some(name),
+                protocol: "tcp".to_string(),
+                l7_protocol: "http1".to_string(),
+                src_ip: "10.0.0.1".to_string(),
+                src_port: 40000,
+                dst_ip: "10.0.0.2".to_string(),
+                dst_port: 8080,
+                active: false,
+                packet_count: 3,
+                first_packet_time: now,
+                last_packet_time: now,
+                revision_packet_id: note_id,
+                after_packet_id: 0,
+            },
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a scratch Postgres initialized from database/init (AI_TEST_DATABASE_URL)"]
+    async fn transcript_live_renders_http_messages_in_capture_order() {
+        let pool = pool().await;
+        let seeded = seed_http_stream(&pool).await;
+        let transcript = build(&pool, &seeded.ctx, 65_536, 200, 8192)
+            .await
+            .expect("transcript builds");
+
+        let entries = transcript.state["entries"].as_array().expect("entries");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["dir"], "inbound");
+        assert_eq!(entries[0]["http"]["method"], "GET");
+        assert_eq!(entries[0]["http"]["path"], "/search?q=hello");
+        assert_eq!(entries[0]["http"]["headers"]["Host"], "example.test");
+        assert_eq!(entries[1]["http"]["status"], 200);
+        assert_eq!(
+            entries[1]["http"]["body"]["data"],
+            "<html>results: hello</x>"
+        );
+        assert_eq!(
+            entries[2]["payload"]["data"],
+            "plain text after the exchange"
+        );
     }
 }

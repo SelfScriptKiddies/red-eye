@@ -1220,3 +1220,53 @@ mod tests {
         assert!(matches!(paused, AnalysisError::CostLimited));
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::super::transcript::live::{pool, seed_http_stream};
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "needs a scratch Postgres initialized from database/init (AI_TEST_DATABASE_URL)"]
+    async fn candidate_query_live_returns_idle_streams_after_the_boundary() {
+        let pool = pool().await;
+        let seeded = seed_http_stream(&pool).await;
+        let settings = AiSettings {
+            enabled: true,
+            api_key: "k".to_string(),
+            api_key_configured: true,
+            model: "typesafe/jev-1.13".to_string(),
+            threshold: 0.7,
+            max_per_tick: 10,
+            debounce_ms: 2000,
+            min_interval_secs: 10,
+            max_bytes: 65536,
+            max_entries: 200,
+            entry_max_bytes: 8192,
+            daily_cost_limit: 5.0,
+            retention_days: 30,
+        };
+
+        let (fair, priority) = fetch_candidates(&pool, &settings, now_unix(), 0)
+            .await
+            .expect("candidate query");
+        let found = priority
+            .iter()
+            .chain(&fair)
+            .find(|c| c.stream_id == seeded.stream_id)
+            .expect("seeded stream is a candidate");
+        assert_eq!(found.last_packet_id, seeded.ctx.revision_packet_id);
+        assert_eq!(found.packet_count, 3);
+        assert_eq!(found.service_name, seeded.ctx.service_name);
+        assert_eq!(found.src_port, 40000);
+
+        let (fair, priority) = fetch_candidates(&pool, &settings, now_unix(), found.last_packet_id)
+            .await
+            .expect("candidate query");
+        assert!(
+            fair.iter()
+                .chain(&priority)
+                .all(|c| c.stream_id != seeded.stream_id)
+        );
+    }
+}
