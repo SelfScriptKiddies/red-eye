@@ -1,5 +1,5 @@
 import './SettingsPage.css'
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AgentContainerInfo, AgentListItem, apiFetch, copyText, fetchAgentContainers, fetchFavoriteUsage, FavoriteUsage } from '../../lib/api';
 import { capacityPercent, formatBytes } from '../../lib/favoriteRetention';
@@ -13,9 +13,7 @@ import {
 import { usePages } from '../../PagesProvider';
 import { UserAgentsDrawer } from '../../components/UserAgentsDrawer';
 import { buildUaDrilldownUrl } from '../../lib/userAgents';
-import { AI_SETTING_ROWS, fetchAiStatus, putAiSetting, type AiStatus } from '../../lib/aiVerdict';
-import { McpTokensBlock } from './McpTokensBlock';
-import { SocAnalysisBlock } from './SocAnalysisBlock';
+import { BYTE_UNITS, ByteUnit, fromDisplay, toDisplay } from '../../lib/byteUnits';
 
 interface ServiceVersionInfo {
     version?: string | null;
@@ -40,9 +38,9 @@ interface FavoriteLimitRow {
 /** The three favorite byte budgets (see favorite_max_total_bytes et al in
  * app_settings). Workers re-read them without restarts. */
 const FAVORITE_LIMIT_ROWS: FavoriteLimitRow[] = [
-    { key: 'favorite_max_total_bytes', label: 'Общий лимит хранимого', hint: 'Максимальный суммарный объём сохранённого содержимого избранных' },
-    { key: 'favorite_segment_bytes', label: 'Лимит сегмента', hint: 'Сегмент избранного сверх этого объёма закрывается и продолжается новым стримом' },
-    { key: 'favorite_disk_reserve_bytes', label: 'Резерв диска', hint: 'Свободное место, которое должен гарантировать резерв избранных' },
+    { key: 'favorite_max_total_bytes', label: 'Всего под избранное', hint: 'Больше этого объёма новые звёзды не принимаются' },
+    { key: 'favorite_segment_bytes', label: 'На один стрим', hint: 'Сверх лимита стрим закрывается и продолжается новой записью' },
+    { key: 'favorite_disk_reserve_bytes', label: 'Резерв диска', hint: 'Минимум свободного места, ниже которого звёзды не принимаются' },
 ];
 
 /** Favorite storage: the three byte limits, current saved/reserved usage
@@ -51,6 +49,7 @@ const FAVORITE_LIMIT_ROWS: FavoriteLimitRow[] = [
 function FavoriteStorageBlock() {
     const [usage, setUsage] = useState<FavoriteUsage | null>(null);
     const [values, setValues] = useState<Record<string, string>>({});
+    const [units, setUnits] = useState<Record<string, ByteUnit>>({});
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
 
@@ -62,9 +61,14 @@ function FavoriteStorageBlock() {
             ]);
             setUsage(u);
             setValues({
-                favorite_max_total_bytes: String(s.favorite_max_total_bytes ?? ''),
-                favorite_segment_bytes: String(s.favorite_segment_bytes ?? ''),
-                favorite_disk_reserve_bytes: String(s.favorite_disk_reserve_bytes ?? ''),
+                favorite_max_total_bytes: toDisplay(Number(s.favorite_max_total_bytes)).value,
+                favorite_segment_bytes: toDisplay(Number(s.favorite_segment_bytes)).value,
+                favorite_disk_reserve_bytes: toDisplay(Number(s.favorite_disk_reserve_bytes)).value,
+            });
+            setUnits({
+                favorite_max_total_bytes: toDisplay(Number(s.favorite_max_total_bytes)).unit,
+                favorite_segment_bytes: toDisplay(Number(s.favorite_segment_bytes)).unit,
+                favorite_disk_reserve_bytes: toDisplay(Number(s.favorite_disk_reserve_bytes)).unit,
             });
         } catch (e) {
             setError(`Не удалось загрузить состояние хранилища: ${e}`);
@@ -76,12 +80,12 @@ function FavoriteStorageBlock() {
     const save = async (key: string) => {
         setError(null);
         setNotice(null);
-        const raw = (values[key] ?? '').trim();
-        const parsed = Number(raw);
-        if (!raw || !Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
-            setError(`${key}: значение должно быть целым числом байт больше нуля`);
+        const converted = fromDisplay(values[key] ?? '', units[key] ?? 'B');
+        if ('error' in converted) {
+            setError(`${key}: ${converted.error}`);
             return;
         }
+        const parsed = converted.bytes;
         try {
             const resp = await fetch(`/api/settings/${key}`, {
                 method: 'PUT',
@@ -120,12 +124,21 @@ function FavoriteStorageBlock() {
                     <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
                         <input
                             type="text"
-                            inputMode="numeric"
+                            inputMode="decimal"
                             value={values[row.key] ?? ''}
                             onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
-                            placeholder="байт"
+                            placeholder="0"
                             style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
                         />
+                        <select
+                            value={units[row.key] ?? 'B'}
+                            onChange={(e) => setUnits(u => ({ ...u, [row.key]: e.target.value as ByteUnit }))}
+                            style={{ padding: '8px 10px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
+                        >
+                            {BYTE_UNITS.map(u => (
+                                <option key={u.unit} value={u.unit}>{u.label}</option>
+                            ))}
+                        </select>
                         <button className="add-btn" onClick={() => save(row.key)} style={{ fontSize: '12px', padding: '6px 14px' }}>
                             Сохранить
                         </button>
@@ -158,205 +171,8 @@ function VersionRow({ name, info }: { name: string; info?: ServiceVersionInfo })
         </div>
     );
 }
-
-/** AI stream analysis (JEV). Off by default: enabling requires an explicit
- * acknowledgement that plaintext (TLS-MITM content, credentials, flags,
- * exploit payloads) leaves the game network to OpenRouter/TypeSafe. The
- * API key is write-only: GET /api/settings masks it, so the field starts
- * empty and clearing sends an empty string. */
-function AiAnalysisBlock() {
-    const [status, setStatus] = useState<AiStatus | null>(null);
-    const [values, setValues] = useState<Record<string, string>>({});
-    const [apiKey, setApiKey] = useState('');
-    const [acknowledged, setAcknowledged] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [notice, setNotice] = useState<string | null>(null);
-
-    const reload = useCallback(async () => {
-        try {
-            const [st, settings] = await Promise.all([
-                fetchAiStatus(),
-                apiFetch<Record<string, string>>('/api/settings'),
-            ]);
-            setStatus(st);
-            setValues({
-                ai_model: String(settings.ai_model ?? ''),
-                ai_threshold: String(settings.ai_threshold ?? ''),
-                ai_max_per_tick: String(settings.ai_max_per_tick ?? ''),
-                ai_stream_debounce_ms: String(settings.ai_stream_debounce_ms ?? ''),
-                ai_stream_min_interval_secs: String(settings.ai_stream_min_interval_secs ?? ''),
-                ai_stream_max_bytes: String(settings.ai_stream_max_bytes ?? ''),
-                ai_stream_max_entries: String(settings.ai_stream_max_entries ?? ''),
-                ai_entry_max_bytes: String(settings.ai_entry_max_bytes ?? ''),
-                ai_daily_cost_limit: String(settings.ai_daily_cost_limit ?? ''),
-                ai_verdict_retention_days: String(settings.ai_verdict_retention_days ?? ''),
-            });
-        } catch (e) {
-            setError(`Не удалось загрузить состояние JEV: ${e}`);
-        }
-    }, []);
-
-    useEffect(() => { reload(); }, [reload]);
-
-    const save = async (key: string, value: string) => {
-        setError(null);
-        setNotice(null);
-        try {
-            await putAiSetting(key, value);
-            setNotice(`${key} сохранено, применяется без перезапуска`);
-            await reload();
-        } catch (e) {
-            setError(`${key}: отклонено (${e})`);
-        }
-    };
-
-    const validateAndSave = (row: { key: string; type?: string }) => {
-        const raw = (values[row.key] ?? '').trim();
-        if (row.type === 'float') {
-            const n = Number(raw);
-            if (!raw || !Number.isFinite(n)) {
-                setError(`${row.key}: нужно число`);
-                return;
-            }
-        } else if (row.type === 'int') {
-            if (!raw || !Number.isInteger(Number(raw))) {
-                setError(`${row.key}: нужно целое число`);
-                return;
-            }
-        } else if (row.key === 'ai_model' && !raw) {
-            setError('ai_model не может быть пустым');
-            return;
-        }
-        save(row.key, raw);
-    };
-
-    const toggleEnabled = () => {
-        if (!status) return;
-        if (status.enabled) {
-            save('ai_enabled', 'false');
-            return;
-        }
-        if (!status.configured) {
-            setError('Сначала сохраните API-ключ OpenRouter');
-            return;
-        }
-        if (!acknowledged) {
-            setError('Подтвердите предупреждение о приватности, чтобы включить анализ');
-            return;
-        }
-        save('ai_enabled', 'true');
-    };
-
-    const stateLabel = (st: AiStatus): string => {
-        if (!st.enabled) return 'выключен';
-        if (!st.configured) return 'нет ключа';
-        switch (st.run_state) {
-            case 'active': return 'активен';
-            case 'backoff': return 'пауза (ошибки провайдера)';
-            case 'cost_limited': return 'лимит стоимости (до завтра)';
-            case 'unconfigured': return 'не настроен';
-            default: return st.run_state;
-        }
-    };
-
-    return (
-        <div>
-            {status && (
-                <div className="favorite-usage">
-                    <div className="favorite-usage-row">
-                        <span>Состояние: {stateLabel(status)}</span>
-                        <span>Модель: {status.model}</span>
-                    </div>
-                    <div className="favorite-usage-row">
-                        <span>Расход сегодня: ${status.cost_spent_today.toFixed(4)} из ${status.cost_limit}</span>
-                        <span>Очередь: {status.backlog} · в полёте: {status.in_flight}</span>
-                    </div>
-                    <div className="favorite-usage-row">
-                        <span>Вердикты: {status.verdicts_total} (атак: {status.attack_verdicts_total})</span>
-                        <span>Ошибки: {status.calls_failed} / невалидные: {status.invalid_responses}</span>
-                    </div>
-                </div>
-            )}
-
-            <div className="jev-warning" style={{
-                border: '1px solid #a05050', borderRadius: '8px', padding: '10px',
-                margin: '10px 0', background: 'rgba(160, 80, 80, 0.12)', fontSize: '12px',
-            }}>
-                <b>Приватность.</b> При включении содержимое трафика уходит наружу в открытом виде:
-                расшифрованный TLS-MITM текст, учётные данные, флаги и эксплойты покидают игровую
-                сеть и передаются в OpenRouter / TypeSafe. Данные нельзя отозвать после отправки.
-                Анализ только для информации: ничего не блокируется автоматически.
-                <label className="checkbox-label" style={{ display: 'block', marginTop: '8px' }}>
-                    <input
-                        type="checkbox"
-                        checked={acknowledged}
-                        onChange={(e) => setAcknowledged(e.target.checked)}
-                    />
-                    Я понимаю, что plaintext покидает сеть
-                </label>
-            </div>
-
-            <div className="setting-row">
-                <button
-                    className={`add-btn ${status?.enabled ? '' : acknowledged && status?.configured ? '' : 'disabled'}`}
-                    onClick={toggleEnabled}
-                    style={{ fontSize: '12px', padding: '6px 14px' }}
-                >
-                    {status?.enabled ? 'Выключить AI-анализ' : 'Включить AI-анализ'}
-                </button>
-                <span style={{ fontSize: '11px', color: '#888' }}>
-                    {status?.configured ? 'ключ сохранён' : 'ключ не задан'}
-                </span>
-            </div>
-
-            <div className="setting-row" style={{ marginTop: '10px', flexDirection: 'column', alignItems: 'stretch' }}>
-                <label style={{ fontSize: '12px', color: '#ccc' }}>API-ключ OpenRouter (запись-только)</label>
-                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                    <input
-                        type="password"
-                        autoComplete="off"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder={status?.configured ? 'ключ скрыт; введите новый для замены' : 'sk-or-...'}
-                        style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
-                    />
-                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', apiKey); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
-                        Сохранить
-                    </button>
-                    <button className="add-btn" onClick={() => { setApiKey(''); save('ai_api_key', ''); }} style={{ fontSize: '12px', padding: '6px 14px' }}>
-                        Удалить
-                    </button>
-                </div>
-                <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>
-                    Ключ никогда не возвращается через API и не попадает в логи.
-                </p>
-            </div>
-
-            {AI_SETTING_ROWS.map(row => (
-                <div key={row.key} className="setting-row" style={{ marginTop: '8px', flexDirection: 'column', alignItems: 'stretch' }}>
-                    <label style={{ fontSize: '12px', color: '#ccc' }}>{row.label}</label>
-                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-                        <input
-                            type="text"
-                            value={values[row.key] ?? ''}
-                            onChange={(e) => setValues(v => ({ ...v, [row.key]: e.target.value }))}
-                            style={{ flex: 1, padding: '8px 12px', background: '#1a1a1a', border: '1px solid transparent', borderRadius: '8px', color: 'white', fontSize: '13px' }}
-                        />
-                        <button className="add-btn" onClick={() => validateAndSave(row)} style={{ fontSize: '12px', padding: '6px 14px' }}>
-                            Сохранить
-                        </button>
-                    </div>
-                    <p style={{ color: '#888', fontSize: '11px', margin: '4px 0 0' }}>{row.hint}</p>
-                </div>
-            ))}
-            {error && <p style={{ color: '#e0606a', fontSize: '12px', margin: '8px 0 0' }}>{error}</p>}
-            {notice && !error && <p style={{ color: '#87d37c', fontSize: '12px', margin: '8px 0 0' }}>{notice}</p>}
-        </div>
-    );
-}
-
 /** Versions of every service from /api/version (60s server-side cache).
- * Different git shas across rows = the stack drifted apart — redeploy. */
+ * Different git shas across rows = the stack drifted apart: redeploy. */
 function VersionsBlock() {
     const { data, isLoading, error } = useQuery({
         queryKey: ['versions'],
@@ -1258,27 +1074,6 @@ export function SettingsPage() {
                             <div className="card-content">
                                 <h4>Хранилище избранного</h4>
                                 <FavoriteStorageBlock />
-                            </div>
-                        </div>
-
-                        <div className="settings-card">
-                            <div className="card-content">
-                                <h4>AI-анализ стримов (JEV)</h4>
-                                <AiAnalysisBlock />
-                            </div>
-                        </div>
-
-                        <div className="settings-card">
-                            <div className="card-content">
-                                <h4>LLM-SOC триаж</h4>
-                                <SocAnalysisBlock />
-                            </div>
-                        </div>
-
-                        <div className="settings-card">
-                            <div className="card-content">
-                                <h4>MCP токены</h4>
-                                <McpTokensBlock />
                             </div>
                         </div>
 

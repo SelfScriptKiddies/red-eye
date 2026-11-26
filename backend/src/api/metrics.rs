@@ -354,7 +354,7 @@ async fn refresh_gauges(
         if let Ok(row) = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
             r#"
             SELECT
-                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)
+                (SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::bigint
                  FROM pg_class c
                  WHERE c.relkind = 'r'
                    AND c.relname IN ('saved_packet', 'saved_tag',
@@ -363,9 +363,9 @@ async fn refresh_gauges(
                 (SELECT COUNT(*) FROM stream WHERE favorite),
                 (SELECT COUNT(*) FROM stream
                  WHERE NOT favorite AND retention_state IN ('archiving', 'archived')),
-                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                (SELECT COALESCE(SUM(retention_bytes), 0)::bigint FROM stream
                  WHERE favorite AND NOT active AND retention_state <> 'archived'),
-                (SELECT COALESCE(SUM(retention_bytes), 0) FROM stream
+                (SELECT COALESCE(SUM(retention_bytes), 0)::bigint FROM stream
                  WHERE NOT favorite AND retention_state IN ('archiving', 'archived'))
             "#,
         )

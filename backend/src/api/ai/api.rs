@@ -17,6 +17,43 @@ pub struct VerdictsQuery {
     cursor: Option<i64>,
 }
 
+const MODELS_BODY_CAP: usize = 1 << 20;
+const MODELS_MAX_ENTRIES: usize = 500;
+
+#[derive(serde::Deserialize)]
+struct CatalogModels {
+    data: Vec<CatalogModel>,
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogModel {
+    id: String,
+    context_length: Option<i64>,
+}
+
+/// One shared response shape for both model catalogs:
+/// {"models": [{id, context_length}]} or {"models": [], "note": ...}.
+/// context_length stays optional: OpenAI-compatible endpoints omit it.
+fn models_response(models: Vec<serde_json::Value>) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({ "models": models }))
+}
+
+fn models_note(note: &str) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({"models": [], "note": note}))
+}
+
+fn parse_catalog(body: &str) -> Vec<serde_json::Value> {
+    match serde_json::from_str::<CatalogModels>(body) {
+        Ok(catalog) => catalog
+            .data
+            .into_iter()
+            .take(MODELS_MAX_ENTRIES)
+            .map(|m| serde_json::json!({"id": m.id, "context_length": m.context_length}))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// GET /api/ai/verdicts?stream_id=&only_attacks=&limit=&cursor=
 /// Bounded keyset listing (cursor = previous page's last id), defaults to
 /// the most recent verdicts.
@@ -98,11 +135,37 @@ async fn get_status(
         "calls_failed": crate::api::metrics::AI_TRANSPORT_FAILURES.get() as i64,
         "invalid_responses": crate::api::metrics::AI_INVALID_RESPONSES.get() as i64,
         "last_success_unix": snap.last_success_unix,
+        "last_error": snap.last_error,
     }))
+}
+
+/// GET /api/ai/models: OpenRouter catalog proxied with the stored key
+/// (write-only stays write-only: the key only signs this upstream call).
+/// No key means an empty list plus a note; upstream trouble degrades to
+/// free text instead of an error page.
+#[utoipa::path(get, path = "/api/ai/models", tag = "ai",
+    responses((status = 200, description = "OpenRouter model catalog")))]
+#[get("/ai/models")]
+async fn get_models(_identity: Identity, pool: web::Data<PgPool>) -> impl Responder {
+    let settings = super::settings::AiSettings::load(pool.get_ref()).await;
+    if !settings.api_key_configured {
+        return models_note("no_key");
+    }
+    match super::openrouter::fetch_json_bounded(
+        "https://openrouter.ai/api/v1/models",
+        Some(&settings.api_key),
+        MODELS_BODY_CAP,
+    )
+    .await
+    {
+        Ok(body) => models_response(parse_catalog(&body)),
+        Err(_) => models_note("upstream"),
+    }
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(get_verdicts)
         .service(get_verdict)
-        .service(get_status);
+        .service(get_status)
+        .service(get_models);
 }

@@ -18,3 +18,13 @@ export function buildAgentLink(origin: string, ids: number[]): { url: string; tr
         truncated: ids.length > MAX_AGENT_LINK_IDS,
     };
 }
+
+// Share is the single link button: MCP-canonical URL plus a note when the
+// selection was capped.
+export function buildShareLink(origin: string, ids: number[]): { url: string; note: string } {
+    const { url, truncated } = buildAgentLink(origin, ids);
+    return {
+        url,
+        note: truncated ? `Обрезано до ${MAX_AGENT_LINK_IDS} стримов` : '',
+    };
+}

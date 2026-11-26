@@ -255,3 +255,68 @@ mod tests {
         assert_eq!(named, row_fields);
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    use super::super::transcript::live::{pool, seed_http_stream};
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "needs a scratch Postgres initialized from database/init (AI_TEST_DATABASE_URL)"]
+    async fn verdict_round_trip_live_keeps_one_identity() {
+        let pool = pool().await;
+        let repo = AiRepository::new(pool.clone());
+        let seeded = seed_http_stream(&pool, false).await;
+        let answers = serde_json::json!({ "is_sql_injection": 0.9 });
+        let verdict = |last: i64| NewVerdict {
+            stream_id: seeded.stream_id,
+            first_packet_id: 1,
+            last_packet_id: last,
+            model: "typesafe/jev-1.13",
+            prompt_version: 1,
+            transcript_sha256: "sha",
+            attack_class: "sqli",
+            confidence: 0.9,
+            severity: 2.5,
+            is_attack: true,
+            ai_threshold: 0.7,
+            answers: &answers,
+            input_tokens: Some(120),
+            cost: Some(0.00001),
+            analyzed_packet_count: 3,
+            omitted_packet_count: 0,
+            omitted_byte_count: 0,
+            truncated: false,
+        };
+
+        let id = repo
+            .insert_verdict(&verdict(7))
+            .await
+            .expect("insert runs")
+            .expect("first insert stores");
+        assert!(
+            repo.insert_verdict(&verdict(7))
+                .await
+                .expect("insert runs")
+                .is_none()
+        );
+
+        let row = repo
+            .get_verdict(id)
+            .await
+            .expect("select runs")
+            .expect("stored row");
+        assert_eq!(row.stream_id, seeded.stream_id);
+        assert_eq!(row.attack_class, "sqli");
+        assert!(row.is_attack);
+        assert_eq!(row.input_tokens, Some(120));
+        assert_eq!(row.answers["is_sql_injection"], 0.9);
+
+        let latest = repo
+            .list_verdicts(Some(seeded.stream_id), false, 1, None)
+            .await
+            .expect("listing runs");
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].id, id);
+    }
+}
