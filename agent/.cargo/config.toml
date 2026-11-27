@@ -1,0 +1,4 @@
+# ubuntu-latest (26.04) builds C with -march=x86-64-v3, so the static asset
+# needs AVX2 to start; keep the release C code at the baseline ISA.
+[env]
+CFLAGS_x86_64_unknown_linux_musl = "-march=x86-64"
