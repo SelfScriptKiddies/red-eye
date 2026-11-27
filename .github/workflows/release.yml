@@ -2,7 +2,7 @@
 #
 # Flow: validate the VERSION file (must be semver and must NOT match any
 # already-released tag — 'make bump V=X.Y.Z' before merging), tag the merge
-# commit, then in parallel: push the four stack images to ghcr.io and build
+# commit, then in parallel: push the six images to ghcr.io and build
 # the static musl agent binary. Finally a GitHub release is published with
 # the binary attached and auto-generated notes.
 #
@@ -103,6 +103,12 @@ jobs:
           - name: database
             context: ./database
             file: database/Dockerfile
+          - name: mcp
+            context: .
+            file: red-eye-mcp/Dockerfile
+          - name: soc-worker
+            context: .
+            file: soc-worker/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
