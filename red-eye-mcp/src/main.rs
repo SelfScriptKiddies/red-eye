@@ -33,6 +33,9 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    if config.service_token.is_empty() {
+        log::error!("MCP_SERVICE_TOKEN is not set; every request will be rejected");
+    }
     info!(
         "red-eye-mcp starting: mode={:?} backend={} bind={} public_url={:?}",
         config.mode, config.backend_url, config.bind, config.public_url

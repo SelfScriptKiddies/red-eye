@@ -24,6 +24,8 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       analyzer: ${{ steps.filter.outputs.analyzer }}
       agent: ${{ steps.filter.outputs.agent }}
+      mcp: ${{ steps.filter.outputs.mcp }}
+      soc: ${{ steps.filter.outputs.soc }}
       shared: ${{ steps.filter.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +42,10 @@ jobs:
               - 'traffic-analyzer/**'
             agent:
               - 'agent/**'
+            mcp:
+              - 'red-eye-mcp/**'
+            soc:
+              - 'soc-worker/**'
             shared:
               - 'proto/**'
               - 'VERSION'
@@ -108,7 +114,7 @@ jobs:
   rust:
     needs: changes
     # The wire contract (proto/) and this workflow affect every crate.
-    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.analyzer == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.shared == 'true' }}
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.analyzer == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.soc == 'true' || needs.changes.outputs.shared == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -118,6 +124,8 @@ jobs:
           - crate: traffic-analyzer
             apt: libpcap-dev
           - crate: agent
+          - crate: red-eye-mcp
+          - crate: soc-worker
     defaults:
       run:
         working-directory: ${{ matrix.crate }}
