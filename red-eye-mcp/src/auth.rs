@@ -53,6 +53,24 @@ fn client_ip(peer: Option<std::net::IpAddr>, real_ip: Option<&str>) -> std::net:
     }
 }
 
+// Fixed strings only: backend free-form text never reaches a log.
+fn denial_reason(err: &crate::backend::BackendError) -> &'static str {
+    use crate::backend::BackendError;
+    match err {
+        BackendError::Unavailable(s) if s.starts_with("backend status") => {
+            "backend answered with an unexpected status"
+        }
+        BackendError::Unavailable(s) if s == "service credential not configured" => {
+            "service credential not configured"
+        }
+        BackendError::Unavailable(_) => "backend unreachable",
+        BackendError::Forbidden => "backend rejected the service credential",
+        BackendError::TokenRejected => "backend rejected the token",
+        BackendError::NotFound => "backend endpoint not found",
+        BackendError::Rejected { .. } => "backend rejected the request",
+    }
+}
+
 pub async fn middleware(
     State(state): State<std::sync::Arc<AppState>>,
     req: Request<Body>,
@@ -120,9 +138,10 @@ pub async fn middleware(
 
     let identity = match state.backend.authorize(presented).await {
         Ok(id) => id,
-        Err(_) => {
+        Err(e) => {
             // Includes backend outages: fail closed, generic message, no
             // echo of whether the token exists.
+            log::error!("MCP authorization failed: {}", denial_reason(&e));
             return deny(StatusCode::UNAUTHORIZED, "token validation failed");
         }
     };
@@ -211,6 +230,40 @@ pub async fn middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::BackendError;
+
+    #[test]
+    fn denial_reason_names_the_cause_without_secrets() {
+        let secret = "super-secret-service-token";
+        let cases: [(BackendError, &str); 5] = [
+            (
+                BackendError::Unavailable("error sending request".into()),
+                "backend unreachable",
+            ),
+            (
+                BackendError::Unavailable(format!("backend status {}", 502)),
+                "backend answered with an unexpected status",
+            ),
+            (
+                BackendError::Unavailable("service credential not configured".into()),
+                "service credential not configured",
+            ),
+            (
+                BackendError::Forbidden,
+                "backend rejected the service credential",
+            ),
+            (BackendError::TokenRejected, "backend rejected the token"),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(denial_reason(&err), expected);
+            assert!(!expected.contains(secret));
+        }
+        let body = BackendError::Rejected {
+            status: 422,
+            message: format!("bad {}", secret),
+        };
+        assert_eq!(denial_reason(&body), "backend rejected the request");
+    }
 
     #[test]
     fn loopback_peer_with_real_ip_uses_header() {
